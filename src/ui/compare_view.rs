@@ -261,14 +261,22 @@ fn draw_pane(frame: &mut Frame, pane: &PaneState, area: Rect, accent: Color) {
         ])
         .split(inner);
 
-    let seq = pane.seq().map(|s| s.to_string()).unwrap_or_else(|| "—".into());
+    let seq = pane
+        .seq()
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| "—".into());
     let lat = pane.latency.display();
     let shi = format!("{} ({})", pane.health.score, pane.health.label);
     let cdn = pane
         .last_segment
         .as_ref()
         .map(|s| s.cdn.badge())
-        .unwrap_or_else(|| pane.cdn.hit_ratio_pct().map(|p| format!("hit {p:.0}%")).unwrap_or_else(|| "—".into()));
+        .unwrap_or_else(|| {
+            pane.cdn
+                .hit_ratio_pct()
+                .map(|p| format!("hit {p:.0}%"))
+                .unwrap_or_else(|| "—".into())
+        });
     let net = pane
         .last_segment
         .as_ref()
@@ -277,8 +285,15 @@ fn draw_pane(frame: &mut Frame, pane: &PaneState, area: Rect, accent: Color) {
         .unwrap_or_else(|| "DNS/TCP/TLS/TTFB: —".into());
 
     let status = Paragraph::new(vec![
-        Line::from(truncate_url(&pane.url, (area.width as usize).saturating_sub(4))),
-        Line::from(format!("Status : {} — {}", status_tag(&pane.status), pane.status.message)),
+        Line::from(truncate_url(
+            &pane.url,
+            (area.width as usize).saturating_sub(4),
+        )),
+        Line::from(format!(
+            "Status : {} — {}",
+            status_tag(&pane.status),
+            pane.status.message
+        )),
         Line::from(format!("SHI    : {shi}")),
         Line::from(format!("Seq    : {seq}  |  Latency: {lat}")),
         Line::from(format!("CDN    : {cdn}")),

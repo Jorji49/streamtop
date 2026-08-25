@@ -6,6 +6,7 @@
 - Fix DASH Seq / Target / DVR window / virtual buffer inflated by bad duration
 - Wire FPS/resolution from bitstream; DNS/TCP/TLS/TTFB; binary SCTE-35; `--compare`; `--webhook`
 - rustls CryptoProvider install (no dual-backend panic)
+- CI: Linux / macOS / Windows check + release artifacts
 - User-facing README
 
 ## 0.2.0

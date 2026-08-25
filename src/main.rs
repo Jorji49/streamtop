@@ -104,7 +104,11 @@ struct Cli {
     webhook: Option<String>,
 
     /// Comma-separated alert kinds: stall,shi_below_70,http_5xx,mismatch,ad_start
-    #[arg(long = "alert-on", value_name = "EVENTS", default_value = "stall,shi_below_70,http_5xx")]
+    #[arg(
+        long = "alert-on",
+        value_name = "EVENTS",
+        default_value = "stall,shi_below_70,http_5xx"
+    )]
     alert_on: String,
 }
 

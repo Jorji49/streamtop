@@ -382,7 +382,9 @@ impl ManifestPoller {
             .unwrap_or(0.0);
         let seg_hint = summary.segment_duration_hint_secs.clamp(0.1, 60.0);
         let window_segments = if window_secs > 0.0 && seg_hint > 0.0 {
-            (window_secs / f64::from(seg_hint)).round().clamp(0.0, u32::MAX as f64) as u32
+            (window_secs / f64::from(seg_hint))
+                .round()
+                .clamp(0.0, u32::MAX as f64) as u32
         } else {
             0
         };
@@ -1269,10 +1271,7 @@ impl ManifestPoller {
             });
             return;
         }
-        let idx = variants
-            .iter()
-            .position(|v| v.selected)
-            .unwrap_or(0);
+        let idx = variants.iter().position(|v| v.selected).unwrap_or(0);
         let v = &mut variants[idx];
         let mismatches = manifest_wire_mismatches(
             v.resolution.as_deref(),
@@ -1286,12 +1285,7 @@ impl ManifestPoller {
         if let Some(first) = mismatches.first() {
             v.mismatch = Some(first.clone());
         }
-        let filled = fill_abr_from_wire(
-            &mut v.resolution,
-            &mut v.frame_rate,
-            &mut v.codecs,
-            wire,
-        );
+        let filled = fill_abr_from_wire(&mut v.resolution, &mut v.frame_rate, &mut v.codecs, wire);
         if filled {
             v.from_wire = true;
         }

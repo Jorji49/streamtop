@@ -90,7 +90,12 @@ fn probe_fmp4(bytes: &[u8]) -> WireProbeInfo {
     info
 }
 
-fn walk_boxes(data: &[u8], start: usize, end: usize, visit: &mut dyn FnMut(&[u8; 4], &[u8]) -> bool) {
+fn walk_boxes(
+    data: &[u8],
+    start: usize,
+    end: usize,
+    visit: &mut dyn FnMut(&[u8; 4], &[u8]) -> bool,
+) {
     let mut off = start;
     while off + 8 <= end && off + 8 <= data.len() {
         let size32 = u32::from_be_bytes([data[off], data[off + 1], data[off + 2], data[off + 3]]);
@@ -124,8 +129,17 @@ fn walk_boxes(data: &[u8], start: usize, end: usize, visit: &mut dyn FnMut(&[u8;
         if descend
             && matches!(
                 &name,
-                b"moov" | b"trak" | b"mdia" | b"minf" | b"stbl" | b"stsd" | b"moof" | b"traf"
-                    | b"mdat" | b"edts" | b"mvex"
+                b"moov"
+                    | b"trak"
+                    | b"mdia"
+                    | b"minf"
+                    | b"stbl"
+                    | b"stsd"
+                    | b"moof"
+                    | b"traf"
+                    | b"mdat"
+                    | b"edts"
+                    | b"mvex"
             )
         {
             let nest_off = if &name == b"stsd" && payload.len() >= 8 {
@@ -135,7 +149,11 @@ fn walk_boxes(data: &[u8], start: usize, end: usize, visit: &mut dyn FnMut(&[u8;
             };
             walk_boxes(data, off + header + nest_off, off + box_size, visit);
         } else if descend && matches!(&name, b"avc1" | b"avc3" | b"hvc1" | b"hev1" | b"mp4a") {
-            let skip = if &name == b"mp4a" { 28 } else { 78.min(payload.len()) };
+            let skip = if &name == b"mp4a" {
+                28
+            } else {
+                78.min(payload.len())
+            };
             if skip < payload.len() {
                 walk_boxes(data, off + header + skip, off + box_size, visit);
             }
@@ -150,7 +168,8 @@ fn find_child_box<'a>(payload: &'a [u8], want: &[u8; 4]) -> Option<&'a [u8]> {
     let slice = &payload[start.min(payload.len())..];
     let mut off = 0usize;
     while off + 8 <= slice.len() {
-        let size = u32::from_be_bytes([slice[off], slice[off + 1], slice[off + 2], slice[off + 3]]) as usize;
+        let size = u32::from_be_bytes([slice[off], slice[off + 1], slice[off + 2], slice[off + 3]])
+            as usize;
         if size < 8 || off + size > slice.len() {
             break;
         }
@@ -243,7 +262,8 @@ fn trun_first_sample_sync(trun: &[u8]) -> Option<bool> {
         if off + 4 > trun.len() {
             return None;
         }
-        let sample_flags = u32::from_be_bytes([trun[off], trun[off + 1], trun[off + 2], trun[off + 3]]);
+        let sample_flags =
+            u32::from_be_bytes([trun[off], trun[off + 1], trun[off + 2], trun[off + 3]]);
         let non_sync = (sample_flags >> 16) & 1 == 1;
         return Some(!non_sync);
     }
@@ -264,7 +284,8 @@ fn trun_first_sample_sync(trun: &[u8]) -> Option<bool> {
             if so + 4 > trun.len() {
                 return None;
             }
-            let sample_flags = u32::from_be_bytes([trun[so], trun[so + 1], trun[so + 2], trun[so + 3]]);
+            let sample_flags =
+                u32::from_be_bytes([trun[so], trun[so + 1], trun[so + 2], trun[so + 3]]);
             let non_sync = (sample_flags >> 16) & 1 == 1;
             return Some(!non_sync);
         }
@@ -274,7 +295,10 @@ fn trun_first_sample_sync(trun: &[u8]) -> Option<bool> {
 
 fn probe_mpeg_ts(bytes: &[u8]) -> WireProbeInfo {
     let mut info = WireProbeInfo::default();
-    let packets: Vec<&[u8]> = bytes.chunks(188).filter(|p| p.len() == 188 && p[0] == 0x47).collect();
+    let packets: Vec<&[u8]> = bytes
+        .chunks(188)
+        .filter(|p| p.len() == 188 && p[0] == 0x47)
+        .collect();
     if packets.is_empty() {
         return info;
     }
@@ -310,9 +334,13 @@ fn probe_mpeg_ts(bytes: &[u8]) -> WireProbeInfo {
     let mut audio_payload = Vec::new();
     for pkt in &packets {
         let pid = packet_pid(pkt);
-        if video_pid.map(|v| v == pid).unwrap_or(false) || (video_pid.is_none() && has_pes_start(pkt)) {
+        if video_pid.map(|v| v == pid).unwrap_or(false)
+            || (video_pid.is_none() && has_pes_start(pkt))
+        {
             if let Some(payload) = ts_payload(pkt) {
-                if payload.windows(4).any(|w| w == [0, 0, 1, 0xe0] || w == [0, 0, 0, 1])
+                if payload
+                    .windows(4)
+                    .any(|w| w == [0, 0, 1, 0xe0] || w == [0, 0, 0, 1])
                     || video_pid.is_some()
                 {
                     video_payload.extend_from_slice(payload);
@@ -597,7 +625,10 @@ fn apply_h264_sps(nal: &[u8], info: &mut WireProbeInfo) {
     }
     let _sps_id = br.read_ue();
     let mut chroma_format_idc = 1u32;
-    if matches!(profile_idc, 100 | 110 | 122 | 244 | 44 | 83 | 86 | 118 | 128 | 138 | 139 | 134) {
+    if matches!(
+        profile_idc,
+        100 | 110 | 122 | 244 | 44 | 83 | 86 | 118 | 128 | 138 | 139 | 134
+    ) {
         chroma_format_idc = br.read_ue().unwrap_or(1);
         if chroma_format_idc == 3 {
             let _ = br.read_bit();

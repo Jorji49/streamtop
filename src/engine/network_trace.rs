@@ -92,8 +92,8 @@ pub async fn traced_get(
     let (status, headers, body, ttfb_ms) = if scheme == "https" {
         let tls_start = Instant::now();
         let connector = build_tls_connector()?;
-        let server_name = ServerName::try_from(host.clone())
-            .map_err(|_| eyre!("invalid TLS server name"))?;
+        let server_name =
+            ServerName::try_from(host.clone()).map_err(|_| eyre!("invalid TLS server name"))?;
         let mut tls = tokio::time::timeout(DEFAULT_TIMEOUT, connector.connect(server_name, tcp))
             .await
             .map_err(|_| eyre!("TLS handshake timeout"))?
@@ -103,8 +103,7 @@ pub async fn traced_get(
         let write_start = Instant::now();
         tls.write_all(request.as_bytes()).await?;
         tls.flush().await?;
-        let (st, hdrs, body_bytes, header_done) =
-            read_http_response(&mut tls, max_body).await?;
+        let (st, hdrs, body_bytes, header_done) = read_http_response(&mut tls, max_body).await?;
         let ttfb = write_start.elapsed().as_millis() as u64;
         let ttfb_ms = header_done.unwrap_or(ttfb);
         (st, hdrs, body_bytes, ttfb_ms)
@@ -113,8 +112,7 @@ pub async fn traced_get(
         let write_start = Instant::now();
         stream.write_all(request.as_bytes()).await?;
         stream.flush().await?;
-        let (st, hdrs, body_bytes, header_done) =
-            read_http_response(&mut stream, max_body).await?;
+        let (st, hdrs, body_bytes, header_done) = read_http_response(&mut stream, max_body).await?;
         let ttfb_ms = header_done.unwrap_or(write_start.elapsed().as_millis() as u64);
         (st, hdrs, body_bytes, ttfb_ms)
     };
