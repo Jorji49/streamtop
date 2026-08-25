@@ -1,0 +1,33 @@
+[package]
+name = "streamtop"
+version = "0.2.1"
+edition = "2021"
+description = "HLS/DASH/IPTV stream diagnostics TUI and CLI"
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/Jorji49/streamtop"
+keywords = ["hls", "dash", "iptv", "cdn", "diagnostics"]
+categories = ["command-line-utilities", "multimedia"]
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+reqwest = { version = "0.12", default-features = false, features = ["stream", "gzip", "brotli", "rustls-tls", "json"] }
+url = "2"
+m3u8-rs = "6.0"
+dash-mpd = { version = "0.20", default-features = false }
+chrono = { version = "0.4", features = ["serde", "clock"] }
+ratatui = "0.28"
+crossterm = { version = "0.28", features = ["event-stream"] }
+clap = { version = "4", features = ["derive"] }
+color-eyre = "0.6"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+futures = "0.3"
+arboard = "3"
+axum = "0.7"
+base64 = "0.22"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
+webpki-roots = "0.26"
+http = "1"

@@ -1,0 +1,853 @@
+use std::collections::VecDeque;
+
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+
+pub const HISTORY_CAPACITY: usize = 60;
+pub const LOG_CAPACITY: usize = 200;
+pub const DIAGNOSTIC_DIR: &str = "diagnostics";
+pub const DIAGNOSTIC_PATH: &str = "streamtop_diagnostic.json";
+pub const HLS_LIVE_EDGE_SEGMENTS: u64 = 3;
+pub const TARGET_DURATION_SLACK_SECS: f32 = 0.5;
+pub const STALL_MULTIPLIER: f64 = 1.5;
+pub const TTFB_SPIKE_MS: u64 = 500;
+pub const BUFFER_STALL_THRESHOLD_SECS: f64 = 4.0;
+pub const RANGE_PROBE_BYTES: u64 = 2048;
+/// Bytes fetched for deep wire probe (SPS/PPS / moov / PAT-PMT).
+pub const DEEP_WIRE_PROBE_BYTES: u64 = 65535;
+pub const AUDIT_REPORT_JSON: &str = "audit_report.json";
+pub const AUDIT_REPORT_CSV: &str = "audit_report.csv";
+pub const AUDIT_CONCURRENCY: usize = 25;
+pub const AUDIT_CONNECT_TIMEOUT_SECS: u64 = 3;
+pub const AUDIT_REQUEST_TIMEOUT_SECS: u64 = 5;
+pub const STALL_TTFB_MS: u64 = 2500;
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ChannelEntry {
+    pub name: String,
+    pub url: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub logo: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tvg_id: Option<String>,
+}
+
+impl ChannelEntry {
+    pub fn group_label(&self) -> &str {
+        self.group.as_deref().unwrap_or("Ungrouped")
+    }
+
+    pub fn url_summary(&self, max: usize) -> String {
+        let u = self.url.as_str();
+        if max == 0 {
+            return String::new();
+        }
+        if u.chars().count() <= max {
+            return u.to_string();
+        }
+        let trimmed: String = u.chars().take(max.saturating_sub(1)).collect();
+        format!("{trimmed}…")
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AuditVerdict {
+    Live,
+    Error,
+    Stall,
+}
+
+impl AuditVerdict {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Live => "LIVE",
+            Self::Error => "ERROR",
+            Self::Stall => "STALL",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AuditRow {
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub group: Option<String>,
+    pub url: String,
+    pub verdict: AuditVerdict,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub http_status: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub protocol: Option<String>,
+    pub cdn: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ttfb_ms: Option<u64>,
+    pub bitrate_profiles: Vec<u64>,
+    pub has_pdt: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AuditReport {
+    pub captured_at: DateTime<Utc>,
+    pub source: String,
+    pub total: usize,
+    pub live: usize,
+    pub errors: usize,
+    pub stalls: usize,
+    pub channels: Vec<AuditRow>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AbrVariant {
+    pub bandwidth: u64,
+    pub resolution: Option<String>,
+    pub codecs: Option<String>,
+    /// Declared video frame rate from HLS FRAME-RATE or DASH @frameRate.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub frame_rate: Option<f64>,
+    pub uri: String,
+    pub selected: bool,
+    /// True when resolution / FPS / codecs were filled from bitstream probe.
+    #[serde(default)]
+    pub from_wire: bool,
+    /// Manifest vs wire mismatch warning for this profile.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mismatch: Option<String>,
+}
+
+impl AbrVariant {
+    pub fn fps_label(&self) -> String {
+        let base = match self.frame_rate {
+            Some(f) if f > 0.0 => {
+                if (f - f.round()).abs() < 0.05 {
+                    format!("{:.0}", f.round())
+                } else {
+                    format!("{f:.2}")
+                }
+            }
+            _ => "—".into(),
+        };
+        if self.from_wire && self.frame_rate.is_some() {
+            format!("{base}[wire]")
+        } else {
+            base
+        }
+    }
+
+    pub fn resolution_label(&self) -> String {
+        let base = self.resolution.clone().unwrap_or_else(|| "—".into());
+        if self.from_wire && self.resolution.is_some() {
+            format!("{base}[wire]")
+        } else {
+            base
+        }
+    }
+}
+
+/// Bitstream parameters from fMP4 / MPEG-TS.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct WireProbeInfo {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub width: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub height: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub frame_rate: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub codec: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub profile_level: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub audio_sample_rate: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub audio_channels: Option<u8>,
+    /// First sample in moof/traf/trun is a sync / IDR frame.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sync_sample: Option<bool>,
+    #[serde(default)]
+    pub container: ContainerKind,
+}
+
+impl WireProbeInfo {
+    pub fn resolution_label(&self) -> Option<String> {
+        match (self.width, self.height) {
+            (Some(w), Some(h)) => Some(format!("{w}x{h}")),
+            _ => None,
+        }
+    }
+}
+
+/// Socket-level timing breakdown for a single HTTP fetch.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct NetworkTiming {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dns_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tcp_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tls_ms: Option<u64>,
+    /// Time until first response header byte.
+    pub ttfb_ms: u64,
+}
+
+impl NetworkTiming {
+    pub fn display_line(&self) -> String {
+        let fmt = |v: Option<u64>| v.map(|ms| format!("{ms}ms")).unwrap_or_else(|| "—".into());
+        format!(
+            "DNS: {} | TCP: {} | TLS: {} | TTFB: {}ms",
+            fmt(self.dns_ms),
+            fmt(self.tcp_ms),
+            fmt(self.tls_ms),
+            self.ttfb_ms
+        )
+    }
+}
+
+/// Parse DASH/HLS frame-rate strings (`25`, `30`, `30000/1001`).
+pub fn parse_frame_rate(raw: &str) -> Option<f64> {
+    let s = raw.trim();
+    if s.is_empty() {
+        return None;
+    }
+    if let Some((n, d)) = s.split_once('/') {
+        let num: f64 = n.trim().parse().ok()?;
+        let den: f64 = d.trim().parse().ok()?;
+        if den <= 0.0 {
+            return None;
+        }
+        let fps = num / den;
+        return (fps > 0.0 && fps.is_finite()).then_some(fps);
+    }
+    let fps: f64 = s.parse().ok()?;
+    (fps > 0.0 && fps.is_finite()).then_some(fps)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum ContainerKind {
+    Ts,
+    Fmp4,
+    #[default]
+    Unknown,
+}
+
+impl ContainerKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Ts => "MPEG-TS",
+            Self::Fmp4 => "fMP4/CMAF",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SegmentMetrics {
+    pub media_sequence: u64,
+    pub duration_secs: f32,
+    /// Declared / full object size when known (Content-Range total); else transferred.
+    pub size_bytes: u64,
+    /// Bytes actually received on the wire for this sample.
+    pub transferred_bytes: u64,
+    pub ttfb_ms: u64,
+    pub download_ms: u64,
+    /// Throughput from transferred bytes; `None` in range-probe mode.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub download_kbps: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub latency_ms: Option<u64>,
+    pub uri: String,
+    pub cdn: CdnEdgeInfo,
+    pub probed: bool,
+    pub container: ContainerKind,
+    /// HTTP status of the segment/probe response (200/206 on success).
+    #[serde(default)]
+    pub http_status: u16,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub network: Option<NetworkTiming>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wire: Option<WireProbeInfo>,
+}
+
+impl SegmentMetrics {
+    pub fn rate_label(&self) -> String {
+        if self.probed {
+            let kb = self.transferred_bytes as f64 / 1024.0;
+            format!("Probe: {kb:.1} KB in {} ms", self.download_ms)
+        } else if let Some(kbps) = self.download_kbps {
+            format!("{kbps} kbps")
+        } else {
+            "—".into()
+        }
+    }
+}
+
+/// How many trailing playlist segments to scan for DAI / SCTE tags.
+pub const AD_SCAN_LIVE_EDGE_SEGMENTS: usize = 5;
+
+/// Media-sequence advance tolerance before treating as a gap.
+pub const MEDIA_SEQ_GAP_TOLERANCE: u64 = 2;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum StreamStatusKind {
+    Live,
+    Error,
+    Degraded,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StreamStatus {
+    pub kind: StreamStatusKind,
+    pub message: String,
+}
+
+impl StreamStatus {
+    pub fn live(message: impl Into<String>) -> Self {
+        Self {
+            kind: StreamStatusKind::Live,
+            message: message.into(),
+        }
+    }
+
+    pub fn error(message: impl Into<String>) -> Self {
+        Self {
+            kind: StreamStatusKind::Error,
+            message: message.into(),
+        }
+    }
+
+    pub fn degraded(message: impl Into<String>) -> Self {
+        Self {
+            kind: StreamStatusKind::Degraded,
+            message: message.into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub enum LatencyState {
+    Measured(u64),
+    Estimated(u64),
+    Unknown,
+}
+
+impl LatencyState {
+    pub fn is_estimated(&self) -> bool {
+        matches!(self, Self::Estimated(_))
+    }
+
+    pub fn is_measured(&self) -> bool {
+        matches!(self, Self::Measured(_))
+    }
+
+    pub fn display(&self) -> String {
+        match self {
+            Self::Unknown => "—".into(),
+            Self::Estimated(ms) => format!("estimated ~{:.2}s", *ms as f64 / 1000.0),
+            Self::Measured(ms) => format!("{:.3}s", *ms as f64 / 1000.0),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum LogLevel {
+    Info,
+    Warn,
+    Error,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DiagCategory {
+    Rfc,
+    Stalling,
+    Cdn,
+    Ad,
+    Abr,
+    Segment,
+    Buffer,
+    LlHls,
+    AvSync,
+    Drm,
+    Info,
+}
+
+impl DiagCategory {
+    pub fn tag(self) -> &'static str {
+        match self {
+            Self::Rfc => "RFC",
+            Self::Stalling => "ORIGIN",
+            Self::Cdn => "CDN",
+            Self::Ad => "AD",
+            Self::Abr => "ABR",
+            Self::Segment => "SEGMENT",
+            Self::Buffer => "BUFFER",
+            Self::LlHls => "LL-HLS",
+            Self::AvSync => "A/V",
+            Self::Drm => "DRM",
+            Self::Info => "INFO",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DiagSeverity {
+    Info,
+    Warn,
+    Error,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LogEntry {
+    pub ts: DateTime<Utc>,
+    pub time: String,
+    pub level: LogLevel,
+    pub tag: String,
+    pub category: DiagCategory,
+    pub message: String,
+}
+
+impl LogEntry {
+    pub fn make(level: LogLevel, category: DiagCategory, message: impl Into<String>) -> Self {
+        let ts = Utc::now();
+        Self {
+            time: ts.format("%H:%M:%S%.3f").to_string(),
+            ts,
+            level,
+            tag: category.tag().to_string(),
+            category,
+            message: message.into(),
+        }
+    }
+
+    /// Timeline line: `HH:MM:SS.mmm  [TAG] message`.
+    pub fn timeline_line(&self) -> String {
+        format!("{}  [{:<8}] {}", self.time, self.tag, self.message)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DiagnosticFinding {
+    pub category: DiagCategory,
+    pub severity: DiagSeverity,
+    pub rule: String,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum CacheVerdict {
+    Hit,
+    Miss,
+    #[default]
+    Unknown,
+}
+
+impl CacheVerdict {
+    #[allow(dead_code)]
+    pub fn badge(self) -> &'static str {
+        match self {
+            Self::Hit => "HIT (Edge)",
+            Self::Miss => "MISS (Origin)",
+            Self::Unknown => "UNKNOWN",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum StreamProtocol {
+    Hls,
+    Dash,
+}
+
+impl StreamProtocol {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Hls => "HLS",
+            Self::Dash => "DASH",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct CdnEdgeInfo {
+    pub verdict: CacheVerdict,
+    /// Detected CDN / cache provider (Akamai, Cloudflare, CloudFront, Fastly, …).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_status: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub age: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pop: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub served_by: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub via: Option<String>,
+}
+
+impl CdnEdgeInfo {
+    pub fn badge(&self) -> String {
+        let edge = match self.verdict {
+            CacheVerdict::Hit => "HIT (Edge)",
+            CacheVerdict::Miss => "MISS (Origin)",
+            CacheVerdict::Unknown => self.guess_edge_badge(),
+        };
+        match &self.provider {
+            Some(p) => format!("{p} · {edge}"),
+            None => edge.to_string(),
+        }
+    }
+
+    fn guess_edge_badge(&self) -> &'static str {
+        if self.age.map(|a| a > 0).unwrap_or(false) {
+            "HIT? (Age)"
+        } else if self
+            .served_by
+            .as_deref()
+            .map(|s| {
+                let u = s.to_ascii_uppercase();
+                u.contains("CACHE") || u.contains("EDGE") || u.contains("VARNISH")
+            })
+            .unwrap_or(false)
+            || self.via.is_some()
+            || self.pop.is_some()
+        {
+            "EDGE?"
+        } else {
+            "ORIGIN?"
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct CdnStats {
+    pub hits: u64,
+    pub misses: u64,
+    pub unknown: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last: Option<CdnEdgeInfo>,
+}
+
+impl CdnStats {
+    pub fn record(&mut self, info: &CdnEdgeInfo) {
+        match info.verdict {
+            CacheVerdict::Hit => self.hits = self.hits.saturating_add(1),
+            CacheVerdict::Miss => self.misses = self.misses.saturating_add(1),
+            CacheVerdict::Unknown => self.unknown = self.unknown.saturating_add(1),
+        }
+        self.last = Some(info.clone());
+    }
+
+    pub fn hit_ratio_pct(&self) -> Option<f64> {
+        let known = self.hits.saturating_add(self.misses);
+        if known == 0 {
+            None
+        } else {
+            Some((self.hits as f64 / known as f64) * 100.0)
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdBreakInfo {
+    pub kind: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub planned_duration_secs: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub elapsed_secs: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub remaining_secs: Option<f64>,
+    pub summary: String,
+    pub active: bool,
+    /// Decoded binary SCTE-35 summary line when available.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scte35_binary: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default)]
+pub struct VirtualBuffer {
+    pub buffer_secs: f64,
+    pub stall_risk_pct: u8,
+}
+
+impl VirtualBuffer {
+    /// Drain by wall-clock elapsed, then credit segment duration.
+    pub fn on_new_segment(&mut self, duration_secs: f32, elapsed_wall_secs: f64) {
+        self.buffer_secs = (self.buffer_secs - elapsed_wall_secs.max(0.0)
+            + f64::from(duration_secs))
+        .clamp(0.0, 120.0);
+        self.recompute_stall_risk();
+    }
+
+    /// Drain buffer by wall-clock time between polls.
+    pub fn drain_elapsed(&mut self, elapsed_wall_secs: f64) {
+        if elapsed_wall_secs <= 0.0 {
+            return;
+        }
+        self.buffer_secs = (self.buffer_secs - elapsed_wall_secs).clamp(0.0, 120.0);
+        self.recompute_stall_risk();
+    }
+
+    fn recompute_stall_risk(&mut self) {
+        self.stall_risk_pct = if self.buffer_secs >= BUFFER_STALL_THRESHOLD_SECS {
+            0
+        } else {
+            (((BUFFER_STALL_THRESHOLD_SECS - self.buffer_secs) / BUFFER_STALL_THRESHOLD_SECS)
+                * 100.0)
+                .round()
+                .clamp(0.0, 100.0) as u8
+        };
+    }
+
+    pub fn display(&self) -> String {
+        format!(
+            "Buffer: {:.1}s | Stall risk: {}%",
+            self.buffer_secs, self.stall_risk_pct
+        )
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct DrmInfo {
+    pub present: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub method: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub key_format: Option<String>,
+    pub badge: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct MediaRenditions {
+    pub audio: Vec<String>,
+    pub subtitles: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct LlHlsInfo {
+    pub is_ll_hls: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub part_target_secs: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_part_duration_secs: Option<f64>,
+    pub part_count: u32,
+    pub has_preload_hint: bool,
+    pub can_block_reload: bool,
+    /// True when PRELOAD-HINT / PART was Range-probed this cycle.
+    pub preload_hint_fetched: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub preload_hint_uri: Option<String>,
+    /// Absolute byte offset from `#EXT-X-BYTERANGE` / PRELOAD-HINT BYTERANGE.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub preload_byterange_offset: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub preload_byterange_length: Option<u64>,
+}
+
+impl LlHlsInfo {
+    /// LL-HLS status badge for the header.
+    pub fn header_badge(&self) -> Option<String> {
+        if !self.is_ll_hls {
+            return None;
+        }
+        let part_secs = self
+            .last_part_duration_secs
+            .or(self.part_target_secs)
+            .unwrap_or(0.0);
+        let part = if part_secs > 0.0 {
+            format!("{part_secs:.2}s")
+        } else {
+            "—".into()
+        };
+        let preload = if self.preload_hint_fetched {
+            "Active Fetch"
+        } else if self.has_preload_hint {
+            "Detected (Hint)"
+        } else {
+            "Off"
+        };
+        Some(format!("LL-HLS: Part {part} | Preload Hint: {preload}"))
+    }
+
+    /// LL-HLS poll sleep from part duration (clamped 200–330 ms).
+    pub fn poll_interval_ms(&self) -> u64 {
+        let secs = self
+            .last_part_duration_secs
+            .or(self.part_target_secs)
+            .unwrap_or(0.33);
+        let ms = (secs * 1000.0).round() as u64;
+        ms.clamp(200, 330)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlaylistMeta {
+    pub media_sequence: u64,
+    pub target_duration: u64,
+    pub url: String,
+    pub window_segments: u32,
+    pub window_secs: f64,
+    pub has_pdt: bool,
+    pub has_master_playlist: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub refresh_interval_ms: Option<u64>,
+    pub ll_hls: LlHlsInfo,
+    #[serde(default)]
+    pub drm: DrmInfo,
+    #[serde(default)]
+    pub renditions: MediaRenditions,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HealthReport {
+    pub score: u8,
+    pub label: String,
+    pub deductions: Vec<String>,
+}
+
+impl HealthReport {
+    pub fn perfect() -> Self {
+        Self {
+            score: 100,
+            label: "Excellent".into(),
+            deductions: Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct AbrHealth {
+    pub warnings: Vec<String>,
+    pub score_penalty: u8,
+}
+
+#[derive(Debug, Clone)]
+pub enum StreamEvent {
+    Status(StreamStatus),
+    Variants(Vec<AbrVariant>),
+    PlaylistMeta(PlaylistMeta),
+    Segment(SegmentMetrics),
+    Latency(LatencyState),
+    Health(HealthReport),
+    CdnStats(CdnStats),
+    AbrHealth(AbrHealth),
+    AdBreak(AdBreakInfo),
+    Buffer(VirtualBuffer),
+    ProbeMode(bool),
+    Finding(DiagnosticFinding),
+    WireProbe(WireProbeInfo),
+    Log {
+        level: LogLevel,
+        category: DiagCategory,
+        message: String,
+    },
+    Error(String),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DiagnosticSummary {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub channel: Option<String>,
+    pub captured_at: DateTime<Utc>,
+    pub source_url: String,
+    pub active_url: String,
+    pub status: String,
+    pub health_score: u8,
+    pub health_label: String,
+    pub latency: String,
+    pub cdn: String,
+    pub dvr_window: String,
+    pub buffer: String,
+    pub ll_hls: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StreamSnapshot {
+    pub title: String,
+    pub summary: DiagnosticSummary,
+    /// Readable log lines (`HH:MM:SS.mmm  [TAG] message`).
+    pub timeline: Vec<String>,
+    pub health: HealthReport,
+    pub cdn: CdnStats,
+    pub abr_health: AbrHealth,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub active_ad: Option<AdBreakInfo>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub playlist: Option<PlaylistMeta>,
+    pub abr_profiles: Vec<AbrVariant>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_segment: Option<SegmentMetrics>,
+    pub findings: Vec<DiagnosticFinding>,
+    pub event_log: Vec<LogEntry>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct RingBuffer {
+    inner: VecDeque<u64>,
+    capacity: usize,
+}
+
+impl RingBuffer {
+    pub fn new(capacity: usize) -> Self {
+        Self {
+            inner: VecDeque::with_capacity(capacity),
+            capacity,
+        }
+    }
+
+    pub fn push(&mut self, value: u64) {
+        if self.inner.len() >= self.capacity {
+            self.inner.pop_front();
+        }
+        self.inner.push_back(value);
+    }
+
+    pub fn clear(&mut self) {
+        self.inner.clear();
+    }
+
+    pub fn to_vec(&self) -> Vec<u64> {
+        self.inner.iter().copied().collect()
+    }
+}
+
+pub fn format_dvr_window(segments: u32, window_secs: f64) -> String {
+    let human = format_duration_human(window_secs);
+    if segments == 0 {
+        if window_secs > 0.0 {
+            format!("Window: ~{human} DVR")
+        } else {
+            "Window: —".into()
+        }
+    } else {
+        format!("Window: {segments} seg (~{human} DVR)")
+    }
+}
+
+pub fn format_duration_human(secs: f64) -> String {
+    if secs >= 3600.0 {
+        format!("{:.1} hours", secs / 3600.0)
+    } else if secs >= 60.0 {
+        format!("{:.1} min", secs / 60.0)
+    } else {
+        format!("{:.1}s", secs)
+    }
+}
+
+/// Truncate long URLs with a mid ellipsis.
+pub fn format_url_mid_ellipsis(url: &str, max: usize) -> String {
+    let chars: Vec<char> = url.chars().collect();
+    if max < 8 || chars.len() <= max {
+        return url.to_string();
+    }
+    let keep = max.saturating_sub(3);
+    let head = keep / 2;
+    let tail = keep - head;
+    let left: String = chars.iter().take(head).collect();
+    let right: String = chars.iter().skip(chars.len() - tail).collect();
+    format!("{left}...{right}")
+}
