@@ -1,0 +1,13 @@
+/target/
+/dist/
+diagnostics/
+*.log
+audit_report.*
+streamtop_diagnostic*.json
+streamtop_snapshot*.json
+.env
+.env.*
+!.env.example
+.DS_Store
+Thumbs.db
+*.pdb
