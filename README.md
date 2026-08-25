@@ -2,8 +2,7 @@
 
 Live HLS, DASH, and IPTV stream diagnostics in the terminal.
 
-
-https://giphy.com/gifs/os7BjBmP2xYsLcDLOG
+https://github.com/user-attachments/assets/8190a7c6-834e-4344-b4a6-e6cd18276831
 
 
 ## Install
