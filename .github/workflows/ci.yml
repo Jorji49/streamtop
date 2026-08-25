@@ -124,8 +124,6 @@ jobs:
             base=$(basename "$zip" .zip)
             cp "$zip" "release/${base}-${ver}.zip"
           done
-          # Source archive (no .git / target / dist)
-          git archive --format=zip --prefix="streamtop-${ver}/" -o "release/streamtop-${ver}-src.zip" HEAD
           ls -la release/
 
       - name: Publish GitHub Release
