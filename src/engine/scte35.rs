@@ -70,12 +70,10 @@ impl SpliceInfoSection {
         let seg = self.descriptors.first();
         let kind = seg
             .map(|d| d.segmentation_type_name.as_str())
-            .unwrap_or_else(|| {
-                match self.out_of_network_indicator {
-                    Some(true) => "Out of Network",
-                    Some(false) => "Return to Network",
-                    None => "—",
-                }
+            .unwrap_or_else(|| match self.out_of_network_indicator {
+                Some(true) => "Out of Network",
+                Some(false) => "Return to Network",
+                None => "—",
             });
         let dur = seg
             .and_then(|d| d.segmentation_duration_secs)
