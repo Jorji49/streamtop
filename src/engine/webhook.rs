@@ -91,8 +91,7 @@ pub fn spawn_webhook_listener(
         let cfg = Arc::new(cfg);
         let mut last_shi_alert = false;
         while let Some(event) = rx.recv().await {
-            if let Some(payload) =
-                event_to_payload(&cfg, &event, &stream_url, &mut last_shi_alert)
+            if let Some(payload) = event_to_payload(&cfg, &event, &stream_url, &mut last_shi_alert)
             {
                 let url = cfg.url.clone();
                 let client = client.clone();
@@ -130,7 +129,9 @@ fn event_to_payload(
                 *last_shi_alert = false;
             }
             if cfg.alerts.contains(&AlertKind::Stall)
-                && h.deductions.iter().any(|d| d.to_ascii_lowercase().contains("stall"))
+                && h.deductions
+                    .iter()
+                    .any(|d| d.to_ascii_lowercase().contains("stall"))
             {
                 return Some(payload(
                     AlertKind::Stall,
@@ -144,7 +145,9 @@ fn event_to_payload(
             None
         }
         StreamEvent::Segment(seg) => segment_alerts(cfg, seg, stream_url),
-        StreamEvent::Buffer(b) if cfg.alerts.contains(&AlertKind::Stall) && b.stall_risk_pct >= 80 => {
+        StreamEvent::Buffer(b)
+            if cfg.alerts.contains(&AlertKind::Stall) && b.stall_risk_pct >= 80 =>
+        {
             Some(payload(
                 AlertKind::Stall,
                 "critical",
@@ -169,9 +172,7 @@ fn event_to_payload(
                 None,
             ))
         }
-        StreamEvent::AdBreak(ad)
-            if cfg.alerts.contains(&AlertKind::AdStart) && ad.active =>
-        {
+        StreamEvent::AdBreak(ad) if cfg.alerts.contains(&AlertKind::AdStart) && ad.active => {
             Some(payload(
                 AlertKind::AdStart,
                 "info",
@@ -218,7 +219,10 @@ fn segment_alerts(
         return Some(payload(
             AlertKind::Stall,
             "critical",
-            format!("Segment TTFB stall: {} ms (seq {})", seg.ttfb_ms, seg.media_sequence),
+            format!(
+                "Segment TTFB stall: {} ms (seq {})",
+                seg.ttfb_ms, seg.media_sequence
+            ),
             stream_url,
             None,
             Some(seg.http_status),
