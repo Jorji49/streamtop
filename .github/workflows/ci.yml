@@ -3,6 +3,7 @@ name: CI
 on:
   push:
     branches: [main, master]
+    tags: ["v*"]
   pull_request:
     branches: [main, master]
 
@@ -112,18 +113,27 @@ jobs:
         uses: actions/download-artifact@v5
         with:
           path: artifacts
-          merge-multiple: false
 
-      - name: Flatten zips
+      - name: Prepare release assets
+        env:
+          TAG: ${{ github.ref_name }}
         run: |
           mkdir -p release
-          find artifacts -type f -name '*.zip' -exec cp {} release/ \;
+          ver="${TAG#v}"
+          for zip in artifacts/*/*.zip; do
+            base=$(basename "$zip" .zip)
+            cp "$zip" "release/${base}-${ver}.zip"
+          done
+          # Source archive (no .git / target / dist)
+          git archive --format=zip --prefix="streamtop-${ver}/" -o "release/streamtop-${ver}-src.zip" HEAD
           ls -la release/
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: release/*.zip
+          draft: false
+          prerelease: false
           generate_release_notes: true
+          files: release/*.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
