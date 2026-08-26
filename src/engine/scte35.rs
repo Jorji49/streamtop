@@ -29,11 +29,11 @@ impl SpliceCommandType {
 
     pub fn as_str(&self) -> &'static str {
         match self {
-            Self::SpliceNull => "SpliceNull",
-            Self::SpliceSchedule => "SpliceSchedule",
-            Self::SpliceInsert => "SpliceInsert",
-            Self::TimeSignal => "TimeSignal",
-            Self::BandwidthReservation => "BandwidthReservation",
+            Self::SpliceNull => "Splice Null",
+            Self::SpliceSchedule => "Splice Schedule",
+            Self::SpliceInsert => "Splice Insert",
+            Self::TimeSignal => "Time Signal",
+            Self::BandwidthReservation => "Bandwidth Reservation",
             Self::Private(_) => "Private",
             Self::Unknown(_) => "Unknown",
         }
@@ -64,17 +64,24 @@ pub struct SpliceInfoSection {
 }
 
 impl SpliceInfoSection {
-    /// Human-readable log line: `[SCTE-35 BINARY] TimeSignal | Provider Ad Start | Duration: 60.0s | EventID: 10482`
+    /// Human-readable log line for the TUI event panel.
     pub fn summary_line(&self) -> String {
         let cmd = self.splice_command_type.as_str();
-        let seg = self.descriptors.first();
-        let kind = seg
+        let seg_names: Vec<&str> = self
+            .descriptors
+            .iter()
             .map(|d| d.segmentation_type_name.as_str())
-            .unwrap_or_else(|| match self.out_of_network_indicator {
-                Some(true) => "Out of Network",
-                Some(false) => "Return to Network",
-                None => "—",
-            });
+            .collect();
+        let kind = if seg_names.is_empty() {
+            match self.out_of_network_indicator {
+                Some(true) => "Out of Network".to_string(),
+                Some(false) => "Return to Network".to_string(),
+                None => "—".to_string(),
+            }
+        } else {
+            seg_names.join(", ")
+        };
+        let seg = self.descriptors.first();
         let dur = seg
             .and_then(|d| d.segmentation_duration_secs)
             .map(|s| format!("Duration: {s:.1}s"))
@@ -354,7 +361,7 @@ mod tests {
         data[16] = 0;
         let parsed = parse_scte35_bytes(&data).expect("parse");
         assert_eq!(parsed.splice_command_type, SpliceCommandType::TimeSignal);
-        assert!(parsed.summary_line().contains("TimeSignal"));
+        assert!(parsed.summary_line().contains("Time Signal"));
     }
 
     #[test]

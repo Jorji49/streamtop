@@ -799,8 +799,10 @@ pub fn scan_ll_hls(raw: &str) -> LlHlsInfo {
         } else if t.starts_with("#EXT-X-PART:") || t.starts_with("#EXT-X-PART\t") {
             info.is_ll_hls = true;
             info.part_count = info.part_count.saturating_add(1);
+            info.last_part_sequence = Some(info.part_count);
             if let Some(d) = attr_float_ci(t, "DURATION") {
                 info.last_part_duration_secs = Some(d);
+                info.last_part_duration_ms = Some((d * 1000.0).round() as u64);
                 if info.part_target_secs.is_none() {
                     info.part_target_secs = Some(d);
                 }

@@ -12,6 +12,7 @@ use crossterm::terminal::{disable_raw_mode, LeaveAlternateScreen};
 use reqwest::Client;
 
 use streamtop::engine::audit::run_audit;
+use streamtop::engine::grafana::{export_grafana_dashboard, GRAFANA_DASHBOARD_FILENAME};
 use streamtop::engine::metrics::run_prometheus;
 use streamtop::engine::playlist_parser::{
     detect_and_parse, looks_like_remote_url, path_to_file_url, ParsedInput,
@@ -46,12 +47,16 @@ impl From<SummaryFormatArg> for SummaryFormat {
 )]
 struct Cli {
     /// Stream URL, local playlist/MPD, or channel lineup (M3U / JSON / YAML)
-    #[arg(required_unless_present = "compare")]
+    #[arg(required_unless_present_any = ["compare", "export_grafana"])]
     url: Option<String>,
 
     /// Split-screen compare two live streams (Primary | Backup)
     #[arg(long = "compare", num_args = 2, value_names = ["URL_1", "URL_2"])]
     compare: Option<Vec<String>>,
+
+    /// Write Grafana dashboard JSON for Prometheus metrics (streamtop-grafana.json) and exit
+    #[arg(long = "export-grafana")]
+    export_grafana: bool,
 
     /// Extra HTTP header (repeatable). Format: "Key: Value"
     #[arg(short = 'H', long = "header", value_name = "KEY: VALUE")]
@@ -120,6 +125,13 @@ async fn main() -> Result<ExitCode> {
     install_panic_hook();
 
     let cli = Cli::parse();
+
+    if cli.export_grafana {
+        export_grafana_dashboard(GRAFANA_DASHBOARD_FILENAME)?;
+        eprintln!("Wrote {GRAFANA_DASHBOARD_FILENAME} (import into Grafana; scrape streamtop --prometheus)");
+        return Ok(ExitCode::SUCCESS);
+    }
+
     let client = build_http_client(&cli.headers, cli.user_agent.clone())?;
 
     let metrics_port = cli.metrics_port.or(cli.prometheus);

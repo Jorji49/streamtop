@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.0
+
+- Quick Play (`p`): launch `mpv` or `ffplay` with the active manifest URL and `-H`/`-A` headers
+- LL-HLS part telemetry: sequence, duration (ms), transfer rate; status badge `[LL-HLS] part Nms`
+- Binary SCTE-35 log lines use readable command names (Time Signal, Splice Insert) and segmentation types
+- `streamtop --export-grafana` writes `streamtop-grafana.json` for Prometheus metrics (SHI, TTFB, FPS, CDN, buffer)
+- Prometheus: `streamtop_bitstream_fps` gauge
+
 ## 0.2.1
 
 - Fix DASH segment duration when Representation omits `@timescale` (inherit from AdaptationSet)
