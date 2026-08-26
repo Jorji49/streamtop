@@ -1,19 +1,96 @@
 # streamtop
 
+[![Crates.io](https://img.shields.io/crates/v/streamtop.svg)](https://crates.io/crates/streamtop)
+[![Downloads](https://img.shields.io/crates/d/streamtop.svg)](https://crates.io/crates/streamtop)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 Live HLS, DASH, and IPTV stream diagnostics in the terminal.
 
 <img width="1099" height="592" alt="Animation" src="https://github.com/user-attachments/assets/92b89472-ed4a-45ac-b9ff-c5f4a85fd4b8" />
 
+## Installation
 
-## Install
+### Rust ecosystem
 
 ```bash
-cargo install --path .
+cargo install streamtop
+# or (downloads a GitHub Release binary)
+cargo binstall streamtop
 ```
 
-Or build a release binary:
+### macOS / Linuxbrew
 
 ```bash
+brew install Jorji49/tap/streamtop
+```
+
+Formula source for taps: [`Formula/streamtop.rb`](Formula/streamtop.rb).
+
+### Windows
+
+**Scoop**
+
+```powershell
+scoop bucket add extras   # if needed
+scoop install streamtop
+```
+
+Manifest: [`dist/scoop/streamtop.json`](dist/scoop/streamtop.json).
+
+**Winget**
+
+```powershell
+winget install Jorji49.streamtop
+```
+
+Manifest template: [`dist/winget/streamtop.yaml`](dist/winget/streamtop.yaml).
+
+### Arch Linux (AUR)
+
+```bash
+yay -S streamtop-bin
+# or: paru -S streamtop-bin
+```
+
+PKGBUILD: [`dist/aur/PKGBUILD`](dist/aur/PKGBUILD).
+
+### Docker
+
+```bash
+docker run -it --rm ghcr.io/jorji49/streamtop <URL>
+```
+
+Images: `ghcr.io/jorji49/streamtop:latest` and `ghcr.io/jorji49/streamtop:v*`.
+
+### Debian / Ubuntu (`.deb`)
+
+Build a package locally (requires [`cargo-deb`](https://crates.io/crates/cargo-deb)):
+
+```bash
+cargo install cargo-deb
+cargo deb
+sudo dpkg -i target/debian/streamtop_*.deb
+```
+
+Or download a release zip for your platform from [GitHub Releases](https://github.com/Jorji49/streamtop/releases) and place the binary on your `PATH`.
+
+### Manual binary / build from source
+
+```bash
+# Binary from a release (example: Linux x86_64)
+curl -fsSL -o streamtop.zip \
+  https://github.com/Jorji49/streamtop/releases/download/v0.3.0/streamtop-linux-x86_64-0.3.0.zip
+unzip streamtop.zip
+chmod +x streamtop
+sudo mv streamtop /usr/local/bin/
+```
+
+```bash
+# From source
+git clone https://github.com/Jorji49/streamtop.git
+cd streamtop
+cargo install --path .
+# or
 cargo build --release
 ```
 
@@ -33,11 +110,11 @@ streamtop "./channels.m3u"
 
 | Area | Meaning |
 |------|---------|
-| Status | URL, LIVE / ESTIMATED, health score (SHI), video FPS, latency, CDN, buffer |
+| Status | URL, LIVE / ESTIMATED, health score (SHI), video FPS, latency, CDN, buffer, `[LL-HLS]` part timing |
 | Last segment | Sequence, sizes, DNS / TCP / TLS / TTFB, container type |
 | ABR ladder | Bitrates, resolution, FPS, codecs — `[wire]` = from the bitstream, red = manifest vs wire mismatch |
 | Charts | Latency or TTFB, download rate or transfer time |
-| Log | Warnings, ads (SCTE-35), stalls, HTTP errors |
+| Log | Warnings, ads (binary SCTE-35), stalls, HTTP errors |
 
 FPS comes from the playlist (`FRAME-RATE` / `@frameRate`) when present; otherwise from the media bitstream when it can be read.
 
