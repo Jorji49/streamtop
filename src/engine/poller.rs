@@ -757,7 +757,9 @@ impl ManifestPoller {
                 let media = m3u8_rs::parse_media_playlist_res(&media_body)
                     .map_err(|e| eyre!("media playlist parse error: {e}"))?;
                 let master_text = String::from_utf8_lossy(&body);
-                self.announce_drm_and_renditions(&master_text, announced_drm);
+                let _ = self
+                    .announce_drm_and_renditions(&master_text, &self.source_url, announced_drm)
+                    .await;
                 self.handle_media(
                     &media,
                     &media_body,
@@ -809,14 +811,19 @@ impl ManifestPoller {
         }
     }
 
-    fn announce_drm_and_renditions(&self, text: &str, announced: &mut bool) {
-        if *announced {
-            return;
-        }
-        let drm = scan_drm_keys(text);
+    async fn announce_drm_and_renditions(
+        &self,
+        text: &str,
+        playlist_url: &Url,
+        announced: &mut bool,
+    ) -> crate::models::DrmInfo {
+        let mut drm = scan_drm_keys(text);
         let rends = scan_media_renditions(text);
+        if *announced {
+            return drm;
+        }
         if !drm.present && rends.audio.is_empty() && rends.subtitles.is_empty() {
-            return;
+            return drm;
         }
         *announced = true;
         if drm.present {
@@ -830,6 +837,7 @@ impl ManifestPoller {
                     drm.key_format.as_deref().unwrap_or("—")
                 ),
             );
+            self.probe_drm_license(&mut drm, playlist_url).await;
         }
         for a in &rends.audio {
             self.emit_log(
@@ -844,6 +852,57 @@ impl ManifestPoller {
                 DiagCategory::Info,
                 format!("SUBTITLES: {s}"),
             );
+        }
+        drm
+    }
+
+    async fn probe_drm_license(&self, drm: &mut crate::models::DrmInfo, playlist_url: &Url) {
+        let Some(uri) = drm.key_uri.clone() else {
+            return;
+        };
+        let key_url = if uri.starts_with("http://") || uri.starts_with("https://") {
+            uri
+        } else {
+            match playlist_url.join(&uri) {
+                Ok(u) => u.to_string(),
+                Err(err) => {
+                    drm.license_error = Some(format!("resolve key URI: {err}"));
+                    return;
+                }
+            }
+        };
+        let started = Instant::now();
+        match self
+            .client
+            .get(&key_url)
+            .header(RANGE, "bytes=0-0")
+            .send()
+            .await
+        {
+            Ok(resp) => {
+                drm.license_ttfb_ms = Some(started.elapsed().as_millis() as u64);
+                drm.license_http_status = Some(resp.status().as_u16());
+                let _ = resp.bytes().await;
+                self.emit_log(
+                    LogLevel::Info,
+                    DiagCategory::Drm,
+                    format!(
+                        "License/key probe {} → HTTP {} in {}ms",
+                        key_url,
+                        drm.license_http_status.unwrap_or(0),
+                        drm.license_ttfb_ms.unwrap_or(0)
+                    ),
+                );
+            }
+            Err(err) => {
+                drm.license_ttfb_ms = Some(started.elapsed().as_millis() as u64);
+                drm.license_error = Some(err.to_string());
+                self.emit_log(
+                    LogLevel::Warn,
+                    DiagCategory::Drm,
+                    format!("License/key probe failed ({key_url}): {err}"),
+                );
+            }
         }
     }
 
@@ -977,9 +1036,10 @@ impl ManifestPoller {
             );
         }
 
-        let drm = scan_drm_keys(&raw_text);
         let renditions = scan_media_renditions(&raw_text);
-        self.announce_drm_and_renditions(&raw_text, announced_drm);
+        let drm = self
+            .announce_drm_and_renditions(&raw_text, media_url, announced_drm)
+            .await;
 
         self.send_event(StreamEvent::PlaylistMeta(PlaylistMeta {
             media_sequence: media.media_sequence,

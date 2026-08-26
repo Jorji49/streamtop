@@ -12,6 +12,8 @@ use crossterm::terminal::{disable_raw_mode, LeaveAlternateScreen};
 use reqwest::Client;
 
 use streamtop::engine::audit::run_audit;
+use streamtop::engine::config::session_from_profile;
+use streamtop::engine::export::{build_curl, capture_for_export, write_har};
 use streamtop::engine::grafana::{export_grafana_dashboard, GRAFANA_DASHBOARD_FILENAME};
 use streamtop::engine::metrics::run_prometheus;
 use streamtop::engine::playlist_parser::{
@@ -58,6 +60,18 @@ struct Cli {
     #[arg(long = "export-grafana")]
     export_grafana: bool,
 
+    /// After a short poll, print a ticket-ready curl for the last segment
+    #[arg(long = "export-curl")]
+    export_curl: bool,
+
+    /// After a short poll, write HAR 1.2 for manifest + last segment
+    #[arg(long = "export-har", value_name = "FILE")]
+    export_har: Option<PathBufArg>,
+
+    /// Load named profile from ~/.config/streamtop/config.toml
+    #[arg(long = "profile", value_name = "NAME")]
+    profile: Option<String>,
+
     /// Extra HTTP header (repeatable). Format: "Key: Value"
     #[arg(short = 'H', long = "header", value_name = "KEY: VALUE")]
     headers: Vec<String>,
@@ -82,11 +96,11 @@ struct Cli {
     #[arg(long = "summary", alias = "headless")]
     summary: bool,
 
-    /// Summary output: text or json
+    /// Summary output: text or json (`streamtop.summary.v1`)
     #[arg(long = "summary-format", value_enum, default_value_t = SummaryFormatArg::Text)]
     summary_format: SummaryFormatArg,
 
-    /// Seconds to listen in --summary mode (default: 8)
+    /// Seconds to listen in --summary / export modes (default: 8)
     #[arg(long = "timeout", value_name = "SECS", default_value_t = 8)]
     timeout_secs: u64,
 
@@ -109,12 +123,19 @@ struct Cli {
     webhook: Option<String>,
 
     /// Comma-separated alert kinds: stall,shi_below_70,http_5xx,mismatch,ad_start
-    #[arg(
-        long = "alert-on",
-        value_name = "EVENTS",
-        default_value = "stall,shi_below_70,http_5xx"
-    )]
-    alert_on: String,
+    #[arg(long = "alert-on", value_name = "EVENTS")]
+    alert_on: Option<String>,
+}
+
+/// Clap-friendly path wrapper.
+#[derive(Debug, Clone)]
+struct PathBufArg(std::path::PathBuf);
+
+impl std::str::FromStr for PathBufArg {
+    type Err = std::convert::Infallible;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(Self(std::path::PathBuf::from(s)))
+    }
 }
 
 #[tokio::main]
@@ -132,18 +153,43 @@ async fn main() -> Result<ExitCode> {
         return Ok(ExitCode::SUCCESS);
     }
 
-    let client = build_http_client(&cli.headers, cli.user_agent.clone())?;
+    let mut session = session_from_profile(
+        cli.profile.as_deref(),
+        SessionOpts {
+            headers: Vec::new(),
+            user_agent: None,
+            interval_ms: None,
+            probe_headers: false,
+            webhook_url: None,
+            alert_on: "stall,shi_below_70,http_5xx".into(),
+        },
+    )?;
 
+    // CLI overrides profile / defaults.
+    if !cli.headers.is_empty() {
+        session.headers = cli.headers.clone();
+    }
+    if cli.user_agent.is_some() {
+        session.user_agent = cli.user_agent.clone();
+    }
+    if cli.interval_ms.is_some() {
+        session.interval_ms = cli.interval_ms;
+    }
+    if cli.probe_headers {
+        session.probe_headers = true;
+    }
+    if cli.webhook.is_some() {
+        session.webhook_url = cli.webhook.clone();
+    }
+    if let Some(a) = &cli.alert_on {
+        session.alert_on = a.clone();
+    }
+    if session.alert_on.is_empty() {
+        session.alert_on = "stall,shi_below_70,http_5xx".into();
+    }
+
+    let client = build_http_client(&session.headers, session.user_agent.clone())?;
     let metrics_port = cli.metrics_port.or(cli.prometheus);
-
-    let session = SessionOpts {
-        headers: cli.headers.clone(),
-        user_agent: cli.user_agent.clone(),
-        interval_ms: cli.interval_ms,
-        probe_headers: cli.probe_headers,
-        webhook_url: cli.webhook.clone(),
-        alert_on: cli.alert_on.clone(),
-    };
 
     if let Some(urls) = &cli.compare {
         if urls.len() != 2 {
@@ -163,6 +209,8 @@ async fn main() -> Result<ExitCode> {
     let parsed = detect_and_parse(&origin, &body, content_type.as_deref())
         .wrap_err("failed to detect input type (HLS / DASH / IPTV / catalog)")?;
 
+    let want_export = cli.export_curl || cli.export_har.is_some();
+
     let exit = match parsed {
         ParsedInput::IptvChannels { origin, channels } => {
             if channels.is_empty() {
@@ -173,8 +221,15 @@ async fn main() -> Result<ExitCode> {
                     "Prometheus mode requires a single HLS/DASH stream URL"
                 ));
             }
+            if want_export {
+                return Err(eyre!(
+                    "--export-curl/--export-har require a single HLS/DASH stream URL"
+                ));
+            }
             if cli.audit {
-                let report = run_audit(&origin, channels, cli.headers, cli.user_agent).await?;
+                let report =
+                    run_audit(&origin, channels, session.headers.clone(), session.user_agent.clone())
+                        .await?;
                 Ok(if report.errors == 0 && report.stalls == 0 {
                     ExitCode::SUCCESS
                 } else {
@@ -190,7 +245,18 @@ async fn main() -> Result<ExitCode> {
             }
         }
         ParsedInput::SingleStream { origin, url } => {
-            if let Some(port) = metrics_port {
+            if want_export {
+                let cap =
+                    capture_for_export(url.clone(), session.clone(), cli.timeout_secs).await?;
+                if cli.export_curl {
+                    println!("{}", build_curl(&cap));
+                }
+                if let Some(PathBufArg(path)) = &cli.export_har {
+                    write_har(path, &cap)?;
+                    eprintln!("Wrote HAR {}", path.display());
+                }
+                Ok(ExitCode::SUCCESS)
+            } else if let Some(port) = metrics_port {
                 run_prometheus(url, session, port).await
             } else if cli.audit {
                 let name = Path::new(input_url)
@@ -205,7 +271,9 @@ async fn main() -> Result<ExitCode> {
                     logo: None,
                     tvg_id: None,
                 }];
-                let report = run_audit(&origin, channels, cli.headers, cli.user_agent).await?;
+                let report =
+                    run_audit(&origin, channels, session.headers.clone(), session.user_agent.clone())
+                        .await?;
                 Ok(if report.errors == 0 && report.stalls == 0 {
                     ExitCode::SUCCESS
                 } else {

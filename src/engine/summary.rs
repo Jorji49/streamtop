@@ -16,28 +16,69 @@ use crate::models::{
 };
 use crate::ui::app::SessionOpts;
 
+/// Stable machine-readable schema id for `--summary --summary-format json`.
+pub const SUMMARY_SCHEMA: &str = "streamtop.summary.v1";
+pub const SUMMARY_SCHEMA_VERSION: u32 = 1;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SummaryFormat {
     Text,
     Json,
 }
 
+/// Documented stable JSON shape for CI gates (`schemas/summary.v1.json`).
 #[derive(Debug, Serialize)]
-struct SummaryJson {
-    verdict: &'static str,
+pub struct SummaryJson {
+    pub schema: &'static str,
+    pub schema_version: u32,
+    pub verdict: &'static str,
+    pub ok: bool,
+    pub health_score: u8,
+    pub health_label: String,
+    pub status: &'static str,
+    pub latency: String,
+    pub cdn: String,
+    pub ttfb_ms: Option<u64>,
+    pub last_http_status: Option<u16>,
+    pub origin_stalls: u32,
+    pub critical_rfc_errors: u32,
+    pub url: String,
+    pub errors: u32,
+    pub saw_segment: bool,
+}
+
+pub fn build_summary_json(
+    url: String,
     ok: bool,
-    health_score: u8,
-    health_label: String,
-    status: &'static str,
-    latency: String,
-    cdn: String,
-    ttfb_ms: Option<u64>,
+    health: &HealthReport,
+    status_label: &'static str,
+    latency: &LatencyState,
+    cdn_badge: String,
+    last_ttfb: Option<u64>,
     last_http_status: Option<u16>,
     origin_stalls: u32,
     critical_rfc_errors: u32,
-    url: String,
     errors: u32,
     saw_segment: bool,
+) -> SummaryJson {
+    SummaryJson {
+        schema: SUMMARY_SCHEMA,
+        schema_version: SUMMARY_SCHEMA_VERSION,
+        verdict: if ok { "PASS" } else { "FAIL" },
+        ok,
+        health_score: health.score,
+        health_label: health.label.clone(),
+        status: status_label,
+        latency: latency.display(),
+        cdn: cdn_badge,
+        ttfb_ms: last_ttfb,
+        last_http_status,
+        origin_stalls,
+        critical_rfc_errors,
+        url,
+        errors,
+        saw_segment,
+    }
 }
 
 pub async fn run_summary(
@@ -147,7 +188,6 @@ pub async fn run_summary(
         && http_ok
         && saw_segment;
 
-    let verdict = if ok { "PASS" } else { "FAIL" };
     let status_label = match status.kind {
         StreamStatusKind::Live => "LIVE",
         StreamStatusKind::Degraded => "DEGRADED",
@@ -156,25 +196,24 @@ pub async fn run_summary(
 
     match format {
         SummaryFormat::Json => {
-            let payload = SummaryJson {
-                verdict,
+            let payload = build_summary_json(
+                url.clone(),
                 ok,
-                health_score: health.score,
-                health_label: health.label.clone(),
-                status: status_label,
-                latency: latency.display(),
-                cdn: cdn_badge,
-                ttfb_ms: last_ttfb,
+                &health,
+                status_label,
+                &latency,
+                cdn_badge,
+                last_ttfb,
                 last_http_status,
                 origin_stalls,
                 critical_rfc_errors,
-                url: url.clone(),
                 errors,
                 saw_segment,
-            };
+            );
             println!("{}", serde_json::to_string(&payload)?);
         }
         SummaryFormat::Text => {
+            let verdict = if ok { "PASS" } else { "FAIL" };
             let color = if ok { Color::Green } else { Color::Red };
             let mut out = std::io::stdout();
             crossterm::execute!(out, SetForegroundColor(color))?;
@@ -203,4 +242,35 @@ pub async fn run_summary(
     } else {
         ExitCode::from(1)
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn summary_json_schema_fields() {
+        let health = HealthReport::perfect();
+        let payload = build_summary_json(
+            "https://ex/m.m3u8".into(),
+            true,
+            &health,
+            "LIVE",
+            &LatencyState::Measured(1200),
+            "Cloudflare · HIT".into(),
+            Some(80),
+            Some(206),
+            0,
+            0,
+            0,
+            true,
+        );
+        let v = serde_json::to_value(&payload).unwrap();
+        assert_eq!(v["schema"], SUMMARY_SCHEMA);
+        assert_eq!(v["schema_version"], SUMMARY_SCHEMA_VERSION);
+        assert_eq!(v["verdict"], "PASS");
+        assert_eq!(v["ok"], true);
+        assert_eq!(v["saw_segment"], true);
+        assert!(v.get("health_score").is_some());
+    }
 }

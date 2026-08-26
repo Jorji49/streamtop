@@ -112,8 +112,15 @@ streamtop <URL> --webhook https://hooks.example/x --alert-on stall,shi_below_70,
 # Channel list audit → audit_report.json / .csv
 streamtop ./channels.m3u --audit
 
-# Headless pass/fail (CI)
-streamtop <URL> --summary --timeout 10
+# Headless pass/fail (CI) — JSON schema: schemas/summary.v1.json
+streamtop <URL> --summary --summary-format json --timeout 10
+
+# Ticket attach: curl / HAR after a short poll
+streamtop <URL> --export-curl --probe-headers
+streamtop <URL> --export-har incident.har --timeout 10
+
+# Named profile from ~/.config/streamtop/config.toml (see config.example.toml)
+streamtop <URL> --profile cdn
 
 # Prometheus metrics on :9090/metrics
 streamtop <URL> --prometheus
