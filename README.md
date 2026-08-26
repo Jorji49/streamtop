@@ -32,17 +32,16 @@ scoop install streamtop/streamtop
 
 ### Windows — Winget
 
-Official catalog entry is submitted as `Jorji49.streamtop`. Until it is indexed:
-
 ```powershell
-# From a clone of this repo (works today)
-winget install --manifest .\dist\winget
+winget install streamtop
 ```
 
-After Microsoft merges the package:
+Catalog ID is `Jorji49.streamtop` (winget requires `Publisher.Package`); install resolves via the `streamtop` moniker. PR: [microsoft/winget-pkgs#424445](https://github.com/microsoft/winget-pkgs/pull/424445).
+
+Until the catalog indexes, from a clone (admin once: `winget settings --enable LocalManifestFiles`):
 
 ```powershell
-winget install Jorji49.streamtop
+winget install --manifest .\dist\winget
 ```
 
 ### macOS / Linux — Homebrew
