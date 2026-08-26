@@ -1,5 +1,5 @@
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
 use chrono::Utc;
@@ -12,10 +12,12 @@ use tokio::sync::mpsc::Sender;
 use tokio::time::sleep;
 use url::Url;
 
+use crate::engine::channel_stats::record_channel_drop;
 use crate::engine::container_probe::{
     deep_wire_probe, fill_abr_from_wire, manifest_wire_mismatches,
 };
 use crate::engine::dash::{looks_like_dash, parse_dash_mpd};
+use crate::engine::gop_tracker::GopCadenceTracker;
 use crate::engine::linter::{
     ad_log_key, analyze_abr_ladder, apply_abr_penalty, apply_hls_blocking_params,
     extract_ad_signals_near_live_edge, inspect_container, ll_hls_probe_range,
@@ -53,6 +55,7 @@ pub struct ManifestPoller {
     tx: Sender<StreamEvent>,
     hook_tx: Option<Sender<StreamEvent>>,
     metrics: Option<Arc<RwLock<MetricsSnapshot>>>,
+    gop_tracker: Arc<Mutex<GopCadenceTracker>>,
 }
 
 struct SegmentFetch {
@@ -93,6 +96,7 @@ impl ManifestPoller {
             tx,
             hook_tx: None,
             metrics: None,
+            gop_tracker: Arc::new(Mutex::new(GopCadenceTracker::default())),
         })
     }
 
@@ -113,9 +117,20 @@ impl ManifestPoller {
             }
         }
         // Bounded: drop when UI/webhook cannot keep up (prefer liveness over backlog).
-        let _ = self.tx.try_send(event.clone());
+        if self.tx.try_send(event.clone()).is_err() {
+            record_channel_drop();
+        }
         if let Some(h) = &self.hook_tx {
-            let _ = h.try_send(event);
+            if h.try_send(event).is_err() {
+                record_channel_drop();
+            }
+        }
+    }
+
+    fn finalize_wire(&self, wire: &mut WireProbeInfo) {
+        if let Ok(mut tracker) = self.gop_tracker.lock() {
+            tracker.observe_keyframe(wire.keyframe_pts_sec);
+            tracker.apply(wire);
         }
     }
 
@@ -1418,7 +1433,8 @@ impl ManifestPoller {
                 let total = resp.body.len() as u64;
                 let head_len = (DEEP_WIRE_PROBE_BYTES as usize + 1).min(resp.body.len());
                 let head = resp.body[..head_len].to_vec();
-                let wire = deep_wire_probe(&head);
+                let mut wire = deep_wire_probe(&head);
+                self.finalize_wire(&mut wire);
                 let container = if wire.container != ContainerKind::Unknown {
                     wire.container
                 } else {
@@ -1470,7 +1486,8 @@ impl ManifestPoller {
         }
 
         let download_ms = started.elapsed().as_millis() as u64;
-        let wire = deep_wire_probe(&head);
+        let mut wire = deep_wire_probe(&head);
+        self.finalize_wire(&mut wire);
         let container = if wire.container != ContainerKind::Unknown {
             wire.container
         } else {
@@ -1518,7 +1535,8 @@ impl ManifestPoller {
                     .unwrap_or(0);
                 let transferred = resp.body.len() as u64;
                 let size_bytes = if declared > 0 { declared } else { transferred };
-                let wire = deep_wire_probe(&resp.body);
+                let mut wire = deep_wire_probe(&resp.body);
+                self.finalize_wire(&mut wire);
                 let container = if wire.container != ContainerKind::Unknown {
                     wire.container
                 } else {
@@ -1591,7 +1609,8 @@ impl ManifestPoller {
         } else {
             transferred
         };
-        let wire = deep_wire_probe(&buf);
+        let mut wire = deep_wire_probe(&buf);
+        self.finalize_wire(&mut wire);
         let container = if wire.container != ContainerKind::Unknown {
             wire.container
         } else {

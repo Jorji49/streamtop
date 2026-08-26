@@ -1,7 +1,7 @@
 # yaml-language-server: $schema=https://aka.ms/winget-manifest.defaultLocale.1.6.0.schema.json
 
 PackageIdentifier: Jorji49.streamtop
-PackageVersion: 0.3.2
+PackageVersion: 0.3.3
 PackageLocale: en-US
 Publisher: Ahmet Kayra Kama
 PublisherUrl: https://github.com/Jorji49
@@ -22,6 +22,6 @@ Tags:
   - diagnostics
   - tui
   - streaming
-ReleaseNotesUrl: https://github.com/Jorji49/streamtop/releases/tag/v0.3.2
+ReleaseNotesUrl: https://github.com/Jorji49/streamtop/releases/tag/v0.3.3
 ManifestType: defaultLocale
 ManifestVersion: 1.6.0

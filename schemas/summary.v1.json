@@ -35,7 +35,8 @@
     "critical_rfc_errors": { "type": "integer", "minimum": 0 },
     "url": { "type": "string" },
     "errors": { "type": "integer", "minimum": 0 },
-    "saw_segment": { "type": "boolean" }
+    "saw_segment": { "type": "boolean" },
+    "dropped_events": { "type": "integer", "minimum": 0 }
   },
   "additionalProperties": false
 }

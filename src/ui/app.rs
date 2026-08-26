@@ -682,6 +682,7 @@ impl App {
                     .as_ref()
                     .map(|p| p.ll_hls.is_ll_hls)
                     .unwrap_or(false),
+                dropped_events: crate::engine::channel_stats::channel_dropped_total(),
             },
             timeline,
             health,

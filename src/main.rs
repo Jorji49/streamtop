@@ -130,7 +130,7 @@ struct Cli {
     )]
     metrics_bind: String,
 
-    /// Optional bearer/query token required to scrape /metrics
+    /// Bearer token required to scrape /metrics (Authorization: Bearer only)
     #[arg(long = "metrics-token", value_name = "TOKEN")]
     metrics_token: Option<String>,
 
