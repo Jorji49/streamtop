@@ -28,7 +28,7 @@ Installers:
   - Architecture: x64
     InstallerType: portable
     InstallerUrl: https://github.com/Jorji49/streamtop/releases/download/v0.3.0/streamtop-windows-x86_64-0.3.0.zip
-    InstallerSha256: REPLACEAFTERRELEASE000000000000000000000000000000000000000000000
+    InstallerSha256: 5889ECF903BBEB7EE7699E9AB739165AB64A898BEFDFCCF950EEC06404774362
     NestedInstallerFiles:
       - RelativeFilePath: streamtop.exe
         PortableCommandAlias: streamtop

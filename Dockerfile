@@ -1,5 +1,5 @@
 # Multi-stage build: compile on Alpine musl, run on minimal Alpine.
-FROM rust:1.85-alpine AS builder
+FROM rust:alpine AS builder
 
 RUN apk add --no-cache musl-dev
 
