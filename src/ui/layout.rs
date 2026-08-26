@@ -612,6 +612,11 @@ fn draw_footer(frame: &mut Frame, app: &App, area: Rect) {
         ),
         Span::raw(" "),
         Span::styled(
+            " p play ",
+            Style::default().fg(Color::Black).bg(Color::LightMagenta),
+        ),
+        Span::raw(" "),
+        Span::styled(
             " Space save JSON ",
             Style::default().fg(Color::Black).bg(Color::LightYellow),
         ),
@@ -668,6 +673,7 @@ pub fn draw_help(frame: &mut Frame, area: Rect, picker_context: bool) {
             )),
             Line::from(""),
             Line::from("  c            Copy curl (headers + Range) to clipboard"),
+            Line::from("  p            Quick Play (mpv / ffplay, non-blocking)"),
             Line::from("  Space        Save diagnostics/<channel>_<time>.json"),
             Line::from("  Tab          Channel switcher overlay"),
             Line::from("  Esc          Back to channel picker"),

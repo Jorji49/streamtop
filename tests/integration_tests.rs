@@ -48,7 +48,12 @@ fn router_ll_hls_media_is_single_stream() {
     assert!(ll.can_block_reload);
     assert!(ll.has_preload_hint);
     assert!(ll.part_count >= 2);
-    assert!(ll.header_badge().unwrap().contains("Detected (Hint)"));
+    assert_eq!(ll.last_part_sequence, Some(ll.part_count));
+    assert_eq!(ll.last_part_duration_ms, Some(333));
+    let badge = ll.header_badge().unwrap();
+    assert!(badge.contains("[LL-HLS]"));
+    assert!(badge.contains("333ms"));
+    assert!(badge.contains("seq="));
 
     let (msn, part) = next_blocking_targets(100, 1, ll.part_count);
     assert_eq!(msn, 100);

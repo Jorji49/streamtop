@@ -5,6 +5,7 @@ diagnostics/
 audit_report.*
 streamtop_diagnostic*.json
 streamtop_snapshot*.json
+streamtop-grafana.json
 .env
 .env.*
 !.env.example

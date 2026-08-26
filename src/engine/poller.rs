@@ -916,13 +916,17 @@ impl ManifestPoller {
                     )
                     .await
                 {
-                    Ok(()) => {
+                    Ok(probe) => {
                         ll_meta.preload_hint_fetched = true;
+                        ll_meta.last_part_transfer_kbps = Some(probe.transfer_kbps);
                         self.emit_log(
                             LogLevel::Info,
                             DiagCategory::LlHls,
                             format!(
-                                "PRELOAD-HINT probed | {}",
+                                "PART/HINT probe | seq={} | {}ms | {:.0} kbps | {}",
+                                ll_meta.last_part_sequence.unwrap_or(0),
+                                ll_meta.part_latency_ms().unwrap_or(0),
+                                probe.transfer_kbps,
                                 ll_hls_probe_range(
                                     ll.preload_byterange_offset,
                                     ll.preload_byterange_length
@@ -1513,17 +1517,18 @@ impl ManifestPoller {
         })
     }
 
-    /// Range-probe a PRELOAD-HINT / PART URI using BYTERANGE offset when present.
+    /// Range-probe a PRELOAD-HINT / PART URI; returns measured transfer rate.
     async fn probe_ll_hls_hint(
         &self,
         url: &str,
         offset: Option<u64>,
         length: Option<u64>,
-    ) -> Result<()> {
+    ) -> Result<LlHlsProbeStats> {
         if local_path_from_url(url).is_some() {
-            return Ok(());
+            return Ok(LlHlsProbeStats { transfer_kbps: 0.0 });
         }
         let range = ll_hls_probe_range(offset, length);
+        let started = Instant::now();
         let response = self
             .client
             .get(url)
@@ -1536,9 +1541,17 @@ impl ManifestPoller {
         if !(status.is_success() || code == 206) {
             return Err(eyre!("LL-HLS hint HTTP {status} — {url}"));
         }
-        let _ = response.bytes().await?;
-        Ok(())
+        let body = response.bytes().await?;
+        let elapsed_ms = started.elapsed().as_millis().max(1) as u64;
+        let bytes = body.len() as u64;
+        let transfer_kbps = (bytes as f64 * 8.0) / elapsed_ms as f64;
+        Ok(LlHlsProbeStats { transfer_kbps })
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct LlHlsProbeStats {
+    transfer_kbps: f64,
 }
 
 pub fn build_http_client(headers: &[String], user_agent: Option<String>) -> Result<Client> {

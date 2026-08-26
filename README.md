@@ -61,6 +61,9 @@ streamtop <URL> --summary --timeout 10
 
 # Prometheus metrics on :9090/metrics
 streamtop <URL> --prometheus
+
+# Grafana dashboard JSON (import; scrape streamtop --prometheus)
+streamtop --export-grafana
 ```
 
 Alert kinds for `--alert-on`: `stall`, `shi_below_70`, `http_5xx`, `mismatch`, `ad_start`.
@@ -72,6 +75,7 @@ Alert kinds for `--alert-on`: `stall`, `shi_below_70`, `http_5xx`, `mismatch`, `
 | `q` / `Esc` / `Ctrl+C` | Quit (Esc returns to channel list when one is open) |
 | `Space` | Save report under `diagnostics/` |
 | `c` | Copy a curl for the last segment |
+| `p` | Quick Play via `mpv` or `ffplay` (non-blocking) |
 | `r` | Reset metrics |
 | `Tab` | Channel overlay |
 | `?` | Help |

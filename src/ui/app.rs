@@ -15,6 +15,7 @@ use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use tokio::task::JoinHandle;
 use tokio::time::{interval, MissedTickBehavior};
 
+use crate::engine::quick_play::{launch_quick_play, QuickPlayResult};
 use crate::engine::ManifestPoller;
 use crate::models::{
     format_dvr_window, AbrHealth, AbrVariant, AdBreakInfo, CdnStats, ChannelEntry, DiagCategory,
@@ -383,6 +384,9 @@ impl App {
             KeyCode::Char('c') | KeyCode::Char('C') => {
                 self.copy_curl_to_clipboard()?;
             }
+            KeyCode::Char('p') | KeyCode::Char('P') => {
+                self.quick_play();
+            }
             KeyCode::Char('?') => {
                 self.show_help = true;
             }
@@ -432,6 +436,57 @@ impl App {
             }
         }
         Ok(())
+    }
+
+    fn quick_play(&mut self) {
+        let url = if self.active_url.is_empty() {
+            self.source_url.as_str()
+        } else {
+            self.active_url.as_str()
+        };
+        if url.is_empty() {
+            self.push_log(
+                LogLevel::Warn,
+                DiagCategory::Info,
+                "[WARN] Quick Play failed: no active stream URL",
+            );
+            return;
+        }
+        match launch_quick_play(
+            url,
+            &self.session.headers,
+            self.session.user_agent.as_deref(),
+        ) {
+            QuickPlayResult::Started { player } => {
+                self.push_log(
+                    LogLevel::Info,
+                    DiagCategory::Info,
+                    format!("Quick Play started with {player}"),
+                );
+                self.toast = Some((
+                    format!("playing via {player}"),
+                    Instant::now() + Duration::from_secs(TOAST_SECS),
+                ));
+            }
+            QuickPlayResult::NotFound => {
+                self.push_log(
+                    LogLevel::Warn,
+                    DiagCategory::Info,
+                    "[WARN] Quick Play failed: Neither mpv nor ffplay found in system PATH",
+                );
+                self.toast = Some((
+                    "mpv/ffplay not found".into(),
+                    Instant::now() + Duration::from_secs(TOAST_SECS),
+                ));
+            }
+            QuickPlayResult::SpawnFailed { player, error } => {
+                self.push_log(
+                    LogLevel::Warn,
+                    DiagCategory::Info,
+                    format!("[WARN] Quick Play failed: could not start {player}: {error}"),
+                );
+            }
+        }
     }
 
     pub fn build_curl_command(&self) -> String {
