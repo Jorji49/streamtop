@@ -24,15 +24,25 @@ fn rounded(title: impl Into<String>) -> Block<'static> {
 }
 
 pub fn draw(frame: &mut Frame, app: &App) {
+    let area = frame.area();
+    // Tiny terminals: collapse fixed chrome so Min panes do not overflow.
+    let (header_h, mid_pct, log_min, footer_h) = if area.height < 18 {
+        (4u16, 40u16, 3u16, 1u16)
+    } else if area.height < 28 {
+        (5, 45, 5, 1)
+    } else {
+        (7, 48, 8, 1)
+    };
+
     let root = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(7),
-            Constraint::Percentage(48),
-            Constraint::Min(8),
-            Constraint::Length(1),
+            Constraint::Length(header_h.min(area.height.saturating_sub(2))),
+            Constraint::Percentage(mid_pct),
+            Constraint::Min(log_min),
+            Constraint::Length(footer_h.min(1)),
         ])
-        .split(frame.area());
+        .split(area);
 
     draw_header(frame, app, root[0]);
 

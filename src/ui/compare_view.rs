@@ -15,14 +15,14 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::{backend::CrosstermBackend, Frame, Terminal};
-use tokio::sync::mpsc::{self, UnboundedReceiver};
+use tokio::sync::mpsc::{self, Receiver};
 use tokio::task::JoinHandle;
 use tokio::time::{interval, MissedTickBehavior};
 
 use crate::engine::ManifestPoller;
 use crate::models::{
     AbrVariant, CdnStats, HealthReport, LatencyState, PlaylistMeta, SegmentMetrics, StreamEvent,
-    StreamStatus, VirtualBuffer,
+    StreamStatus, VirtualBuffer, EVENT_CHANNEL_CAPACITY,
 };
 use crate::ui::app::SessionOpts;
 
@@ -102,8 +102,8 @@ impl PaneState {
 pub struct CompareApp {
     left: PaneState,
     right: PaneState,
-    left_rx: UnboundedReceiver<StreamEvent>,
-    right_rx: UnboundedReceiver<StreamEvent>,
+    left_rx: Receiver<StreamEvent>,
+    right_rx: Receiver<StreamEvent>,
     left_poller: JoinHandle<()>,
     right_poller: JoinHandle<()>,
     should_quit: bool,
@@ -111,8 +111,8 @@ pub struct CompareApp {
 
 impl CompareApp {
     pub async fn run(url1: String, url2: String, session: SessionOpts) -> Result<()> {
-        let (l_tx, l_rx) = mpsc::unbounded_channel();
-        let (r_tx, r_rx) = mpsc::unbounded_channel();
+        let (l_tx, l_rx) = mpsc::channel(EVENT_CHANNEL_CAPACITY);
+        let (r_tx, r_rx) = mpsc::channel(EVENT_CHANNEL_CAPACITY);
 
         let left_poller = ManifestPoller::new(
             url1.clone(),
@@ -159,8 +159,8 @@ impl CompareApp {
                 Some(ev) = app.left_rx.recv() => app.left.apply(ev),
                 Some(ev) = app.right_rx.recv() => app.right.apply(ev),
                 maybe = events.next() => {
-                    if let Some(Ok(Event::Key(key))) = maybe {
-                        if key.kind == KeyEventKind::Press {
+                    match maybe {
+                        Some(Ok(Event::Key(key))) if key.kind == KeyEventKind::Press => {
                             match key.code {
                                 KeyCode::Char('q') | KeyCode::Esc => app.should_quit = true,
                                 KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
@@ -169,6 +169,11 @@ impl CompareApp {
                                 _ => {}
                             }
                         }
+                        Some(Ok(Event::Resize(_, _))) => {
+                            terminal.draw(|f| draw_compare(f, &app))?;
+                        }
+                        Some(Err(_)) | None => app.should_quit = true,
+                        _ => {}
                     }
                 }
                 _ = frames.tick() => {

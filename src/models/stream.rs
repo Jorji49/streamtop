@@ -15,6 +15,8 @@ pub const BUFFER_STALL_THRESHOLD_SECS: f64 = 4.0;
 pub const RANGE_PROBE_BYTES: u64 = 2048;
 /// Bytes fetched for deep wire probe (SPS/PPS / moov / PAT-PMT).
 pub const DEEP_WIRE_PROBE_BYTES: u64 = 65535;
+/// Bounded poller→UI/webhook queue; full = drop (prefer latest via try_send).
+pub const EVENT_CHANNEL_CAPACITY: usize = 512;
 pub const AUDIT_REPORT_JSON: &str = "audit_report.json";
 pub const AUDIT_REPORT_CSV: &str = "audit_report.csv";
 pub const AUDIT_CONCURRENCY: usize = 25;

@@ -60,6 +60,9 @@ pub struct SpliceInfoSection {
     pub splice_event_id: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pts_time: Option<u64>,
+    /// SpliceInsert break_duration (90 kHz ticks → seconds), when duration_flag is set.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub break_duration_secs: Option<f64>,
     pub descriptors: Vec<SegmentationDescriptor>,
 }
 
@@ -82,8 +85,13 @@ impl SpliceInfoSection {
             seg_names.join(", ")
         };
         let seg = self.descriptors.first();
-        let dur = seg
-            .and_then(|d| d.segmentation_duration_secs)
+        let dur = self
+            .break_duration_secs
+            .or_else(|| {
+                self.descriptors
+                    .first()
+                    .and_then(|d| d.segmentation_duration_secs)
+            })
             .map(|s| format!("Duration: {s:.1}s"))
             .unwrap_or_else(|| "Duration: —".into());
         let event = self
@@ -195,6 +203,7 @@ pub fn parse_scte35_bytes(data: &[u8]) -> Option<SpliceInfoSection> {
     let mut out_of_network = None;
     let mut splice_event_id = None;
     let mut pts_time = None;
+    let mut break_duration_secs = None;
 
     match splice_command_type {
         SpliceCommandType::SpliceInsert => {
@@ -229,8 +238,16 @@ pub fn parse_scte35_bytes(data: &[u8]) -> Option<SpliceInfoSection> {
                         }
                     }
                     if duration_flag && off + 5 <= cmd_end {
-                        let _ = off.saturating_add(5);
+                        // break_duration: auto_return (1) + reserved (6) + duration (33) @ 90 kHz
+                        let ticks = (((data[off] as u64) & 0x01) << 32)
+                            | ((data[off + 1] as u64) << 24)
+                            | ((data[off + 2] as u64) << 16)
+                            | ((data[off + 3] as u64) << 8)
+                            | data[off + 4] as u64;
+                        break_duration_secs = Some(ticks as f64 / 90_000.0);
+                        off += 5;
                     }
+                    let _ = off; // command component cursor; descriptor loop uses header length
                 }
             }
         }
@@ -280,6 +297,7 @@ pub fn parse_scte35_bytes(data: &[u8]) -> Option<SpliceInfoSection> {
         out_of_network_indicator: out_of_network,
         splice_event_id,
         pts_time,
+        break_duration_secs,
         descriptors,
     })
 }

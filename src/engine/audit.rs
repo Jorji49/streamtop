@@ -43,7 +43,24 @@ pub async fn run_audit(
         let client = Arc::clone(&client);
         let sem = Arc::clone(&sem);
         jobs.push(async move {
-            let _permit = sem.acquire().await.expect("semaphore");
+            let Ok(_permit) = sem.acquire().await else {
+                return (
+                    idx,
+                    AuditRow {
+                        name: ch.name.clone(),
+                        group: ch.group.clone(),
+                        url: ch.url.clone(),
+                        verdict: AuditVerdict::Error,
+                        http_status: None,
+                        protocol: None,
+                        cdn: "—".into(),
+                        ttfb_ms: None,
+                        bitrate_profiles: Vec::new(),
+                        has_pdt: false,
+                        error: Some("audit worker interrupted".into()),
+                    },
+                );
+            };
             let row = audit_one(&client, &ch).await;
             (idx, row)
         });
