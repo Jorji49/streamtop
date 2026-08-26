@@ -10,13 +10,11 @@ Live HLS, DASH, and IPTV stream diagnostics in the terminal.
 
 ## Installation
 
-### Rust ecosystem (recommended)
+### Rust
 
 ```bash
 cargo install streamtop
 ```
-
-Fast binary install (no compile), after [`cargo-binstall`](https://github.com/cargo-bins/cargo-binstall):
 
 ```bash
 cargo install cargo-binstall
@@ -36,14 +34,6 @@ scoop install streamtop/streamtop
 winget install streamtop
 ```
 
-Catalog ID is `Jorji49.streamtop` (winget requires `Publisher.Package`); install resolves via the `streamtop` moniker. PR: [microsoft/winget-pkgs#424450](https://github.com/microsoft/winget-pkgs/pull/424445).
-
-Until the catalog indexes, from a clone (admin once: `winget settings --enable LocalManifestFiles`):
-
-```powershell
-winget install --manifest .\dist\winget
-```
-
 ### macOS / Linux — Homebrew
 
 ```bash
@@ -51,15 +41,11 @@ brew tap Jorji49/tap
 brew install streamtop
 ```
 
-One-shot without a tap:
-
 ```bash
 brew install --formula https://raw.githubusercontent.com/Jorji49/streamtop/main/Formula/streamtop.rb
 ```
 
-### Arch Linux (AUR template)
-
-[`dist/aur/PKGBUILD`](dist/aur/PKGBUILD) is ready for `streamtop-bin`. Publish it to the AUR, then:
+### Arch Linux (AUR)
 
 ```bash
 yay -S streamtop-bin
@@ -71,9 +57,7 @@ yay -S streamtop-bin
 docker run -it --rm ghcr.io/jorji49/streamtop:latest <URL>
 ```
 
-Requires the GHCR package to be **public** (GitHub → Packages → streamtop → Package settings → Change visibility).
-
-### Debian / Ubuntu (`.deb`)
+### Debian / Ubuntu
 
 ```bash
 cargo install cargo-deb
@@ -81,22 +65,15 @@ cargo deb
 sudo dpkg -i target/debian/streamtop_*.deb
 ```
 
-### Manual binary / build from source
+### From source / release binary
 
-```bash
-# Linux x86_64 example
-curl -fsSL -o streamtop.zip \
-  https://github.com/Jorji49/streamtop/releases/download/v0.3.1/streamtop-linux-x86_64-0.3.1.zip
-unzip streamtop.zip && chmod +x streamtop && sudo mv streamtop /usr/local/bin/
-```
+Release binaries: [latest release](https://github.com/Jorji49/streamtop/releases/latest)
 
 ```bash
 git clone https://github.com/Jorji49/streamtop.git
 cd streamtop
 cargo install --path .
 ```
-
-Windows: if the linker fails, put [WinLibs MinGW](https://winlibs.com/) on your `PATH`, then rebuild.
 
 ## Quick start
 

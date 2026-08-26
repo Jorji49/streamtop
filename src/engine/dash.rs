@@ -86,7 +86,10 @@ pub fn parse_dash_mpd(xml: &str, base: &Url) -> Result<DashSummary> {
     }
 
     let period_count = mpd.periods.len() as u32;
-    let active_period = mpd.periods.last().expect("non-empty periods");
+    let active_period = mpd
+        .periods
+        .last()
+        .ok_or_else(|| eyre!("DASH MPD has no Period"))?;
     let active_period_id = active_period.id.clone();
 
     let mut variants = Vec::new();

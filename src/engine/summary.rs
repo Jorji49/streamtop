@@ -12,7 +12,7 @@ use tokio::time::{timeout, Instant};
 use crate::engine::ManifestPoller;
 use crate::models::{
     CdnStats, DiagCategory, DiagSeverity, HealthReport, LatencyState, StreamEvent, StreamStatus,
-    StreamStatusKind,
+    StreamStatusKind, EVENT_CHANNEL_CAPACITY,
 };
 use crate::ui::app::SessionOpts;
 
@@ -46,7 +46,7 @@ pub async fn run_summary(
     timeout_secs: u64,
     format: SummaryFormat,
 ) -> Result<ExitCode> {
-    let (tx, mut rx) = mpsc::unbounded_channel();
+    let (tx, mut rx) = mpsc::channel(EVENT_CHANNEL_CAPACITY);
     let mut poller = ManifestPoller::new(
         url.clone(),
         session.headers.clone(),
@@ -57,7 +57,7 @@ pub async fn run_summary(
     )?;
     if let Some(hook_url) = session.webhook_url.clone() {
         if let Ok(alerts) = crate::engine::webhook::AlertKind::parse_list(&session.alert_on) {
-            let (hook_tx, hook_rx) = mpsc::unbounded_channel();
+            let (hook_tx, hook_rx) = mpsc::channel(EVENT_CHANNEL_CAPACITY);
             poller = poller.with_webhook_tx(hook_tx);
             crate::engine::webhook::spawn_webhook_listener(
                 crate::engine::webhook::WebhookConfig {

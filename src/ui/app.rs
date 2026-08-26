@@ -11,7 +11,7 @@ use crossterm::terminal::{
 use futures::StreamExt;
 use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
-use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
+use tokio::sync::mpsc::{self, Receiver, Sender};
 use tokio::task::JoinHandle;
 use tokio::time::{interval, MissedTickBehavior};
 
@@ -21,7 +21,8 @@ use crate::models::{
     format_dvr_window, AbrHealth, AbrVariant, AdBreakInfo, CdnStats, ChannelEntry, DiagCategory,
     DiagnosticFinding, DiagnosticSummary, HealthReport, LatencyState, LogEntry, LogLevel,
     PlaylistMeta, RingBuffer, SegmentMetrics, StreamEvent, StreamSnapshot, StreamStatus,
-    VirtualBuffer, DEEP_WIRE_PROBE_BYTES, DIAGNOSTIC_DIR, HISTORY_CAPACITY, LOG_CAPACITY,
+    VirtualBuffer, DEEP_WIRE_PROBE_BYTES, DIAGNOSTIC_DIR, EVENT_CHANNEL_CAPACITY, HISTORY_CAPACITY,
+    LOG_CAPACITY,
 };
 use crate::ui::channel_picker::{ChannelPicker, PickerAction};
 use crate::ui::layout;
@@ -75,8 +76,8 @@ pub struct App {
     pub toast: Option<(String, Instant)>,
     pub picker: Option<ChannelPicker>,
     pub session: SessionOpts,
-    rx: UnboundedReceiver<StreamEvent>,
-    tx: UnboundedSender<StreamEvent>,
+    rx: Receiver<StreamEvent>,
+    tx: Sender<StreamEvent>,
     poller: Option<JoinHandle<()>>,
 }
 
@@ -109,7 +110,7 @@ impl App {
         channels: Vec<ChannelEntry>,
         session: SessionOpts,
     ) -> Result<Self> {
-        let (tx, rx) = mpsc::unbounded_channel();
+        let (tx, rx) = mpsc::channel(EVENT_CHANNEL_CAPACITY);
         let picker = if channels.is_empty() {
             None
         } else {
@@ -180,7 +181,7 @@ impl App {
         if let Some(handle) = self.poller.take() {
             handle.abort();
         }
-        let (tx, rx) = mpsc::unbounded_channel();
+        let (tx, rx) = mpsc::channel(EVENT_CHANNEL_CAPACITY);
         self.tx = tx.clone();
         self.rx = rx;
         self.source_url = url.clone();
@@ -200,7 +201,7 @@ impl App {
             if let Ok(alerts) =
                 crate::engine::webhook::AlertKind::parse_list(&self.session.alert_on)
             {
-                let (hook_tx, hook_rx) = mpsc::unbounded_channel();
+                let (hook_tx, hook_rx) = mpsc::channel(EVENT_CHANNEL_CAPACITY);
                 poller = poller.with_webhook_tx(hook_tx);
                 crate::engine::webhook::spawn_webhook_listener(
                     crate::engine::webhook::WebhookConfig {
@@ -287,7 +288,9 @@ impl App {
                         {
                             self.handle_key(key)?;
                         }
-                        Some(Ok(Event::Resize(_, _))) => {}
+                        Some(Ok(Event::Resize(_, _))) => {
+                            terminal.draw(|frame| self.draw_ui(frame))?;
+                        }
                         Some(Err(err)) => {
                             self.push_log(LogLevel::Error, DiagCategory::Info, format!("Keyboard: {err}"));
                         }

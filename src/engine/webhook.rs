@@ -8,7 +8,7 @@ use chrono::Utc;
 use color_eyre::eyre::{eyre, Result};
 use reqwest::Client;
 use serde::Serialize;
-use tokio::sync::mpsc::UnboundedReceiver;
+use tokio::sync::mpsc::Receiver;
 
 use crate::models::{HealthReport, SegmentMetrics, StreamEvent};
 
@@ -80,7 +80,7 @@ struct WebhookPayload {
 /// Spawn a background task that posts matching events to the webhook URL.
 pub fn spawn_webhook_listener(
     cfg: WebhookConfig,
-    mut rx: UnboundedReceiver<StreamEvent>,
+    mut rx: Receiver<StreamEvent>,
     stream_url: String,
 ) {
     tokio::spawn(async move {
@@ -253,13 +253,13 @@ fn payload(
 
 /// Fan-out helper: send event to UI and optional webhook channel.
 pub fn fanout(
-    ui: &tokio::sync::mpsc::UnboundedSender<StreamEvent>,
-    hook: Option<&tokio::sync::mpsc::UnboundedSender<StreamEvent>>,
+    ui: &tokio::sync::mpsc::Sender<StreamEvent>,
+    hook: Option<&tokio::sync::mpsc::Sender<StreamEvent>>,
     event: StreamEvent,
 ) {
-    let _ = ui.send(event.clone());
+    let _ = ui.try_send(event.clone());
     if let Some(h) = hook {
-        let _ = h.send(event);
+        let _ = h.try_send(event);
     }
 }
 

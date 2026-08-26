@@ -8,7 +8,7 @@ use futures::StreamExt;
 use m3u8_rs::{AlternativeMediaType, Playlist, VariantStream};
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue, RANGE};
 use reqwest::Client;
-use tokio::sync::mpsc::UnboundedSender;
+use tokio::sync::mpsc::Sender;
 use tokio::time::sleep;
 use url::Url;
 
@@ -49,8 +49,8 @@ pub struct ManifestPoller {
     interval: Option<Duration>,
     probe_headers: bool,
     extra_headers: Vec<(String, String)>,
-    tx: UnboundedSender<StreamEvent>,
-    hook_tx: Option<UnboundedSender<StreamEvent>>,
+    tx: Sender<StreamEvent>,
+    hook_tx: Option<Sender<StreamEvent>>,
     metrics: Option<Arc<RwLock<MetricsSnapshot>>>,
 }
 
@@ -74,7 +74,7 @@ impl ManifestPoller {
         user_agent: Option<String>,
         interval_ms: Option<u64>,
         probe_headers: bool,
-        tx: UnboundedSender<StreamEvent>,
+        tx: Sender<StreamEvent>,
     ) -> Result<Self> {
         let source_url = Url::parse(&source_url).wrap_err("invalid stream URL")?;
         let extra_headers = parse_header_pairs(&headers);
@@ -98,7 +98,7 @@ impl ManifestPoller {
         self
     }
 
-    pub fn with_webhook_tx(mut self, hook_tx: UnboundedSender<StreamEvent>) -> Self {
+    pub fn with_webhook_tx(mut self, hook_tx: Sender<StreamEvent>) -> Self {
         self.hook_tx = Some(hook_tx);
         self
     }
@@ -109,9 +109,10 @@ impl ManifestPoller {
                 update_metrics(&mut snap, &event);
             }
         }
-        let _ = self.tx.send(event.clone());
+        // Bounded: drop when UI/webhook cannot keep up (prefer liveness over backlog).
+        let _ = self.tx.try_send(event.clone());
         if let Some(h) = &self.hook_tx {
-            let _ = h.send(event);
+            let _ = h.try_send(event);
         }
     }
 
@@ -1106,7 +1107,7 @@ impl ManifestPoller {
                         DiagCategory::Segment,
                         format!("Segment {seq} download failed: {err:#}"),
                     );
-                    *last_seen_seq = Some(seq);
+                    // Do not advance last_seen_seq — retry this seq on the next cycle.
                 }
             }
         }
@@ -1493,15 +1494,34 @@ impl ManifestPoller {
             .and_then(|n| n.parse::<u64>().ok())
             .unwrap_or(0);
 
-        let bytes = response.bytes().await.wrap_err("probe body read failed")?;
+        let mut stream = response.bytes_stream();
+        let max = DEEP_WIRE_PROBE_BYTES as usize + 1;
+        let mut buf = Vec::with_capacity(max.min(8 * 1024));
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.wrap_err("probe body read failed")?;
+            let remain = max.saturating_sub(buf.len());
+            if remain == 0 {
+                break;
+            }
+            buf.extend_from_slice(&chunk[..chunk.len().min(remain)]);
+            if buf.len() >= max {
+                break;
+            }
+        }
         let download_ms = started.elapsed().as_millis() as u64;
-        let transferred = bytes.len() as u64;
-        let size_bytes = if declared > 0 { declared } else { transferred };
-        let wire = deep_wire_probe(&bytes);
+        let transferred = buf.len() as u64;
+        let size_bytes = if declared > 0 {
+            declared
+        } else if code == 200 && transferred as usize >= max {
+            0
+        } else {
+            transferred
+        };
+        let wire = deep_wire_probe(&buf);
         let container = if wire.container != ContainerKind::Unknown {
             wire.container
         } else {
-            inspect_container(&bytes)
+            inspect_container(&buf)
         };
         Ok(SegmentFetch {
             size_bytes,

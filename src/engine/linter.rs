@@ -533,10 +533,14 @@ fn classify_cloudfront(x_cache: Option<&str>) -> CacheVerdict {
         return CacheVerdict::Unknown;
     };
     let u = s.to_ascii_uppercase();
-    if u.contains("HIT FROM CLOUDFRONT") || (u.contains("HIT") && u.contains("CLOUDFRONT")) {
+    // RefreshHit = conditional revalidation served from edge → treat as Hit.
+    if u.contains("HIT FROM CLOUDFRONT")
+        || u.contains("REFRESHHIT")
+        || u.contains("REFRESH_HIT")
+        || (u.contains("HIT") && u.contains("CLOUDFRONT"))
+    {
         CacheVerdict::Hit
     } else if u.contains("MISS FROM CLOUDFRONT")
-        || u.contains("REFRESHHIT")
         || (u.contains("MISS") && u.contains("CLOUDFRONT"))
     {
         CacheVerdict::Miss
@@ -558,11 +562,9 @@ fn classify_fastly(x_cache: Option<&str>, age: Option<u64>) -> CacheVerdict {
             return CacheVerdict::Miss;
         }
     }
-    if age.map(|a| a > 0).unwrap_or(false) {
-        CacheVerdict::Hit
-    } else {
-        CacheVerdict::Unknown
-    }
+    // Age alone is ambiguous without x-cache / x-served-by confirmation.
+    let _ = age;
+    CacheVerdict::Unknown
 }
 
 fn classify_cache(status: Option<&str>) -> CacheVerdict {
@@ -1050,4 +1052,55 @@ pub fn apply_abr_penalty(mut health: HealthReport, abr: &AbrHealth) -> HealthRep
         health.label = health_label(health.score);
     }
     health
+}
+
+#[cfg(test)]
+mod cdn_tests {
+    use super::*;
+    use reqwest::header::{HeaderMap, HeaderValue};
+
+    #[test]
+    fn cloudfront_refresh_hit_is_hit() {
+        assert_eq!(
+            classify_cloudfront(Some("RefreshHit from cloudfront")),
+            CacheVerdict::Hit
+        );
+    }
+
+    #[test]
+    fn fastly_age_alone_is_unknown() {
+        assert_eq!(classify_fastly(None, Some(120)), CacheVerdict::Unknown);
+    }
+
+    #[test]
+    fn fastly_x_cache_hit() {
+        assert_eq!(classify_fastly(Some("HIT"), Some(0)), CacheVerdict::Hit);
+    }
+
+    #[test]
+    fn parse_cdn_headers_cloudflare() {
+        let mut h = HeaderMap::new();
+        h.insert("cf-cache-status", HeaderValue::from_static("HIT"));
+        h.insert("cf-ray", HeaderValue::from_static("abc-AMS"));
+        h.insert("age", HeaderValue::from_static("42"));
+        let edge = parse_cdn_headers(&h);
+        assert_eq!(edge.provider.as_deref(), Some("Cloudflare"));
+        assert_eq!(edge.verdict, CacheVerdict::Hit);
+        assert_eq!(edge.age, Some(42));
+    }
+
+    #[test]
+    fn inspect_ts_and_fmp4_in_2k_window() {
+        let mut ts = vec![0u8; 2048];
+        for i in (0..2048).step_by(188) {
+            if i < ts.len() {
+                ts[i] = 0x47;
+            }
+        }
+        assert_eq!(inspect_container(&ts), ContainerKind::Ts);
+
+        let mut fmp4 = vec![0u8; 2048];
+        fmp4[4..8].copy_from_slice(b"moof");
+        assert_eq!(inspect_container(&fmp4), ContainerKind::Fmp4);
+    }
 }
