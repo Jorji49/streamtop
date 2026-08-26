@@ -96,13 +96,13 @@ streamtop "./channels.m3u"
 
 | Area | Meaning |
 |------|---------|
-| Status | URL, LIVE / ESTIMATED, health score (SHI), FPS, latency, CDN, buffer, LL-HLS timing |
-| Last segment | Sequence, sizes, DNS / TCP / TLS / TTFB, container type |
+| Status | URL, LIVE / ESTIMATED, health score (SHI), FPS, GOP/audio badges, latency, CDN, buffer, LL-HLS timing |
+| Last segment | Sequence, sizes, DNS / TCP / TLS / TTFB, container type, GOP interval, audio wire info |
 | ABR ladder | Bitrates, resolution, FPS, codecs. `[wire]` is from the bitstream; red marks manifest vs wire mismatch |
 | Charts | Latency or TTFB, download rate or transfer time |
 | Log | Warnings, ads (SCTE-35), stalls, HTTP errors |
 
-FPS comes from the playlist (`FRAME-RATE` / `@frameRate`) when present; otherwise from the bitstream when readable.
+FPS comes from the playlist (`FRAME-RATE` / `@frameRate`) when present; otherwise from the bitstream when readable. GOP interval is estimated from keyframe PTS across consecutive segments (Fixed vs Variable cadence). Audio codec, sample rate, and channels come from ADTS, fMP4, or MPEG-TS PMT when present in the probe window.
 
 ## Commands
 
@@ -134,6 +134,8 @@ streamtop <URL> --profile cdn
 # Prometheus on 127.0.0.1:9184/metrics
 streamtop <URL> --prometheus
 streamtop <URL> --prometheus 9184 --metrics-bind 0.0.0.0 --metrics-token "$STREAMTOP_METRICS_TOKEN"
+# Scrape with: curl -H "Authorization: Bearer $STREAMTOP_METRICS_TOKEN" http://host:9184/metrics
+# Query ?token= is not supported (Bearer header only).
 
 # Optional DRM license / LA_URL TTFB probe
 streamtop <URL> --probe-drm --summary

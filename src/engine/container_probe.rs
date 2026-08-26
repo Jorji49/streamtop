@@ -11,6 +11,8 @@ pub fn deep_wire_probe(bytes: &[u8]) -> WireProbeInfo {
         ContainerKind::Unknown => WireProbeInfo::default(),
     };
     info.container = kind;
+    let codec_hint = info.codec.clone();
+    info.keyframe_pts_sec = extract_keyframe_pts_sec(bytes, kind, codec_hint.as_deref());
     info
 }
 
@@ -94,6 +96,256 @@ fn probe_fmp4(bytes: &[u8]) -> WireProbeInfo {
     let codec_hint = info.codec.clone();
     apply_gop_scan(bytes, codec_hint.as_deref(), &mut info);
     info
+}
+
+/// First keyframe presentation time in seconds, from fMP4 tfdt/trun or MPEG-TS PES PTS.
+pub fn extract_keyframe_pts_sec(
+    bytes: &[u8],
+    container: ContainerKind,
+    codec: Option<&str>,
+) -> Option<f64> {
+    match container {
+        ContainerKind::Fmp4 => fmp4_keyframe_pts_sec(bytes),
+        ContainerKind::Ts => ts_keyframe_pts_sec(bytes, codec),
+        ContainerKind::Unknown => None,
+    }
+}
+
+fn fmp4_keyframe_pts_sec(bytes: &[u8]) -> Option<f64> {
+    let mut base: Option<u64> = None;
+    let mut timescale = 90000u32;
+    let mut default_duration = 0u32;
+    let mut default_flags = 0u32;
+    let mut trun: Option<Vec<u8>> = None;
+    walk_boxes(bytes, 0, bytes.len(), &mut |name, payload| {
+        match name {
+            b"tfdt" => base = parse_tfdt(payload),
+            b"tfhd" => {
+                let (dur, flags) = parse_tfhd(payload);
+                if dur > 0 {
+                    default_duration = dur;
+                }
+                default_flags = flags;
+            }
+            b"mdhd" if payload.len() >= 20 => {
+                timescale =
+                    u32::from_be_bytes([payload[16], payload[17], payload[18], payload[19]]);
+            }
+            b"trun" if trun.is_none() => trun = Some(payload.to_vec()),
+            _ => {}
+        }
+        true
+    });
+    let base = base?;
+    let trun = trun?;
+    let ticks = trun_first_sync_decode_ticks(&trun, base, default_duration, default_flags)?;
+    let scale = timescale.max(1);
+    Some(ticks as f64 / scale as f64)
+}
+
+fn parse_tfdt(payload: &[u8]) -> Option<u64> {
+    if payload.is_empty() {
+        return None;
+    }
+    if payload[0] == 1 {
+        if payload.len() < 12 {
+            return None;
+        }
+        Some(u64::from_be_bytes([
+            payload[4],
+            payload[5],
+            payload[6],
+            payload[7],
+            payload[8],
+            payload[9],
+            payload[10],
+            payload[11],
+        ]))
+    } else if payload.len() >= 8 {
+        Some(u32::from_be_bytes([payload[4], payload[5], payload[6], payload[7]]) as u64)
+    } else {
+        None
+    }
+}
+
+fn parse_tfhd(payload: &[u8]) -> (u32, u32) {
+    if payload.len() < 8 {
+        return (0, 0);
+    }
+    let flags = u32::from_be_bytes([0, payload[1], payload[2], payload[3]]);
+    let mut off = 8usize;
+    if flags & 0x000001 != 0 {
+        off += 8;
+    }
+    if flags & 0x000002 != 0 {
+        off += 4;
+    }
+    let mut default_duration = 0u32;
+    let mut default_flags = 0u32;
+    if flags & 0x000008 != 0 && off + 4 <= payload.len() {
+        default_duration = u32::from_be_bytes([
+            payload[off],
+            payload[off + 1],
+            payload[off + 2],
+            payload[off + 3],
+        ]);
+        off += 4;
+    } else if flags & 0x000008 != 0 {
+        off += 4;
+    }
+    if flags & 0x000010 != 0 && off + 4 <= payload.len() {
+        default_flags = u32::from_be_bytes([
+            payload[off],
+            payload[off + 1],
+            payload[off + 2],
+            payload[off + 3],
+        ]);
+    }
+    (default_duration, default_flags)
+}
+
+fn trun_first_sync_decode_ticks(
+    trun: &[u8],
+    base: u64,
+    default_duration: u32,
+    default_flags: u32,
+) -> Option<u64> {
+    if trun.len() < 8 {
+        return None;
+    }
+    let flags = u32::from_be_bytes([0, trun[1], trun[2], trun[3]]);
+    let sample_count = u32::from_be_bytes([trun[4], trun[5], trun[6], trun[7]]) as usize;
+    if sample_count == 0 {
+        return trun_first_sample_sync(trun).filter(|&s| s).map(|_| base);
+    }
+    let has_duration = flags & 0x000100 != 0;
+    let has_composition = flags & 0x000200 != 0;
+    let has_sample_flags = flags & 0x000400 != 0;
+    let mut off = 8usize;
+    if flags & 0x000001 != 0 {
+        off += 4;
+    }
+    let mut first_flags = default_flags;
+    if flags & 0x000004 != 0 {
+        if off + 4 > trun.len() {
+            return None;
+        }
+        first_flags = u32::from_be_bytes([trun[off], trun[off + 1], trun[off + 2], trun[off + 3]]);
+        off += 4;
+    }
+    let mut decode = base;
+    for i in 0..sample_count {
+        let mut duration = default_duration;
+        let mut sample_flags = first_flags;
+        if has_duration {
+            if off + 4 > trun.len() {
+                break;
+            }
+            duration = u32::from_be_bytes([trun[off], trun[off + 1], trun[off + 2], trun[off + 3]]);
+            off += 4;
+        }
+        if has_composition {
+            off = off.saturating_add(4);
+            if off > trun.len() {
+                break;
+            }
+        }
+        if has_sample_flags {
+            if off + 4 > trun.len() {
+                break;
+            }
+            sample_flags =
+                u32::from_be_bytes([trun[off], trun[off + 1], trun[off + 2], trun[off + 3]]);
+            off += 4;
+        }
+        let non_sync = (sample_flags >> 16) & 1 == 1;
+        if !non_sync {
+            return Some(decode);
+        }
+        decode = decode.saturating_add(u64::from(duration));
+        let _ = i;
+    }
+    trun_first_sample_sync(trun).filter(|&s| s).map(|_| base)
+}
+
+fn ts_keyframe_pts_sec(bytes: &[u8], codec: Option<&str>) -> Option<f64> {
+    let hevc = codec.is_some_and(|c| c.starts_with("hvc") || c.starts_with("hev"));
+    let packets: Vec<&[u8]> = bytes
+        .chunks(188)
+        .filter(|p| p.len() == 188 && p[0] == 0x47)
+        .collect();
+    let mut pes_buf = Vec::new();
+    let mut current_pts: Option<u64> = None;
+    for pkt in packets {
+        let Some(payload) = ts_payload(pkt) else {
+            continue;
+        };
+        if payload.len() >= 6
+            && payload[0] == 0
+            && payload[1] == 0
+            && payload[2] == 1
+            && (0xE0..=0xEF).contains(&payload[3])
+        {
+            if let Some(pts) = parse_pes_pts(payload) {
+                current_pts = Some(pts);
+            }
+            pes_buf.clear();
+            pes_buf.extend_from_slice(payload);
+        } else if !pes_buf.is_empty() {
+            pes_buf.extend_from_slice(payload);
+        }
+        if current_pts.is_some() && ts_payload_has_idr(&pes_buf, hevc) {
+            return current_pts.map(|pts| pts as f64 / 90_000.0);
+        }
+    }
+    None
+}
+
+fn parse_pes_pts(pes: &[u8]) -> Option<u64> {
+    if pes.len() < 14 || pes[0] != 0 || pes[1] != 0 || pes[2] != 1 {
+        return None;
+    }
+    if pes[7] & 0x80 == 0 {
+        return None;
+    }
+    let pts = &pes[9..14];
+    Some(parse_pts5(pts))
+}
+
+fn parse_pts5(b: &[u8]) -> u64 {
+    if b.len() < 5 {
+        return 0;
+    }
+    ((u64::from(b[0] >> 1) & 0x07) << 30)
+        | (u64::from(b[1]) << 22)
+        | ((u64::from(b[2] >> 1) & 0x7f) << 15)
+        | (u64::from(b[3]) << 7)
+        | (u64::from(b[4] >> 1) & 0x7f)
+}
+
+fn ts_payload_has_idr(pes: &[u8], hevc: bool) -> bool {
+    let start = if pes.len() > 9 {
+        9 + (pes[8] as usize)
+    } else {
+        9
+    };
+    if start >= pes.len() {
+        return false;
+    }
+    let video = &pes[start..];
+    for nal in split_annexb(video) {
+        if nal.is_empty() {
+            continue;
+        }
+        if hevc {
+            if is_h265_idr_nal(nal[0]) {
+                return true;
+            }
+        } else if is_h264_idr_nal(nal[0]) {
+            return true;
+        }
+    }
+    false
 }
 
 fn walk_boxes(
@@ -1086,6 +1338,21 @@ mod tests {
         apply_gop_scan(&data, Some("avc1"), &mut info);
         assert_eq!(info.sync_sample, Some(false));
         assert_eq!(info.keyframe_count, None);
+    }
+
+    #[test]
+    fn cross_segment_gop_interval_from_mock_pts() {
+        use crate::engine::gop_tracker::GopCadenceTracker;
+        let mut tracker = GopCadenceTracker::default();
+        let mut wire = WireProbeInfo::default();
+        for pts in [0.0, 2.0, 4.0, 6.0] {
+            wire.keyframe_pts_sec = Some(pts);
+            tracker.observe_keyframe(wire.keyframe_pts_sec);
+            tracker.apply(&mut wire);
+        }
+        assert_eq!(wire.gop_duration_sec, Some(2.0));
+        assert!(wire.is_fixed_cadence);
+        assert_eq!(wire.gop_label().as_deref(), Some("2.00s (Fixed)"));
     }
 
     #[test]

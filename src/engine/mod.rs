@@ -1,8 +1,10 @@
 pub mod audit;
+pub mod channel_stats;
 pub mod config;
 pub mod container_probe;
 pub mod dash;
 pub mod export;
+pub mod gop_tracker;
 pub mod grafana;
 pub mod linter;
 pub mod metrics;

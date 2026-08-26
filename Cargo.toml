@@ -1,6 +1,6 @@
 [package]
 name = "streamtop"
-version = "0.3.2"
+version = "0.3.3"
 edition = "2021"
 description = "HLS/DASH/IPTV stream diagnostics TUI and CLI"
 license = "MIT"
@@ -54,3 +54,4 @@ webpki-roots = "0.26"
 http = "1"
 toml = "0.8"
 directories = "5"
+subtle = "2"
