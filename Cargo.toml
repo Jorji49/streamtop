@@ -1,6 +1,6 @@
 [package]
 name = "streamtop"
-version = "0.3.1"
+version = "0.3.2"
 edition = "2021"
 description = "HLS/DASH/IPTV stream diagnostics TUI and CLI"
 license = "MIT"
@@ -22,11 +22,12 @@ assets = [
 ]
 
 [package.metadata.binstall]
-pkg-url = "{ repo }/releases/download/v{ version }/{ name }-{ target }.{ archive-format }"
+pkg-url = "{ repo }/releases/download/v{ version }/{ name }-{ target }.tar.gz"
 bin-dir = "{ bin }{ binary-ext }"
 pkg-fmt = "tgz"
 
 [package.metadata.binstall.overrides.x86_64-pc-windows-msvc]
+pkg-url = "{ repo }/releases/download/v{ version }/{ name }-{ target }.zip"
 pkg-fmt = "zip"
 
 [dependencies]
