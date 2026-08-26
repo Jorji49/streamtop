@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.2
+
+- Fix cargo-binstall: valid `pkg-fmt` (`tgz`/`zip`) and release URLs that match published assets (`.tar.gz` / `.zip`)
+- Sync `Cargo.lock` package version so Docker `--locked` builds succeed on GHCR publish
+
 ## 0.3.1
 
 - Fix Windows release zip (no longer packs Scoop/AUR/Winget manifests into the binary archive)
