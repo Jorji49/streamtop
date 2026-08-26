@@ -10,61 +10,71 @@ Live HLS, DASH, and IPTV stream diagnostics in the terminal.
 
 ## Installation
 
-### Rust ecosystem
+### Rust ecosystem (recommended)
 
 ```bash
 cargo install streamtop
-# or (downloads a GitHub Release binary)
+```
+
+Fast binary install (no compile), after [`cargo-binstall`](https://github.com/cargo-bins/cargo-binstall):
+
+```bash
+cargo install cargo-binstall
 cargo binstall streamtop
 ```
 
-### macOS / Linuxbrew
-
-```bash
-brew install Jorji49/tap/streamtop
-```
-
-Formula source for taps: [`Formula/streamtop.rb`](Formula/streamtop.rb).
-
-### Windows
-
-**Scoop**
+### Windows — Scoop
 
 ```powershell
-scoop bucket add extras   # if needed
-scoop install streamtop
+scoop bucket add streamtop https://github.com/Jorji49/streamtop
+scoop install streamtop/streamtop
 ```
 
-Manifest: [`dist/scoop/streamtop.json`](dist/scoop/streamtop.json).
+### Windows — Winget
 
-**Winget**
+Official catalog entry is submitted as `Jorji49.streamtop`. Until it is indexed:
+
+```powershell
+# From a clone of this repo (works today)
+winget install --manifest .\dist\winget
+```
+
+After Microsoft merges the package:
 
 ```powershell
 winget install Jorji49.streamtop
 ```
 
-Manifest template: [`dist/winget/streamtop.yaml`](dist/winget/streamtop.yaml).
+### macOS / Linux — Homebrew
 
-### Arch Linux (AUR)
+```bash
+brew tap Jorji49/tap
+brew install streamtop
+```
+
+One-shot without a tap:
+
+```bash
+brew install --formula https://raw.githubusercontent.com/Jorji49/streamtop/main/Formula/streamtop.rb
+```
+
+### Arch Linux (AUR template)
+
+[`dist/aur/PKGBUILD`](dist/aur/PKGBUILD) is ready for `streamtop-bin`. Publish it to the AUR, then:
 
 ```bash
 yay -S streamtop-bin
-# or: paru -S streamtop-bin
 ```
-
-PKGBUILD: [`dist/aur/PKGBUILD`](dist/aur/PKGBUILD).
 
 ### Docker
 
 ```bash
-docker run -it --rm ghcr.io/jorji49/streamtop <URL>
+docker run -it --rm ghcr.io/jorji49/streamtop:latest <URL>
 ```
 
-Images: `ghcr.io/jorji49/streamtop:latest` and `ghcr.io/jorji49/streamtop:v*`.
+Requires the GHCR package to be **public** (GitHub → Packages → streamtop → Package settings → Change visibility).
 
 ### Debian / Ubuntu (`.deb`)
-
-Build a package locally (requires [`cargo-deb`](https://crates.io/crates/cargo-deb)):
 
 ```bash
 cargo install cargo-deb
@@ -72,26 +82,19 @@ cargo deb
 sudo dpkg -i target/debian/streamtop_*.deb
 ```
 
-Or download a release zip for your platform from [GitHub Releases](https://github.com/Jorji49/streamtop/releases) and place the binary on your `PATH`.
-
 ### Manual binary / build from source
 
 ```bash
-# Binary from a release (example: Linux x86_64)
+# Linux x86_64 example
 curl -fsSL -o streamtop.zip \
-  https://github.com/Jorji49/streamtop/releases/download/v0.3.0/streamtop-linux-x86_64-0.3.0.zip
-unzip streamtop.zip
-chmod +x streamtop
-sudo mv streamtop /usr/local/bin/
+  https://github.com/Jorji49/streamtop/releases/download/v0.3.1/streamtop-linux-x86_64-0.3.1.zip
+unzip streamtop.zip && chmod +x streamtop && sudo mv streamtop /usr/local/bin/
 ```
 
 ```bash
-# From source
 git clone https://github.com/Jorji49/streamtop.git
 cd streamtop
 cargo install --path .
-# or
-cargo build --release
 ```
 
 Windows: if the linker fails, put [WinLibs MinGW](https://winlibs.com/) on your `PATH`, then rebuild.

@@ -77,11 +77,11 @@ jobs:
       - name: Package (Unix)
         if: runner.os != 'Windows'
         run: |
-          mkdir -p dist pkg
-          cp "target/${{ matrix.target }}/release/streamtop" dist/streamtop
-          cp README.md LICENSE CHANGELOG.md dist/
-          # Friendly zip (docs + binary)
-          (cd dist && zip -r "../${{ matrix.artifact }}.zip" streamtop README.md LICENSE CHANGELOG.md)
+          mkdir -p stage pkg
+          cp "target/${{ matrix.target }}/release/streamtop" stage/streamtop
+          cp README.md LICENSE CHANGELOG.md stage/
+          # Friendly zip (docs + binary only — never pack packaging manifests)
+          (cd stage && zip -r "../${{ matrix.artifact }}.zip" streamtop README.md LICENSE CHANGELOG.md)
           # cargo-binstall: streamtop-<triple>.tar.gz with binary at archive root
           cp "target/${{ matrix.target }}/release/streamtop" "pkg/streamtop"
           tar -C pkg -czf "streamtop-${{ matrix.target }}.tar.gz" streamtop
@@ -90,10 +90,10 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force -Path dist, pkg | Out-Null
-          Copy-Item "target/${{ matrix.target }}/release/streamtop.exe" dist/
-          Copy-Item README.md,LICENSE,CHANGELOG.md dist/
-          Compress-Archive -Path dist\* -DestinationPath "${{ matrix.artifact }}.zip" -Force
+          New-Item -ItemType Directory -Force -Path stage, pkg | Out-Null
+          Copy-Item "target/${{ matrix.target }}/release/streamtop.exe" stage/
+          Copy-Item README.md,LICENSE,CHANGELOG.md stage/
+          Compress-Archive -Path stage\* -DestinationPath "${{ matrix.artifact }}.zip" -Force
           # cargo-binstall zip override: streamtop-<triple>.zip
           Copy-Item "target/${{ matrix.target }}/release/streamtop.exe" pkg/
           Compress-Archive -Path pkg\streamtop.exe -DestinationPath "streamtop-${{ matrix.target }}.zip" -Force

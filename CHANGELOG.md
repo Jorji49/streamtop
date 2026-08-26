@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.1
+
+- Fix Windows release zip (no longer packs Scoop/AUR/Winget manifests into the binary archive)
+- Winget multi-file manifests (`InstallerType: zip` + portable nested exe)
+- Scoop bucket path (`bucket/streamtop.json`) for `scoop bucket add streamtop https://github.com/Jorji49/streamtop`
+- README install commands match what actually works today
+
 ## 0.3.0
 
 - Quick Play (`p`): launch `mpv` or `ffplay` with the active manifest URL and `-H`/`-A` headers
