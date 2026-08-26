@@ -13,7 +13,7 @@ use color_eyre::eyre::Result;
 use tokio::sync::mpsc;
 
 use crate::engine::ManifestPoller;
-use crate::models::{CdnStats, DiagCategory, LatencyState, StreamEvent, StreamStatusKind};
+use crate::models::{CdnStats, DiagCategory, LatencyState, StreamEvent, StreamStatusKind, EVENT_CHANNEL_CAPACITY};
 use crate::ui::app::SessionOpts;
 
 /// Shared metric state updated by the poller and scraped by `/metrics`.
@@ -228,7 +228,9 @@ pub async fn run_prometheus(url: String, session: SessionOpts, port: u16) -> Res
         ..Default::default()
     }));
 
-    let (tx, _rx) = mpsc::unbounded_channel();
+    let (tx, mut rx) = mpsc::channel(EVENT_CHANNEL_CAPACITY);
+    // Drain UI events so the bounded queue never backs up (metrics updated in poller).
+    tokio::spawn(async move { while rx.recv().await.is_some() {} });
     let mut poller = ManifestPoller::new(
         url.clone(),
         session.headers.clone(),
@@ -240,7 +242,7 @@ pub async fn run_prometheus(url: String, session: SessionOpts, port: u16) -> Res
     .with_metrics(Arc::clone(&metrics));
     if let Some(hook_url) = session.webhook_url.clone() {
         if let Ok(alerts) = crate::engine::webhook::AlertKind::parse_list(&session.alert_on) {
-            let (hook_tx, hook_rx) = mpsc::unbounded_channel();
+            let (hook_tx, hook_rx) = mpsc::channel(EVENT_CHANNEL_CAPACITY);
             poller = poller.with_webhook_tx(hook_tx);
             crate::engine::webhook::spawn_webhook_listener(
                 crate::engine::webhook::WebhookConfig {
