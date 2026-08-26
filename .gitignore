@@ -1,5 +1,13 @@
+# Ignore build outputs under dist/, keep packaging manifests tracked.
+/dist/**
+!/dist/scoop/
+!/dist/scoop/**
+!/dist/aur/
+!/dist/aur/**
+!/dist/winget/
+!/dist/winget/**
+
 /target/
-/dist/
 diagnostics/
 *.log
 audit_report.*

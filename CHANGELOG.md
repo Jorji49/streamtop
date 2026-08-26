@@ -7,6 +7,8 @@
 - Binary SCTE-35 log lines use readable command names (Time Signal, Splice Insert) and segmentation types
 - `streamtop --export-grafana` writes `streamtop-grafana.json` for Prometheus metrics (SHI, TTFB, FPS, CDN, buffer)
 - Prometheus: `streamtop_bitstream_fps` gauge
+- Packaging: cargo-deb / cargo-binstall metadata, Homebrew Formula, Scoop, AUR, Winget, Dockerfile, GHCR publish
+- Published on [crates.io](https://crates.io/crates/streamtop)
 
 ## 0.2.1
 
