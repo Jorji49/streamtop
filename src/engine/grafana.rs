@@ -94,7 +94,28 @@ pub fn grafana_dashboard_json() -> Value {
             "Ad break active",
             "streamtop_ad_active",
             "short",
-            [0.0, 40.0, 24.0, 6.0],
+            [0.0, 40.0, 12.0, 6.0],
+        ),
+        timeseries_panel(
+            12,
+            "DRM license TTFB (avg)",
+            "rate(streamtop_drm_license_ttfb_seconds_sum[1m])/clamp_min(rate(streamtop_drm_license_ttfb_seconds_count[1m]),1e-9)",
+            "s",
+            [12.0, 40.0, 12.0, 6.0],
+        ),
+        timeseries_panel(
+            13,
+            "LL-HLS part duration (avg)",
+            "rate(streamtop_llhls_part_duration_seconds_sum[1m])/clamp_min(rate(streamtop_llhls_part_duration_seconds_count[1m]),1e-9)",
+            "s",
+            [0.0, 46.0, 12.0, 6.0],
+        ),
+        timeseries_panel(
+            14,
+            "Codec mismatch total",
+            "streamtop_codec_mismatch_total",
+            "short",
+            [12.0, 46.0, 12.0, 6.0],
         ),
     ];
 
@@ -218,6 +239,9 @@ mod tests {
             "streamtop_cdn_cache_hits_total",
             "streamtop_cdn_cache_misses_total",
             "streamtop_virtual_buffer_seconds",
+            "streamtop_drm_license_ttfb_seconds",
+            "streamtop_llhls_part_duration_seconds",
+            "streamtop_codec_mismatch_total",
         ] {
             assert!(text.contains(needle), "missing {needle}");
         }

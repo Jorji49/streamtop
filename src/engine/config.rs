@@ -24,6 +24,7 @@ pub struct ProfileSection {
     pub user_agent: Option<String>,
     pub interval_ms: Option<u64>,
     pub probe_headers: Option<bool>,
+    pub probe_drm: Option<bool>,
     pub webhook: Option<String>,
     pub alert_on: Option<String>,
 }
@@ -93,6 +94,9 @@ fn apply_section(session: &mut SessionOpts, section: &ProfileSection) {
     if let Some(p) = section.probe_headers {
         session.probe_headers = p;
     }
+    if let Some(p) = section.probe_drm {
+        session.probe_drm = p;
+    }
     if section.webhook.is_some() {
         session.webhook_url = section.webhook.clone();
     }
@@ -115,6 +119,7 @@ mod tests {
             probe_drm: false,
             webhook_url: None,
             alert_on: "stall".into(),
+            allow_insecure_webhooks: false,
         };
         apply_section(
             &mut s,
@@ -123,6 +128,7 @@ mod tests {
                 user_agent: Some("new".into()),
                 interval_ms: None,
                 probe_headers: Some(true),
+                probe_drm: Some(true),
                 webhook: Some("https://hooks.example".into()),
                 alert_on: Some("http_5xx".into()),
             },
@@ -130,6 +136,7 @@ mod tests {
         assert_eq!(s.headers, vec!["B: 2".to_string()]);
         assert_eq!(s.user_agent.as_deref(), Some("new"));
         assert!(s.probe_headers);
+        assert!(s.probe_drm);
         assert_eq!(s.webhook_url.as_deref(), Some("https://hooks.example"));
         assert_eq!(s.alert_on, "http_5xx");
         assert_eq!(s.interval_ms, Some(1000));

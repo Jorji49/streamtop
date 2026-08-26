@@ -21,22 +21,22 @@ cargo install cargo-binstall
 cargo binstall streamtop
 ```
 
-### Windows — Scoop
+### Windows (Scoop)
 
 ```powershell
 scoop bucket add streamtop https://github.com/Jorji49/streamtop
 scoop install streamtop/streamtop
 ```
 
-### Windows — Winget
+### Windows (Winget)
 
-Status: **PR [#424450](https://github.com/microsoft/winget-pkgs/pull/424450) In Review** (not merged yet). After merge:
+Package submission is in review ([PR #424450](https://github.com/microsoft/winget-pkgs/pull/424450)). After merge:
 
 ```powershell
 winget install streamtop
 ```
 
-### macOS / Linux — Homebrew
+### macOS / Linux (Homebrew)
 
 ```bash
 brew tap Jorji49/tap
@@ -49,22 +49,15 @@ brew install --formula https://raw.githubusercontent.com/Jorji49/streamtop/main/
 
 ### Arch Linux (AUR)
 
-Status: **Template Ready** (`dist/aur/PKGBUILD` in-repo). Package is **not published** to the AUR yet — do not expect `yay -S streamtop-bin` to resolve until a maintainer uploads it.
-
-```bash
-# After AUR publish:
-yay -S streamtop-bin
-```
+A packaging template lives at `dist/aur/PKGBUILD`. The package is not published to the AUR yet.
 
 ### Docker
 
-Image ships the **CLI binary only** (no GUI, no `mpv` / `ffplay`). **Quick Play (`p`) will not work inside the container.**
+The image contains the CLI binary only (no `mpv` / `ffplay`). Quick Play is unavailable in the container.
 
 ```bash
 docker run -it --rm ghcr.io/jorji49/streamtop:latest <URL>
 ```
-
-Headless / metrics example (metrics bind defaults to `127.0.0.1:9184`):
 
 ```bash
 docker run --rm -p 9184:9184 ghcr.io/jorji49/streamtop:latest \
@@ -79,7 +72,7 @@ cargo deb
 sudo dpkg -i target/debian/streamtop_*.deb
 ```
 
-### From source / release binary
+### From source
 
 Release binaries: [latest release](https://github.com/Jorji49/streamtop/releases/latest)
 
@@ -97,19 +90,19 @@ streamtop "https://example.com/manifest.mpd" --probe-headers
 streamtop "./channels.m3u"
 ```
 
-`--probe-headers` downloads only the start of each segment (faster, enough for header and wire checks).
+`--probe-headers` downloads only the start of each segment (faster; enough for header and wire checks).
 
 ## What you see
 
 | Area | Meaning |
 |------|---------|
-| Status | URL, LIVE / ESTIMATED, health score (SHI), video FPS, latency, CDN, buffer, `[LL-HLS]` part timing |
+| Status | URL, LIVE / ESTIMATED, health score (SHI), FPS, latency, CDN, buffer, LL-HLS timing |
 | Last segment | Sequence, sizes, DNS / TCP / TLS / TTFB, container type |
-| ABR ladder | Bitrates, resolution, FPS, codecs — `[wire]` = from the bitstream, red = manifest vs wire mismatch |
+| ABR ladder | Bitrates, resolution, FPS, codecs. `[wire]` is from the bitstream; red marks manifest vs wire mismatch |
 | Charts | Latency or TTFB, download rate or transfer time |
-| Log | Warnings, ads (binary SCTE-35), stalls, HTTP errors |
+| Log | Warnings, ads (SCTE-35), stalls, HTTP errors |
 
-FPS comes from the playlist (`FRAME-RATE` / `@frameRate`) when present; otherwise from the media bitstream when it can be read.
+FPS comes from the playlist (`FRAME-RATE` / `@frameRate`) when present; otherwise from the bitstream when readable.
 
 ## Commands
 
@@ -117,33 +110,35 @@ FPS comes from the playlist (`FRAME-RATE` / `@frameRate`) when present; otherwis
 # Live dashboard
 streamtop <URL> [--probe-headers] [-H "Key: Value"] [-A user-agent] [-i MS]
 
-# Compare two feeds side by side
+# Compare two feeds
 streamtop --compare <URL_1> <URL_2> --probe-headers
 
-# Webhook alerts (Slack / Discord / any HTTP endpoint)
+# Webhook alerts (Slack / Discord / HTTP). Private and metadata hosts are blocked by default.
 streamtop <URL> --webhook https://hooks.example/x --alert-on stall,shi_below_70,http_5xx
+# Local webhook testing only:
+streamtop <URL> --webhook http://127.0.0.1:9999/hook --allow-insecure-webhooks
 
-# Channel list audit → audit_report.json / .csv
+# Channel list audit -> audit_report.json / .csv
 streamtop ./channels.m3u --audit
 
-# Headless pass/fail (CI) — JSON schema: schemas/summary.v1.json
+# Headless pass/fail (CI). JSON schema: schemas/summary.v1.json
 streamtop <URL> --summary --summary-format json --timeout 10
 
-# Ticket attach: curl / HAR after a short poll
+# Ticket attach: curl / HAR (secrets redacted)
 streamtop <URL> --export-curl --probe-headers
 streamtop <URL> --export-har incident.har --timeout 10
 
 # Named profile from ~/.config/streamtop/config.toml (see config.example.toml)
 streamtop <URL> --profile cdn
 
-# Prometheus metrics on 127.0.0.1:9184/metrics (optional --metrics-token)
+# Prometheus on 127.0.0.1:9184/metrics
 streamtop <URL> --prometheus
 streamtop <URL> --prometheus 9184 --metrics-bind 0.0.0.0 --metrics-token "$STREAMTOP_METRICS_TOKEN"
 
 # Optional DRM license / LA_URL TTFB probe
 streamtop <URL> --probe-drm --summary
 
-# Grafana dashboard JSON (import; scrape streamtop --prometheus)
+# Grafana dashboard JSON
 streamtop --export-grafana
 ```
 
@@ -153,16 +148,18 @@ Alert kinds for `--alert-on`: `stall`, `shi_below_70`, `http_5xx`, `mismatch`, `
 
 | Key | Action |
 |-----|--------|
-| `q` / `Esc` / `Ctrl+C` | Quit (Esc returns to channel list when one is open) |
-| `Space` | Save report under `diagnostics/` |
-| `c` | Copy a curl for the last segment |
-| `p` | Quick Play via `mpv` or `ffplay` (non-blocking; **not available in Docker**) |
+| `q` / `Esc` / `Ctrl+C` | Quit (Esc returns to channel list when open) |
+| `Space` | Save report under `diagnostics/` (URLs and secrets redacted) |
+| `c` | Copy a curl for the last segment (redacted) |
+| `p` | Quick Play via `mpv` or `ffplay` (not available in Docker) |
 | `r` | Reset metrics |
 | `Tab` | Channel overlay |
 | `?` | Help |
 | `/` | Search in channel list |
 | `j` / `k` | Scroll log or channel list |
 
+Compare mode: `Space` pause/resume (ring buffer), `d` detail, `l` log focus, `c` curl, `h` HAR, `Tab` focus pane.
+
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT. See [LICENSE](LICENSE).

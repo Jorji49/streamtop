@@ -2,17 +2,19 @@
 
 ## Unreleased
 
-- Profiles: `--profile` + `config.toml` (`config.example.toml`)
-- Export: `--export-curl`, `--export-har` (HAR 1.2)
-- Stable CI summary JSON (`streamtop.summary.v1`, `schemas/summary.v1.json`)
-- DRM key/license URI probe timing on `#EXT-X-KEY`
-- Docker multi-arch GHCR publish (amd64/arm64) on `main` + tags
-- Example workflow: `.github/workflows/streamtop-ci-example.yml`
+- Security: webhook SSRF blocking for private/link-local/metadata destinations; `--allow-insecure-webhooks` escape hatch
+- Redaction: diagnostic JSON, DRM probe logs, audit JSON/CSV
+- Compare: pause ring-buffer (256) with replay on resume
+- Prometheus Grafana panels: DRM license TTFB, LL-HLS part duration, codec mismatch
+- Profiles: `probe_drm` in `config.toml`
+- CI: live HLS smoke retries + soft-fail (does not gate main build)
+- Tests: local mock poller, compare pause buffer, audit redaction/mock
 
 ## 0.3.2
 
 - Fix cargo-binstall: valid `pkg-fmt` (`tgz`/`zip`) and release URLs that match published assets (`.tar.gz` / `.zip`)
 - Sync `Cargo.lock` package version so Docker `--locked` builds succeed on GHCR publish
+- Slack/Discord webhooks, redact module, CDN/DRM/SCTE depth, Prometheus histograms, compare parity
 
 ## 0.3.1
 

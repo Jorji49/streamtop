@@ -130,7 +130,7 @@ impl AbrVariant {
                     format!("{f:.2}")
                 }
             }
-            _ => "—".into(),
+            _ => "-".into(),
         };
         if self.from_wire && self.frame_rate.is_some() {
             format!("{base}[wire]")
@@ -140,7 +140,7 @@ impl AbrVariant {
     }
 
     pub fn resolution_label(&self) -> String {
-        let base = self.resolution.clone().unwrap_or_else(|| "—".into());
+        let base = self.resolution.clone().unwrap_or_else(|| "-".into());
         if self.from_wire && self.resolution.is_some() {
             format!("{base}[wire]")
         } else {
@@ -197,7 +197,7 @@ pub struct NetworkTiming {
 
 impl NetworkTiming {
     pub fn display_line(&self) -> String {
-        let fmt = |v: Option<u64>| v.map(|ms| format!("{ms}ms")).unwrap_or_else(|| "—".into());
+        let fmt = |v: Option<u64>| v.map(|ms| format!("{ms}ms")).unwrap_or_else(|| "-".into());
         format!(
             "DNS: {} | TCP: {} | TLS: {} | TTFB: {}ms",
             fmt(self.dns_ms),
@@ -281,7 +281,7 @@ impl SegmentMetrics {
         } else if let Some(kbps) = self.download_kbps {
             format!("{kbps} kbps")
         } else {
-            "—".into()
+            "-".into()
         }
     }
 }
@@ -346,7 +346,7 @@ impl LatencyState {
 
     pub fn display(&self) -> String {
         match self {
-            Self::Unknown => "—".into(),
+            Self::Unknown => "-".into(),
             Self::Estimated(ms) => format!("estimated ~{:.2}s", *ms as f64 / 1000.0),
             Self::Measured(ms) => format!("{:.3}s", *ms as f64 / 1000.0),
         }
@@ -687,7 +687,7 @@ impl LlHlsInfo {
         let latency = self
             .part_latency_ms()
             .map(|ms| format!("{ms}ms"))
-            .unwrap_or_else(|| "—".into());
+            .unwrap_or_else(|| "-".into());
         let seq = self
             .last_part_sequence
             .map(|s| format!("seq={s}"))
@@ -707,7 +707,7 @@ impl LlHlsInfo {
                 } else if self.has_preload_hint {
                     "hint".into()
                 } else {
-                    "—".into()
+                    "-".into()
                 }
             });
         Some(format!("[LL-HLS] part {latency} | {seq} | {rate}"))
@@ -861,7 +861,7 @@ pub fn format_dvr_window(segments: u32, window_secs: f64) -> String {
         if window_secs > 0.0 {
             format!("Window: ~{human} DVR")
         } else {
-            "Window: —".into()
+            "Window: -".into()
         }
     } else {
         format!("Window: {segments} seg (~{human} DVR)")

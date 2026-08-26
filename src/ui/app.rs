@@ -45,6 +45,8 @@ pub struct SessionOpts {
     pub probe_drm: bool,
     pub webhook_url: Option<String>,
     pub alert_on: String,
+    /// Bypass webhook SSRF checks (local tests only).
+    pub allow_insecure_webhooks: bool,
 }
 
 pub struct App {
@@ -209,6 +211,7 @@ impl App {
                     crate::engine::webhook::WebhookConfig {
                         url: hook_url,
                         alerts,
+                        allow_insecure: self.session.allow_insecure_webhooks,
                     },
                     hook_rx,
                     url,
@@ -435,7 +438,7 @@ impl App {
                     format!("clipboard unavailable ({err}); curl:\n{cmd}"),
                 );
                 self.toast = Some((
-                    "clipboard failed — see log".into(),
+                    "clipboard failed - see log".into(),
                     Instant::now() + Duration::from_secs(TOAST_SECS),
                 ));
             }
@@ -640,7 +643,7 @@ impl App {
 
         let title = match &channel {
             Some(name) => format!(
-                "{name} — diagnostic @ {}",
+                "{name} - diagnostic @ {}",
                 now.format("%Y-%m-%d %H:%M:%S UTC")
             ),
             None => format!(
@@ -649,15 +652,19 @@ impl App {
             ),
         };
 
-        let timeline: Vec<String> = self.log.iter().map(LogEntry::timeline_line).collect();
+        let timeline: Vec<String> = self
+            .log
+            .iter()
+            .map(|e| crate::engine::redact::redact_text(&e.timeline_line()))
+            .collect();
 
         let snapshot = StreamSnapshot {
             title,
             summary: DiagnosticSummary {
                 channel: channel.clone(),
                 captured_at: now,
-                source_url: self.source_url.clone(),
-                active_url: self.active_url.clone(),
+                source_url: crate::engine::redact::redact_url(&self.source_url),
+                active_url: crate::engine::redact::redact_url(&self.active_url),
                 status: status.into(),
                 health_score: health.score,
                 health_label: health.label.clone(),
@@ -695,6 +702,7 @@ impl App {
         }
         let json = serde_json::to_string_pretty(&snapshot)
             .wrap_err("failed to serialize diagnostic report")?;
+        let json = crate::engine::redact::redact_text(&json);
         std::fs::write(&path, json)
             .wrap_err_with(|| format!("failed to write {}", path.display()))?;
 

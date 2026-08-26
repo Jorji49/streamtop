@@ -84,7 +84,7 @@ impl SpecLinter {
                         DiagSeverity::Error,
                         "PLAYLIST_REFRESH",
                         format!(
-                            "Playlist not refreshed for {elapsed:?} (limit ≤ {target_duration}s) — RFC 8216 §6.2.1"
+                            "Playlist not refreshed for {elapsed:?} (limit ≤ {target_duration}s) - RFC 8216 §6.2.1"
                         ),
                     );
                 }
@@ -100,7 +100,7 @@ impl SpecLinter {
                     DiagSeverity::Error,
                     "MEDIA_SEQUENCE_REGRESS",
                     format!(
-                        "MEDIA-SEQUENCE moved backwards ({prev} → {media_sequence}) — packager gap"
+                        "MEDIA-SEQUENCE moved backwards ({prev} → {media_sequence}) - packager gap"
                     ),
                 );
             } else {
@@ -111,7 +111,7 @@ impl SpecLinter {
                         DiagSeverity::Warn,
                         "MEDIA_SEQUENCE_GAP",
                         format!(
-                            "MEDIA-SEQUENCE jumped by {gap} ({prev} → {media_sequence}) — possible packet loss"
+                            "MEDIA-SEQUENCE jumped by {gap} ({prev} → {media_sequence}) - possible packet loss"
                         ),
                     );
                 }

@@ -304,7 +304,7 @@ impl ManifestPoller {
                 format!(
                     "DASH multi-period MPD: {} periods | active={}",
                     summary.period_count,
-                    summary.active_period_id.as_deref().unwrap_or("—")
+                    summary.active_period_id.as_deref().unwrap_or("-")
                 ),
             );
         }
@@ -416,7 +416,7 @@ impl ManifestPoller {
                 format!(
                     "{} | scheme={}",
                     dash_drm.badge,
-                    dash_drm.key_format.as_deref().unwrap_or("—")
+                    dash_drm.key_format.as_deref().unwrap_or("-")
                 ),
             );
             if self.probe_drm {
@@ -694,7 +694,7 @@ impl ManifestPoller {
         let text = String::from_utf8_lossy(&body);
         if is_iptv_channel_list(&text) {
             return Err(eyre!(
-                "IPTV channel list detected — refused to parse as HLS MediaPlaylist. \
+                "IPTV channel list detected - refused to parse as HLS MediaPlaylist. \
                  Use Channel Picker or --audit on this URL."
             ));
         }
@@ -841,8 +841,8 @@ impl ManifestPoller {
                 format!(
                     "{} | method={} keyformat={}",
                     drm.badge,
-                    drm.method.as_deref().unwrap_or("—"),
-                    drm.key_format.as_deref().unwrap_or("—")
+                    drm.method.as_deref().unwrap_or("-"),
+                    drm.key_format.as_deref().unwrap_or("-")
                 ),
             );
             if self.probe_drm {
@@ -897,8 +897,8 @@ impl ManifestPoller {
                     LogLevel::Info,
                     DiagCategory::Drm,
                     format!(
-                        "License/key probe {} → HTTP {} in {}ms",
-                        key_url,
+                        "License/key probe {} -> HTTP {} in {}ms",
+                        crate::engine::redact::redact_url(&key_url),
                         drm.license_http_status.unwrap_or(0),
                         drm.license_ttfb_ms.unwrap_or(0)
                     ),
@@ -906,11 +906,15 @@ impl ManifestPoller {
             }
             Err(err) => {
                 drm.license_ttfb_ms = Some(started.elapsed().as_millis() as u64);
-                drm.license_error = Some(err.to_string());
+                drm.license_error = Some(crate::engine::redact::redact_text(&err.to_string()));
                 self.emit_log(
                     LogLevel::Warn,
                     DiagCategory::Drm,
-                    format!("License/key probe failed ({key_url}): {err}"),
+                    format!(
+                        "License/key probe failed ({}): {}",
+                        crate::engine::redact::redact_url(&key_url),
+                        crate::engine::redact::redact_text(&err.to_string())
+                    ),
                 );
             }
         }
@@ -1093,7 +1097,7 @@ impl ManifestPoller {
                     LogLevel::Info,
                     DiagCategory::Info,
                     format!(
-                        "No PDT — estimated latency ~{secs:.2}s (target×{HLS_LIVE_EDGE_SEGMENTS})"
+                        "No PDT - estimated latency ~{secs:.2}s (target×{HLS_LIVE_EDGE_SEGMENTS})"
                     ),
                 );
                 *announced_estimate = true;
@@ -1177,7 +1181,7 @@ impl ManifestPoller {
                         DiagCategory::Segment,
                         format!("Segment {seq} download failed: {err:#}"),
                     );
-                    // Do not advance last_seen_seq — retry this seq on the next cycle.
+                    // Do not advance last_seen_seq - retry this seq on the next cycle.
                 }
             }
         }
@@ -1381,7 +1385,7 @@ impl ManifestPoller {
             .wrap_err_with(|| format!("GET failed: {url}"))?;
         let status = response.status();
         if !status.is_success() {
-            return Err(eyre!("HTTP {status} — {url}"));
+            return Err(eyre!("HTTP {status} - {url}"));
         }
         let content_type = response
             .headers()
@@ -1408,7 +1412,7 @@ impl ManifestPoller {
             Ok(resp) => {
                 let code = resp.status;
                 if !((200..300).contains(&code)) {
-                    return Err(eyre!("segment HTTP {code} — {url}"));
+                    return Err(eyre!("segment HTTP {code} - {url}"));
                 }
                 let cdn = parse_cdn_headers_http(&resp.headers);
                 let total = resp.body.len() as u64;
@@ -1448,7 +1452,7 @@ impl ManifestPoller {
         let status = response.status();
         let code = status.as_u16();
         if !status.is_success() {
-            return Err(eyre!("segment HTTP {status} — {url}"));
+            return Err(eyre!("segment HTTP {status} - {url}"));
         }
         let cdn = parse_cdn_headers(response.headers());
         let ttfb_ms = started.elapsed().as_millis() as u64;
@@ -1502,7 +1506,7 @@ impl ManifestPoller {
             Ok(resp) => {
                 let code = resp.status;
                 if !(code == 200 || code == 206) {
-                    return Err(eyre!("probe HTTP {code} — {url}"));
+                    return Err(eyre!("probe HTTP {code} - {url}"));
                 }
                 let cdn = parse_cdn_headers_http(&resp.headers);
                 let declared = resp
@@ -1551,7 +1555,7 @@ impl ManifestPoller {
         let status = response.status();
         let code = status.as_u16();
         if !(status.is_success() || code == 206) {
-            return Err(eyre!("probe HTTP {status} — {url}"));
+            return Err(eyre!("probe HTTP {status} - {url}"));
         }
 
         let cdn = parse_cdn_headers(response.headers());
@@ -1629,7 +1633,7 @@ impl ManifestPoller {
         let status = response.status();
         let code = status.as_u16();
         if !(status.is_success() || code == 206) {
-            return Err(eyre!("LL-HLS hint HTTP {status} — {url}"));
+            return Err(eyre!("LL-HLS hint HTTP {status} - {url}"));
         }
         let body = response.bytes().await?;
         let elapsed_ms = started.elapsed().as_millis().max(1) as u64;
@@ -1797,4 +1801,80 @@ fn parse_cdn_headers_http(headers: &http::HeaderMap) -> CdnEdgeInfo {
         }
     }
     parse_cdn_headers(&map)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::routing::get;
+    use axum::Router;
+    use std::net::SocketAddr;
+    use tokio::sync::mpsc;
+    use tokio::time::{timeout, Duration as TokioDuration};
+
+    const MEDIA: &str = r#"#EXTM3U
+#EXT-X-VERSION:3
+#EXT-X-TARGETDURATION:4
+#EXT-X-MEDIA-SEQUENCE:10
+#EXTINF:4.0,
+seg.ts
+"#;
+
+    async fn spawn_mock_hls() -> (SocketAddr, tokio::task::JoinHandle<()>) {
+        let app = Router::new()
+            .route(
+                "/index.m3u8",
+                get(|| async {
+                    (
+                        [(
+                            axum::http::header::CONTENT_TYPE,
+                            "application/vnd.apple.mpegurl",
+                        )],
+                        MEDIA.to_string(),
+                    )
+                }),
+            )
+            .route(
+                "/seg.ts",
+                get(|| async {
+                    let mut body = vec![0x47u8; 188];
+                    body[0] = 0x47;
+                    body
+                }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let handle = tokio::spawn(async move {
+            axum::serve(listener, app).await.ok();
+        });
+        tokio::time::sleep(TokioDuration::from_millis(20)).await;
+        (addr, handle)
+    }
+
+    #[tokio::test]
+    async fn poller_emits_segment_from_local_mock() {
+        let (addr, handle) = spawn_mock_hls().await;
+        let url = format!("http://{addr}/index.m3u8");
+        let (tx, mut rx) = mpsc::channel(64);
+        let poller =
+            ManifestPoller::new(url, vec![], None, Some(200), true, false, tx).expect("poller");
+        let runner = tokio::spawn(async move { poller.run().await });
+
+        let mut saw_segment = false;
+        let deadline = TokioDuration::from_secs(3);
+        let start = std::time::Instant::now();
+        while start.elapsed() < deadline {
+            match timeout(TokioDuration::from_millis(400), rx.recv()).await {
+                Ok(Some(StreamEvent::Segment(_))) => {
+                    saw_segment = true;
+                    break;
+                }
+                Ok(Some(_)) => continue,
+                Ok(None) | Err(_) => continue,
+            }
+        }
+        runner.abort();
+        handle.abort();
+        assert!(saw_segment, "expected Segment event from local mock HLS");
+    }
 }
