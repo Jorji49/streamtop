@@ -5,13 +5,15 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::process::ExitCode;
 use std::sync::{Arc, RwLock};
 
-use axum::extract::Query;
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::IntoResponse;
 use axum::routing::get;
 use axum::Router;
 use color_eyre::eyre::Result;
+use subtle::ConstantTimeEq;
 use tokio::sync::mpsc;
+
+use crate::engine::channel_stats::channel_dropped_total;
 
 use crate::engine::redact::redact_url;
 use crate::engine::ManifestPoller;
@@ -298,6 +300,9 @@ streamtop_ll_hls_enabled{{{labels}}} {ll:.0}
 # HELP streamtop_codec_mismatch_total Manifest vs wire codec/resolution/FPS mismatches
 # TYPE streamtop_codec_mismatch_total counter
 streamtop_codec_mismatch_total{{{labels}}} {mismatch}
+# HELP streamtop_channel_dropped_total Events dropped from bounded poller channels
+# TYPE streamtop_channel_dropped_total counter
+streamtop_channel_dropped_total{{{labels}}} {drops}
 # HELP streamtop_http_errors_total HTTP 4xx/5xx responses
 # TYPE streamtop_http_errors_total counter
 "#,
@@ -311,6 +316,7 @@ streamtop_codec_mismatch_total{{{labels}}} {mismatch}
         stalls = snap.origin_stalls_total,
         ll = snap.ll_hls_enabled,
         mismatch = snap.codec_mismatch_total,
+        drops = channel_dropped_total(),
     );
 
     if snap.http_errors.is_empty() {
@@ -354,25 +360,30 @@ struct MetricsAuth {
     token: Option<String>,
 }
 
+/// Validate `Authorization: Bearer <token>` using constant-time comparison.
+pub fn authorize_metrics_bearer(headers: &HeaderMap, expected: &str) -> bool {
+    let Some(value) = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+    else {
+        return false;
+    };
+    let Some(token) = value.strip_prefix("Bearer ") else {
+        return false;
+    };
+    if token.len() != expected.len() {
+        return false;
+    }
+    token.as_bytes().ct_eq(expected.as_bytes()).into()
+}
+
 async fn metrics_handler(
     axum::extract::State(state): axum::extract::State<Arc<RwLock<MetricsSnapshot>>>,
     axum::Extension(auth): axum::Extension<MetricsAuth>,
     headers: HeaderMap,
-    Query(q): Query<HashMap<String, String>>,
 ) -> impl IntoResponse {
     if let Some(expected) = &auth.token {
-        let ok = headers
-            .get(header::AUTHORIZATION)
-            .and_then(|v| v.to_str().ok())
-            .map(|v| {
-                v.strip_prefix("Bearer ")
-                    .map(|t| t == expected)
-                    .unwrap_or(false)
-                    || v == expected
-            })
-            .unwrap_or(false)
-            || q.get("token").map(|t| t == expected).unwrap_or(false);
-        if !ok {
+        if !authorize_metrics_bearer(&headers, expected) {
             return (
                 StatusCode::UNAUTHORIZED,
                 [("content-type", "text/plain; charset=utf-8")],
@@ -493,6 +504,7 @@ mod tests {
         assert!(out.contains("streamtop_llhls_part_duration_seconds_bucket"));
         assert!(out.contains("streamtop_drm_license_ttfb_seconds_bucket"));
         assert!(out.contains("streamtop_codec_mismatch_total"));
+        assert!(out.contains("streamtop_channel_dropped_total"));
         assert!(out.contains("status=\"403\""));
         assert!(!out.contains("token=secret"));
         assert!(
@@ -500,5 +512,35 @@ mod tests {
                 || out.contains("token=%5BREDACTED%5D")
                 || out.contains("token=[REDACTED]")
         );
+    }
+
+    #[test]
+    fn bearer_auth_accepts_valid_token() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::AUTHORIZATION,
+            "Bearer secret-token".parse().unwrap(),
+        );
+        assert!(authorize_metrics_bearer(&headers, "secret-token"));
+    }
+
+    #[test]
+    fn bearer_auth_rejects_missing_header() {
+        let headers = HeaderMap::new();
+        assert!(!authorize_metrics_bearer(&headers, "secret-token"));
+    }
+
+    #[test]
+    fn bearer_auth_rejects_malformed_header() {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::AUTHORIZATION, "secret-token".parse().unwrap());
+        assert!(!authorize_metrics_bearer(&headers, "secret-token"));
+    }
+
+    #[test]
+    fn bearer_auth_rejects_wrong_token() {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::AUTHORIZATION, "Bearer other".parse().unwrap());
+        assert!(!authorize_metrics_bearer(&headers, "secret-token"));
     }
 }

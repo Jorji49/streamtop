@@ -174,6 +174,15 @@ pub struct WireProbeInfo {
     /// IDR / sync keyframes observed in the probed byte range.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub keyframe_count: Option<u32>,
+    /// Presentation time (seconds) of the first keyframe in this segment, when known.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub keyframe_pts_sec: Option<f64>,
+    /// Mean interval between consecutive keyframes across recent segments.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gop_duration_sec: Option<f64>,
+    /// True when GOP interval is stable across at least three keyframe samples.
+    #[serde(default)]
+    pub is_fixed_cadence: bool,
     #[serde(default)]
     pub container: ContainerKind,
 }
@@ -187,6 +196,14 @@ impl WireProbeInfo {
     }
 
     pub fn gop_label(&self) -> Option<String> {
+        if let Some(d) = self.gop_duration_sec.filter(|v| v.is_finite() && *v > 0.0) {
+            let cadence = if self.is_fixed_cadence {
+                "Fixed"
+            } else {
+                "Variable"
+            };
+            return Some(format!("{d:.2}s ({cadence})"));
+        }
         let sync = self.sync_sample?;
         let base = if sync {
             "Keyframe (sync/IDR)"
@@ -200,6 +217,9 @@ impl WireProbeInfo {
     }
 
     pub fn gop_badge(&self) -> Option<&'static str> {
+        if self.gop_duration_sec.is_some() {
+            return Some(if self.is_fixed_cadence { "GOP" } else { "GOP~" });
+        }
         self.sync_sample
             .map(|sync| if sync { "IDR" } else { "Delta" })
     }
@@ -870,6 +890,8 @@ pub struct DiagnosticSummary {
     pub dvr_window: String,
     pub buffer: String,
     pub ll_hls: bool,
+    #[serde(default)]
+    pub dropped_events: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

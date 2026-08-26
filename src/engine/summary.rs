@@ -9,6 +9,7 @@ use serde::Serialize;
 use tokio::sync::mpsc;
 use tokio::time::{timeout, Instant};
 
+use crate::engine::channel_stats::channel_dropped_total;
 use crate::engine::redact::redact_url;
 use crate::engine::ManifestPoller;
 use crate::models::{
@@ -46,6 +47,7 @@ pub struct SummaryJson {
     pub url: String,
     pub errors: u32,
     pub saw_segment: bool,
+    pub dropped_events: u64,
 }
 
 pub fn build_summary_json(
@@ -61,6 +63,7 @@ pub fn build_summary_json(
     critical_rfc_errors: u32,
     errors: u32,
     saw_segment: bool,
+    dropped_events: u64,
 ) -> SummaryJson {
     SummaryJson {
         schema: SUMMARY_SCHEMA,
@@ -79,6 +82,7 @@ pub fn build_summary_json(
         url: redact_url(&url),
         errors,
         saw_segment,
+        dropped_events,
     }
 }
 
@@ -212,6 +216,7 @@ pub async fn run_summary(
                 critical_rfc_errors,
                 errors,
                 saw_segment,
+                channel_dropped_total(),
             );
             println!("{}", serde_json::to_string(&payload)?);
         }
@@ -267,6 +272,7 @@ mod tests {
             0,
             0,
             true,
+            0,
         );
         let v = serde_json::to_value(&payload).unwrap();
         assert_eq!(v["schema"], SUMMARY_SCHEMA);
@@ -274,6 +280,7 @@ mod tests {
         assert_eq!(v["verdict"], "PASS");
         assert_eq!(v["ok"], true);
         assert_eq!(v["saw_segment"], true);
+        assert_eq!(v["dropped_events"], 0);
         assert!(v.get("health_score").is_some());
         assert!(!v["url"].as_str().unwrap().contains("secret"));
         assert!(v["url"].as_str().unwrap().contains("[REDACTED]"));

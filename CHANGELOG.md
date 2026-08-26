@@ -1,6 +1,14 @@
 # Changelog
 
-## Unreleased
+## 0.3.3
+
+- Cross-segment GOP interval: track keyframe PTS across consecutive segments; expose `gop_duration_sec` and `is_fixed_cadence` on wire probe / diagnostic JSON
+- Wire probe: GOP and audio codec info in TUI (IDR/Delta badges, Last Segment GOP/Audio lines)
+- Metrics auth: Bearer-only (`Authorization: Bearer`); query `?token=` removed; constant-time token compare
+- Telemetry: `streamtop_channel_dropped_total` Prometheus counter and `dropped_events` in summary / diagnostic JSON
+- Tests: GOP cadence, metrics Bearer auth, channel drop counter
+
+## 0.3.2
 
 - Security: webhook SSRF blocking for private/link-local/metadata destinations; `--allow-insecure-webhooks` escape hatch
 - Redaction: diagnostic JSON, DRM probe logs, audit JSON/CSV
@@ -9,9 +17,6 @@
 - Profiles: `probe_drm` in `config.toml`
 - CI: live HLS smoke retries + soft-fail (does not gate main build)
 - Tests: local mock poller, compare pause buffer, audit redaction/mock
-
-## 0.3.2
-
 - Fix cargo-binstall: valid `pkg-fmt` (`tgz`/`zip`) and release URLs that match published assets (`.tar.gz` / `.zip`)
 - Sync `Cargo.lock` package version so Docker `--locked` builds succeed on GHCR publish
 - Slack/Discord webhooks, redact module, CDN/DRM/SCTE depth, Prometheus histograms, compare parity
