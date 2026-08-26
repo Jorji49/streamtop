@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- Profiles: `--profile` + `config.toml` (`config.example.toml`)
+- Export: `--export-curl`, `--export-har` (HAR 1.2)
+- Stable CI summary JSON (`streamtop.summary.v1`, `schemas/summary.v1.json`)
+- DRM key/license URI probe timing on `#EXT-X-KEY`
+- Docker multi-arch GHCR publish (amd64/arm64) on `main` + tags
+- Example workflow: `.github/workflows/streamtop-ci-example.yml`
+
 ## 0.3.2
 
 - Fix cargo-binstall: valid `pkg-fmt` (`tgz`/`zip`) and release URLs that match published assets (`.tar.gz` / `.zip`)

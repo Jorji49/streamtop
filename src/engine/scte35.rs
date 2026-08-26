@@ -394,4 +394,31 @@ mod tests {
         let p = extract_payload_from_tag(line).unwrap();
         assert!(p.starts_with("/DAl"));
     }
+
+    #[test]
+    fn splice_insert_break_duration_90khz() {
+        // Minimal SpliceInsert with duration_flag and 5-byte break_duration = 900000 ticks = 10.0s
+        let mut data = vec![0u8; 32];
+        data[0] = 0xfc;
+        data[11] = 0;
+        data[12] = 12; // command length
+        data[13] = 0x05; // SpliceInsert
+        // event id
+        data[14..18].copy_from_slice(&1u32.to_be_bytes());
+        data[18] = 0; // cancel=0
+        data[19] = 0x20; // duration_flag, !program_splice
+        // break_duration: auto_return=0, duration = 900_000 @ 90kHz
+        let ticks: u64 = 900_000;
+        data[20] = ((ticks >> 32) & 0x01) as u8;
+        data[21] = ((ticks >> 24) & 0xff) as u8;
+        data[22] = ((ticks >> 16) & 0xff) as u8;
+        data[23] = ((ticks >> 8) & 0xff) as u8;
+        data[24] = (ticks & 0xff) as u8;
+        data[25] = 0; // desc loop len hi
+        data[26] = 0; // desc loop len lo
+        let parsed = parse_scte35_bytes(&data).expect("parse");
+        assert_eq!(parsed.splice_command_type, SpliceCommandType::SpliceInsert);
+        let dur = parsed.break_duration_secs.expect("break_duration");
+        assert!((dur - 10.0).abs() < 0.001, "dur={dur}");
+    }
 }
