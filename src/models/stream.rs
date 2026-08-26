@@ -163,12 +163,17 @@ pub struct WireProbeInfo {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub profile_level: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub audio_codec: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub audio_sample_rate: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub audio_channels: Option<u8>,
     /// First sample in moof/traf/trun is a sync / IDR frame.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sync_sample: Option<bool>,
+    /// IDR / sync keyframes observed in the probed byte range.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub keyframe_count: Option<u32>,
     #[serde(default)]
     pub container: ContainerKind,
 }
@@ -179,6 +184,68 @@ impl WireProbeInfo {
             (Some(w), Some(h)) => Some(format!("{w}x{h}")),
             _ => None,
         }
+    }
+
+    pub fn gop_label(&self) -> Option<String> {
+        let sync = self.sync_sample?;
+        let base = if sync {
+            "Keyframe (sync/IDR)"
+        } else {
+            "Delta (non-sync)"
+        };
+        Some(match self.keyframe_count {
+            Some(n) if n > 0 => format!("{base} · {n} IDR in probe"),
+            _ => base.into(),
+        })
+    }
+
+    pub fn gop_badge(&self) -> Option<&'static str> {
+        self.sync_sample
+            .map(|sync| if sync { "IDR" } else { "Delta" })
+    }
+
+    pub fn audio_label(&self) -> Option<String> {
+        if self.audio_codec.is_none()
+            && self.audio_sample_rate.is_none()
+            && self.audio_channels.is_none()
+        {
+            return None;
+        }
+        Some(format!(
+            "{} · {} · {}",
+            self.audio_codec.as_deref().unwrap_or("-"),
+            self.audio_sample_rate
+                .map(|r| format!("{r} Hz"))
+                .unwrap_or_else(|| "- Hz".into()),
+            self.audio_channels
+                .map(|c| format!("{c} ch"))
+                .unwrap_or_else(|| "- ch".into())
+        ))
+    }
+
+    pub fn audio_badge(&self) -> Option<String> {
+        if self.audio_codec.is_none()
+            && self.audio_sample_rate.is_none()
+            && self.audio_channels.is_none()
+        {
+            return None;
+        }
+        let codec = self.audio_codec.as_deref().unwrap_or("audio");
+        let sr = self
+            .audio_sample_rate
+            .map(|r| {
+                if r >= 1000 {
+                    format!("{}k", r / 1000)
+                } else {
+                    format!("{r}")
+                }
+            })
+            .unwrap_or_else(|| "-".into());
+        let ch = self
+            .audio_channels
+            .map(|c| c.to_string())
+            .unwrap_or_else(|| "-".into());
+        Some(format!("{codec}·{sr}·{ch}ch"))
     }
 }
 

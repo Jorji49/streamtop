@@ -67,6 +67,9 @@ fn probe_fmp4(bytes: &[u8]) -> WireProbeInfo {
                 }
             }
             b"mp4a" => {
+                if info.audio_codec.is_none() {
+                    info.audio_codec = Some("aac".into());
+                }
                 if info.audio_sample_rate.is_none() && payload.len() >= 28 {
                     let sr = u16::from_be_bytes([payload[24], payload[25]]);
                     let ch = payload.get(17).copied().unwrap_or(0);
@@ -78,6 +81,7 @@ fn probe_fmp4(bytes: &[u8]) -> WireProbeInfo {
                     }
                 }
             }
+            b"esds" => parse_esds(payload, &mut info),
             b"avcC" => parse_avcc(payload, &mut info),
             b"hvcC" => parse_hvcc(payload, &mut info),
             b"trun" if info.sync_sample.is_none() => {
@@ -87,6 +91,8 @@ fn probe_fmp4(bytes: &[u8]) -> WireProbeInfo {
         }
         true
     });
+    let codec_hint = info.codec.clone();
+    apply_gop_scan(bytes, codec_hint.as_deref(), &mut info);
     info
 }
 
@@ -306,6 +312,7 @@ fn probe_mpeg_ts(bytes: &[u8]) -> WireProbeInfo {
     let mut pmt_pid: Option<u16> = None;
     let mut video_pid: Option<u16> = None;
     let mut audio_pid: Option<u16> = None;
+    let mut audio_stream_type: Option<u8> = None;
     let mut video_stream_type: Option<u8> = None;
 
     for pkt in &packets {
@@ -320,10 +327,11 @@ fn probe_mpeg_ts(bytes: &[u8]) -> WireProbeInfo {
     if let Some(pmt) = pmt_pid {
         for pkt in &packets {
             if packet_pid(pkt) == pmt {
-                if let Some((vpid, st, apid)) = parse_pmt(pkt) {
+                if let Some((vpid, st, apid, ast)) = parse_pmt(pkt) {
                     video_pid = Some(vpid);
                     video_stream_type = Some(st);
                     audio_pid = apid;
+                    audio_stream_type = ast;
                     break;
                 }
             }
@@ -381,12 +389,20 @@ fn probe_mpeg_ts(bytes: &[u8]) -> WireProbeInfo {
         }
     }
 
+    if let Some(st) = audio_stream_type {
+        if info.audio_codec.is_none() {
+            info.audio_codec = ts_audio_codec(st).map(str::to_string);
+        }
+    }
+
     if !audio_payload.is_empty() {
         parse_adts_header(&audio_payload, &mut info);
     } else {
         parse_adts_header(&video_payload, &mut info);
     }
 
+    let codec_hint = info.codec.clone();
+    apply_gop_scan(&video_payload, codec_hint.as_deref(), &mut info);
     info
 }
 
@@ -430,7 +446,7 @@ fn parse_pat_pmt_pid(pkt: &[u8]) -> Option<u16> {
     None
 }
 
-fn parse_pmt(pkt: &[u8]) -> Option<(u16, u8, Option<u16>)> {
+fn parse_pmt(pkt: &[u8]) -> Option<(u16, u8, Option<u16>, Option<u8>)> {
     let payload = ts_payload(pkt)?;
     let pointer = payload.first().copied()? as usize;
     let section = payload.get(1 + pointer..)?;
@@ -443,6 +459,7 @@ fn parse_pmt(pkt: &[u8]) -> Option<(u16, u8, Option<u16>)> {
     let end = (3 + section_len).min(section.len()).saturating_sub(4);
     let mut video = None;
     let mut audio = None;
+    let mut audio_st = None;
     while off + 5 <= end {
         let stream_type = section[off];
         let es_pid = (((section[off + 1] as u16) & 0x1f) << 8) | section[off + 2] as u16;
@@ -451,15 +468,16 @@ fn parse_pmt(pkt: &[u8]) -> Option<(u16, u8, Option<u16>)> {
             0x1b | 0x24 | 0xea if video.is_none() => {
                 video = Some((es_pid, stream_type));
             }
-            0x0f | 0x03 | 0x04 | 0x11 if audio.is_none() => {
+            0x0f | 0x03 | 0x04 | 0x11 | 0x81 | 0x87 if audio.is_none() => {
                 audio = Some(es_pid);
+                audio_st = Some(stream_type);
             }
             _ => {}
         }
         off += 5 + es_info_len;
     }
     let (vpid, st) = video?;
-    Some((vpid, st, audio))
+    Some((vpid, st, audio, audio_st))
 }
 
 fn extract_h264_from_annexb(data: &[u8], info: &mut WireProbeInfo) {
@@ -522,6 +540,15 @@ fn parse_adts_header(data: &[u8], info: &mut WireProbeInfo) {
     }
     for i in 0..=data.len() - 7 {
         if data[i] == 0xff && data[i + 1] & 0xf0 == 0xf0 {
+            let profile = (data[i + 2] >> 6) & 0x03;
+            if info.audio_codec.is_none() {
+                info.audio_codec = Some(match profile {
+                    0 => "aac-lc".into(),
+                    1 => "aac-main".into(),
+                    2 => "aac-ssr".into(),
+                    _ => "aac".into(),
+                });
+            }
             let sr_idx = ((data[i + 2] & 0x3c) >> 2) as usize;
             let rates = [
                 96000, 88200, 64000, 48000, 44100, 32000, 24000, 22050, 16000, 12000, 11025, 8000,
@@ -536,6 +563,156 @@ fn parse_adts_header(data: &[u8], info: &mut WireProbeInfo) {
             }
             break;
         }
+    }
+}
+
+fn ts_audio_codec(stream_type: u8) -> Option<&'static str> {
+    match stream_type {
+        0x03 => Some("mp3"),
+        0x04 | 0x81 => Some("ac-3"),
+        0x0f => Some("aac-adts"),
+        0x11 | 0x87 => Some("aac-lc"),
+        _ => None,
+    }
+}
+
+fn parse_esds(payload: &[u8], info: &mut WireProbeInfo) {
+    if payload.len() < 5 {
+        return;
+    }
+    let data = &payload[4..];
+    if let Some(oti) = esds_object_type(data) {
+        info.audio_codec = Some(audio_object_type_name(oti));
+    } else if info.audio_codec.is_none() {
+        info.audio_codec = Some("aac".into());
+    }
+}
+
+fn esds_object_type(data: &[u8]) -> Option<u8> {
+    let mut off = 0usize;
+    while off + 2 <= data.len() {
+        let tag = data[off];
+        off += 1;
+        let (len, advance) = mp4_descriptor_len(data, off)?;
+        off += advance;
+        let end = off + len;
+        if end > data.len() {
+            return None;
+        }
+        if tag == 0x03 && len >= 1 {
+            return Some(data[off]);
+        }
+        off = end;
+    }
+    None
+}
+
+fn mp4_descriptor_len(data: &[u8], start: usize) -> Option<(usize, usize)> {
+    let mut len = 0usize;
+    let mut advance = 0usize;
+    for i in 0..4 {
+        let idx = start + i;
+        if idx >= data.len() {
+            return None;
+        }
+        let b = data[idx];
+        len = (len << 7) | usize::from(b & 0x7f);
+        advance += 1;
+        if b & 0x80 == 0 {
+            return Some((len, advance));
+        }
+    }
+    None
+}
+
+fn audio_object_type_name(oti: u8) -> String {
+    match oti {
+        0x40 | 0x66 | 0x67 => "aac-lc".into(),
+        0x6a..=0x6c => "aac".into(),
+        0x69 => "aac-he".into(),
+        0x6d | 0x6e => "mp3".into(),
+        0xdd => "ac-3".into(),
+        other => format!("0x{other:02x}"),
+    }
+}
+
+fn apply_gop_scan(data: &[u8], codec: Option<&str>, info: &mut WireProbeInfo) {
+    let hevc = codec.is_some_and(|c| c.starts_with("hvc") || c.starts_with("hev"));
+    let stats = scan_keyframes(data, hevc);
+    if stats.count > 0 {
+        info.keyframe_count = Some(stats.count);
+    }
+    if info.sync_sample.is_none() {
+        info.sync_sample = stats.first_is_keyframe;
+    }
+}
+
+struct KeyframeStats {
+    count: u32,
+    first_is_keyframe: Option<bool>,
+}
+
+fn scan_keyframes(data: &[u8], hevc: bool) -> KeyframeStats {
+    let annex_nals: Vec<&[u8]> = split_annexb(data);
+    if !annex_nals.is_empty() {
+        return scan_nal_list(&annex_nals, hevc);
+    }
+    let mut nals = Vec::new();
+    let mut off = 0usize;
+    while off + 4 <= data.len() {
+        let len =
+            u32::from_be_bytes([data[off], data[off + 1], data[off + 2], data[off + 3]]) as usize;
+        if len == 0 || off + 4 + len > data.len() {
+            break;
+        }
+        nals.push(&data[off + 4..off + 4 + len]);
+        off += 4 + len;
+    }
+    scan_nal_list(&nals, hevc)
+}
+
+fn scan_nal_list(nals: &[&[u8]], hevc: bool) -> KeyframeStats {
+    let mut count = 0u32;
+    let mut first_video: Option<bool> = None;
+    for nal in nals {
+        if nal.is_empty() {
+            continue;
+        }
+        let key = if hevc {
+            is_h265_idr_nal(nal[0])
+        } else {
+            is_h264_idr_nal(nal[0])
+        };
+        if key {
+            count += 1;
+            if first_video.is_none() {
+                first_video = Some(true);
+            }
+        } else if is_video_nal(nal[0], hevc) && first_video.is_none() {
+            first_video = Some(false);
+        }
+    }
+    KeyframeStats {
+        count,
+        first_is_keyframe: first_video,
+    }
+}
+
+fn is_h264_idr_nal(header: u8) -> bool {
+    (header & 0x1f) == 5
+}
+
+fn is_h265_idr_nal(header: u8) -> bool {
+    matches!((header >> 1) & 0x3f, 19 | 20)
+}
+
+fn is_video_nal(header: u8, hevc: bool) -> bool {
+    if hevc {
+        let t = (header >> 1) & 0x3f;
+        (0..32).contains(&t)
+    } else {
+        let t = header & 0x1f;
+        matches!(t, 1..=5)
     }
 }
 
@@ -889,5 +1066,41 @@ mod tests {
         let mut info = WireProbeInfo::default();
         parse_adts_header(&hdr, &mut info);
         assert_eq!(info.audio_sample_rate, Some(48000));
+        assert_eq!(info.audio_codec.as_deref(), Some("aac-main"));
+    }
+
+    #[test]
+    fn h264_idr_annexb_detected() {
+        let mut data = vec![0, 0, 0, 1, 0x65, 0x88, 0x84];
+        data.extend_from_slice(&[0, 0, 0, 1, 0x41, 0x9a]);
+        let mut info = WireProbeInfo::default();
+        apply_gop_scan(&data, Some("avc1"), &mut info);
+        assert_eq!(info.sync_sample, Some(true));
+        assert_eq!(info.keyframe_count, Some(1));
+    }
+
+    #[test]
+    fn h264_delta_annexb_detected() {
+        let data = vec![0, 0, 0, 1, 0x41, 0x9a, 0x24];
+        let mut info = WireProbeInfo::default();
+        apply_gop_scan(&data, Some("avc1"), &mut info);
+        assert_eq!(info.sync_sample, Some(false));
+        assert_eq!(info.keyframe_count, None);
+    }
+
+    #[test]
+    fn wire_probe_labels() {
+        let wire = WireProbeInfo {
+            sync_sample: Some(true),
+            keyframe_count: Some(2),
+            audio_codec: Some("aac-lc".into()),
+            audio_sample_rate: Some(48000),
+            audio_channels: Some(2),
+            ..Default::default()
+        };
+        assert!(wire.gop_label().unwrap().contains("Keyframe"));
+        assert!(wire.audio_label().unwrap().contains("aac-lc"));
+        assert_eq!(wire.gop_badge(), Some("IDR"));
+        assert!(wire.audio_badge().unwrap().contains("48k"));
     }
 }
