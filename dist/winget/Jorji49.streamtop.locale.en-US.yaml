@@ -1,8 +1,7 @@
-# Created using wingetcreate 1.6.0
-# yaml-language-server: $schema=https://aka.ms/winget-manifest.singleton.1.6.0.schema.json
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.defaultLocale.1.6.0.schema.json
 
 PackageIdentifier: Jorji49.streamtop
-PackageVersion: 0.3.0
+PackageVersion: 0.3.1
 PackageLocale: en-US
 Publisher: Ahmet Kayra Kama
 PublisherUrl: https://github.com/Jorji49
@@ -23,15 +22,6 @@ Tags:
   - diagnostics
   - tui
   - streaming
-ReleaseDate: 2026-08-26
-Installers:
-  - Architecture: x64
-    InstallerType: portable
-    InstallerUrl: https://github.com/Jorji49/streamtop/releases/download/v0.3.0/streamtop-windows-x86_64-0.3.0.zip
-    InstallerSha256: 6BB7C08202FEE17EEC3EBB286F98ACF4B454A4C3B6D81254992C6FB883E795DA
-    NestedInstallerFiles:
-      - RelativeFilePath: streamtop.exe
-        PortableCommandAlias: streamtop
-    UpgradeBehavior: install
-ManifestType: singleton
+ReleaseNotesUrl: https://github.com/Jorji49/streamtop/releases/tag/v0.3.1
+ManifestType: defaultLocale
 ManifestVersion: 1.6.0
