@@ -1,23 +1,23 @@
 {
-  "version": "0.3.2",
-  "description": "Terminal diagnostic engine for live HLS, DASH, and IPTV streams",
-  "homepage": "https://github.com/Jorji49/streamtop",
-  "license": "MIT",
-  "architecture": {
-    "64bit": {
-      "url": "https://github.com/Jorji49/streamtop/releases/download/v0.3.2/streamtop-windows-x86_64-0.3.2.zip",
-      "hash": "b1d7b1c24bf81927fb19ce85594c1dc6431b019077f7782941194114de273539"
-    }
-  },
-  "bin": "streamtop.exe",
-  "checkver": {
-    "github": "https://github.com/Jorji49/streamtop"
-  },
-  "autoupdate": {
-    "architecture": {
-      "64bit": {
-        "url": "https://github.com/Jorji49/streamtop/releases/download/v$version/streamtop-windows-x86_64-$version.zip"
-      }
-    }
-  }
+    "version":  "0.3.2",
+    "description":  "Terminal diagnostic engine for live HLS, DASH, and IPTV streams",
+    "homepage":  "https://github.com/Jorji49/streamtop",
+    "license":  "MIT",
+    "architecture":  {
+                         "64bit":  {
+                                       "url":  "https://github.com/Jorji49/streamtop/releases/download/v0.3.2/streamtop-windows-x86_64-0.3.2.zip",
+                                       "hash":  "2ca5c508ba57aaa9b4499ad0e16666853e27d03179ed5a90b7d668bfddf0bbb9"
+                                   }
+                     },
+    "bin":  "streamtop.exe",
+    "checkver":  {
+                     "github":  "https://github.com/Jorji49/streamtop"
+                 },
+    "autoupdate":  {
+                       "architecture":  {
+                                            "64bit":  {
+                                                          "url":  "https://github.com/Jorji49/streamtop/releases/download/v$version/streamtop-windows-x86_64-$version.zip"
+                                                      }
+                                        }
+                   }
 }
