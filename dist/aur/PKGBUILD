@@ -12,7 +12,7 @@ provides=('streamtop')
 conflicts=('streamtop')
 source=("${pkgname}-${pkgver}.tar.gz::https://github.com/Jorji49/streamtop/releases/download/v${pkgver}/streamtop-x86_64-unknown-linux-gnu.tar.gz"
         "LICENSE::https://raw.githubusercontent.com/Jorji49/streamtop/v${pkgver}/LICENSE")
-sha256sums=('e6b53e836838b7cdae5477da198622babcec7282de7abc842c9ae0a804f0c5a4'
+sha256sums=('fb872a81ccf87a7ee393403d8d8ba085f4e36129bd9aa5ddf68516578a0cef59'
             'SKIP')
 
 package() {
