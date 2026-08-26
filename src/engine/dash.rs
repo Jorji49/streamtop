@@ -289,6 +289,7 @@ pub fn classify_content_protection(scheme: &str) -> Option<DrmInfo> {
         method: Some(method.into()),
         key_format: Some(scheme.to_string()),
         badge: badge.into(),
+        ..Default::default()
     })
 }
 

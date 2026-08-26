@@ -921,12 +921,7 @@ pub fn inspect_container(bytes: &[u8]) -> ContainerKind {
 /// Parse `#EXT-X-KEY` for DRM / encryption badges (AES-128, Sample-AES, Widevine, FairPlay).
 pub fn scan_drm_keys(raw: &str) -> crate::models::DrmInfo {
     use crate::models::DrmInfo;
-    let mut info = DrmInfo {
-        present: false,
-        method: None,
-        key_format: None,
-        badge: String::new(),
-    };
+    let mut info = DrmInfo::default();
     for line in raw.lines() {
         let t = line.trim();
         if !t.starts_with("#EXT-X-KEY") {
@@ -940,8 +935,10 @@ pub fn scan_drm_keys(raw: &str) -> crate::models::DrmInfo {
                 .map(|s| s.trim().trim_matches('"').to_string())
         });
         let key_format = attr_quoted(t, "KEYFORMAT");
+        let key_uri = attr_quoted(t, "URI");
         info.method = method.clone();
         info.key_format = key_format.clone();
+        info.key_uri = key_uri;
 
         let upper_m = method.as_deref().unwrap_or("").to_ascii_uppercase();
         let upper_k = key_format.as_deref().unwrap_or("").to_ascii_lowercase();
@@ -964,6 +961,25 @@ pub fn scan_drm_keys(raw: &str) -> crate::models::DrmInfo {
     }
     info
 }
+
+#[cfg(test)]
+mod drm_tests {
+    use super::*;
+
+    #[test]
+    fn scan_key_uri() {
+        let raw = r#"#EXTM3U
+#EXT-X-KEY:METHOD=AES-128,URI="https://lic.example/key",IV=0x1
+#EXTINF:2,
+seg.ts
+"#;
+        let d = scan_drm_keys(raw);
+        assert!(d.present);
+        assert_eq!(d.key_uri.as_deref(), Some("https://lic.example/key"));
+        assert!(d.badge.contains("AES-128"));
+    }
+}
+
 
 /// Collect `#EXT-X-MEDIA` AUDIO / SUBTITLES renditions (language + name + format hints).
 pub fn scan_media_renditions(raw: &str) -> crate::models::MediaRenditions {

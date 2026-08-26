@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Jorji49/streamtop/schemas/summary.v1.json",
+  "title": "streamtop.summary.v1",
+  "type": "object",
+  "required": [
+    "schema",
+    "schema_version",
+    "verdict",
+    "ok",
+    "health_score",
+    "health_label",
+    "status",
+    "latency",
+    "cdn",
+    "origin_stalls",
+    "critical_rfc_errors",
+    "url",
+    "errors",
+    "saw_segment"
+  ],
+  "properties": {
+    "schema": { "const": "streamtop.summary.v1" },
+    "schema_version": { "const": 1 },
+    "verdict": { "enum": ["PASS", "FAIL"] },
+    "ok": { "type": "boolean" },
+    "health_score": { "type": "integer", "minimum": 0, "maximum": 100 },
+    "health_label": { "type": "string" },
+    "status": { "enum": ["LIVE", "DEGRADED", "ERROR"] },
+    "latency": { "type": "string" },
+    "cdn": { "type": "string" },
+    "ttfb_ms": { "type": ["integer", "null"], "minimum": 0 },
+    "last_http_status": { "type": ["integer", "null"] },
+    "origin_stalls": { "type": "integer", "minimum": 0 },
+    "critical_rfc_errors": { "type": "integer", "minimum": 0 },
+    "url": { "type": "string" },
+    "errors": { "type": "integer", "minimum": 0 },
+    "saw_segment": { "type": "boolean" }
+  },
+  "additionalProperties": false
+}

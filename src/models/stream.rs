@@ -621,6 +621,16 @@ pub struct DrmInfo {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub key_format: Option<String>,
     pub badge: String,
+    /// Absolute or relative URI from `#EXT-X-KEY:URI=…` (license / key server).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key_uri: Option<String>,
+    /// RTT / TTFB to the key/license URI when probed (ms).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub license_ttfb_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub license_http_status: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub license_error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
