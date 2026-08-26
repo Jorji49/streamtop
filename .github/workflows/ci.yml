@@ -77,26 +77,41 @@ jobs:
       - name: Package (Unix)
         if: runner.os != 'Windows'
         run: |
-          mkdir -p dist
-          cp "target/${{ matrix.target }}/release/streamtop" "dist/streamtop"
+          mkdir -p dist pkg
+          cp "target/${{ matrix.target }}/release/streamtop" dist/streamtop
           cp README.md LICENSE CHANGELOG.md dist/
-          cd dist
-          zip -r "../${{ matrix.artifact }}.zip" streamtop README.md LICENSE CHANGELOG.md
+          # Friendly zip (docs + binary)
+          (cd dist && zip -r "../${{ matrix.artifact }}.zip" streamtop README.md LICENSE CHANGELOG.md)
+          # cargo-binstall: streamtop-<triple>.tar.gz with binary at archive root
+          cp "target/${{ matrix.target }}/release/streamtop" "pkg/streamtop"
+          tar -C pkg -czf "streamtop-${{ matrix.target }}.tar.gz" streamtop
 
       - name: Package (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          New-Item -ItemType Directory -Force -Path dist, pkg | Out-Null
           Copy-Item "target/${{ matrix.target }}/release/streamtop.exe" dist/
           Copy-Item README.md,LICENSE,CHANGELOG.md dist/
           Compress-Archive -Path dist\* -DestinationPath "${{ matrix.artifact }}.zip" -Force
+          # cargo-binstall zip override: streamtop-<triple>.zip
+          Copy-Item "target/${{ matrix.target }}/release/streamtop.exe" pkg/
+          Compress-Archive -Path pkg\streamtop.exe -DestinationPath "streamtop-${{ matrix.target }}.zip" -Force
 
-      - name: Upload artifact
+      - name: Upload friendly zip
         uses: actions/upload-artifact@v5
         with:
           name: ${{ matrix.artifact }}
           path: ${{ matrix.artifact }}.zip
+          if-no-files-found: error
+
+      - name: Upload binstall archive
+        uses: actions/upload-artifact@v5
+        with:
+          name: binstall-${{ matrix.target }}
+          path: |
+            streamtop-${{ matrix.target }}.tar.gz
+            streamtop-${{ matrix.target }}.zip
           if-no-files-found: error
 
   release:
@@ -118,12 +133,22 @@ jobs:
         env:
           TAG: ${{ github.ref_name }}
         run: |
+          set -euo pipefail
           mkdir -p release
           ver="${TAG#v}"
-          for zip in artifacts/*/*.zip; do
+          find artifacts -type f \( \
+              -name 'streamtop-linux-*.zip' \
+              -o -name 'streamtop-macos-*.zip' \
+              -o -name 'streamtop-windows-*.zip' \
+            \) | while read -r zip; do
             base=$(basename "$zip" .zip)
             cp "$zip" "release/${base}-${ver}.zip"
           done
+          if [ -d artifacts ]; then
+            find artifacts -path 'artifacts/binstall-*/*' -type f \( \
+                -name 'streamtop-*.tar.gz' -o -name 'streamtop-*.zip' \
+              \) -exec cp -t release {} +
+          fi
           ls -la release/
 
       - name: Publish GitHub Release
@@ -132,6 +157,14 @@ jobs:
           draft: false
           prerelease: false
           generate_release_notes: true
-          files: release/*.zip
+          body: |
+            ## streamtop ${{ github.ref_name }}
+
+            Install: `cargo install streamtop` · `cargo binstall streamtop` · see README for Scoop / Winget / AUR / Docker / Homebrew.
+
+            ### Assets
+            - Friendly zips: `streamtop-*-<platform>-*.zip` (binary + README/LICENSE/CHANGELOG)
+            - cargo-binstall: `streamtop-<rust-target>.tar.gz` (Unix) / `.zip` (Windows)
+          files: release/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
