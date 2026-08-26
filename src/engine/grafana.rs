@@ -28,8 +28,8 @@ pub fn grafana_dashboard_json() -> Value {
         ),
         timeseries_panel(
             2,
-            "Segment TTFB",
-            "streamtop_segment_ttfb_seconds",
+            "Segment TTFB (avg)",
+            "rate(streamtop_segment_ttfb_seconds_sum[1m])/rate(streamtop_segment_ttfb_seconds_count[1m])",
             "s",
             [12.0, 0.0, 12.0, 8.0],
         ),

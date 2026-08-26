@@ -58,12 +58,22 @@ pub struct SpliceInfoSection {
     pub out_of_network_indicator: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub splice_event_id: Option<u32>,
+    /// PTS time in 90 kHz ticks (SCTE-35 splice_time).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pts_time: Option<u64>,
-    /// SpliceInsert break_duration (90 kHz ticks → seconds), when duration_flag is set.
+    /// `pts_time / 90_000` seconds when PTS is present.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pts_time_secs: Option<f64>,
+    /// SpliceInsert / SpliceSchedule break_duration (90 kHz ticks → seconds).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub break_duration_secs: Option<f64>,
+    /// Number of scheduled splice events (SpliceSchedule).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub splice_count: Option<u8>,
     pub descriptors: Vec<SegmentationDescriptor>,
+    /// Structured notes for unhandled / partial command parsing (metrics / logs).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub parse_notes: Vec<String>,
 }
 
 impl SpliceInfoSection {
@@ -99,7 +109,27 @@ impl SpliceInfoSection {
             .or_else(|| seg.map(|d| d.segmentation_event_id))
             .map(|id| format!("EventID: {id}"))
             .unwrap_or_else(|| "EventID: —".into());
-        format!("[SCTE-35 BINARY] {cmd} | {kind} | {dur} | {event}")
+        let pts = self
+            .pts_time_secs
+            .map(|s| format!("PTS: {s:.3}s"))
+            .unwrap_or_else(|| "PTS: —".into());
+        let sched = self
+            .splice_count
+            .map(|n| format!("ScheduleN: {n}"))
+            .unwrap_or_default();
+        let notes = if self.parse_notes.is_empty() {
+            String::new()
+        } else {
+            format!(" | {}", self.parse_notes.join("; "))
+        };
+        format!(
+            "[SCTE-35 BINARY] {cmd} | {kind} | {dur} | {event} | {pts}{sched}{notes}",
+            sched = if sched.is_empty() {
+                String::new()
+            } else {
+                format!(" | {sched}")
+            }
+        )
     }
 }
 
@@ -204,6 +234,8 @@ pub fn parse_scte35_bytes(data: &[u8]) -> Option<SpliceInfoSection> {
     let mut splice_event_id = None;
     let mut pts_time = None;
     let mut break_duration_secs = None;
+    let mut splice_count = None;
+    let mut parse_notes = Vec::new();
 
     match splice_command_type {
         SpliceCommandType::SpliceInsert => {
@@ -223,47 +255,102 @@ pub fn parse_scte35_bytes(data: &[u8]) -> Option<SpliceInfoSection> {
                     let _splice_immediate = data[off] & 0x10 != 0;
                     off += 1;
                     if program_splice && off < cmd_end {
-                        let time_specified = data[off] & 0x80 != 0;
-                        if time_specified && off + 5 <= cmd_end {
-                            pts_time = Some(
-                                (((data[off] as u64) & 0x01) << 32)
-                                    | ((data[off + 1] as u64) << 24)
-                                    | ((data[off + 2] as u64) << 16)
-                                    | ((data[off + 3] as u64) << 8)
-                                    | data[off + 4] as u64,
-                            );
-                            off += 5;
-                        } else {
-                            off += 1;
-                        }
+                        let (pts, consumed) = parse_splice_time(&data[off..cmd_end]);
+                        pts_time = pts;
+                        off += consumed;
                     }
                     if duration_flag && off + 5 <= cmd_end {
-                        // break_duration: auto_return (1) + reserved (6) + duration (33) @ 90 kHz
-                        let ticks = (((data[off] as u64) & 0x01) << 32)
-                            | ((data[off + 1] as u64) << 24)
-                            | ((data[off + 2] as u64) << 16)
-                            | ((data[off + 3] as u64) << 8)
-                            | data[off + 4] as u64;
+                        let ticks = read_break_duration_ticks(&data[off..]);
                         break_duration_secs = Some(ticks as f64 / 90_000.0);
                         off += 5;
                     }
-                    let _ = off; // command component cursor; descriptor loop uses header length
+                    let _ = off;
                 }
+            } else {
+                parse_notes.push("SpliceInsert truncated".into());
             }
         }
-        SpliceCommandType::TimeSignal if off < cmd_end => {
-            let time_specified = data[off] & 0x80 != 0;
-            if time_specified && off + 5 <= cmd_end {
-                pts_time = Some(
-                    (((data[off] as u64) & 0x01) << 32)
-                        | ((data[off + 1] as u64) << 24)
-                        | ((data[off + 2] as u64) << 16)
-                        | ((data[off + 3] as u64) << 8)
-                        | data[off + 4] as u64,
-                );
+        SpliceCommandType::TimeSignal => {
+            if off < cmd_end {
+                let (pts, consumed) = parse_splice_time(&data[off..cmd_end]);
+                pts_time = pts;
+                off += consumed;
+                if pts_time.is_none() {
+                    parse_notes.push("TimeSignal without time_specified_flag".into());
+                }
+            } else {
+                parse_notes.push("TimeSignal empty command body".into());
+            }
+            let _ = off;
+        }
+        SpliceCommandType::SpliceSchedule => {
+            if off < cmd_end {
+                let count = data[off];
+                splice_count = Some(count);
+                off += 1;
+                for i in 0..count {
+                    if off + 5 > cmd_end {
+                        parse_notes.push(format!("SpliceSchedule event {i} truncated"));
+                        break;
+                    }
+                    let eid = u32::from_be_bytes([
+                        data[off],
+                        data[off + 1],
+                        data[off + 2],
+                        data[off + 3],
+                    ]);
+                    if splice_event_id.is_none() {
+                        splice_event_id = Some(eid);
+                    }
+                    let cancel = data[off + 4] & 0x80 != 0;
+                    off += 5;
+                    if cancel {
+                        continue;
+                    }
+                    if off >= cmd_end {
+                        parse_notes.push(format!("SpliceSchedule event {i} missing flags"));
+                        break;
+                    }
+                    out_of_network = Some(data[off] & 0x80 != 0);
+                    let program_splice = data[off] & 0x40 != 0;
+                    let duration_flag = data[off] & 0x20 != 0;
+                    off += 1;
+                    if program_splice && off < cmd_end {
+                        let (pts, consumed) = parse_splice_time(&data[off..cmd_end]);
+                        if pts_time.is_none() {
+                            pts_time = pts;
+                        }
+                        off += consumed;
+                    }
+                    if duration_flag && off + 5 <= cmd_end {
+                        let ticks = read_break_duration_ticks(&data[off..]);
+                        if break_duration_secs.is_none() {
+                            break_duration_secs = Some(ticks as f64 / 90_000.0);
+                        }
+                        off += 5;
+                    }
+                    // unique_program_id (16) + avail_num (8) + avails_expected (8)
+                    if off + 4 <= cmd_end {
+                        off += 4;
+                    } else {
+                        parse_notes.push(format!("SpliceSchedule event {i} missing avail fields"));
+                        break;
+                    }
+                }
+            } else {
+                parse_notes.push("SpliceSchedule empty command body".into());
             }
         }
-        _ => {}
+        SpliceCommandType::SpliceNull => {}
+        SpliceCommandType::BandwidthReservation => {
+            parse_notes.push("BandwidthReservation command (no splice timing)".into());
+        }
+        SpliceCommandType::Private(v) => {
+            parse_notes.push(format!("Private splice command 0x{v:02X}"));
+        }
+        SpliceCommandType::Unknown(v) => {
+            parse_notes.push(format!("Unknown splice_command_type 0x{v:02X}"));
+        }
     }
 
     let desc_loop_start = 14 + splice_command_length;
@@ -277,18 +364,22 @@ pub fn parse_scte35_bytes(data: &[u8]) -> Option<SpliceInfoSection> {
             let tag = data[d_off];
             let len = data[d_off + 1] as usize;
             if d_off + 2 + len > d_end {
+                parse_notes.push(format!("descriptor tag=0x{tag:02X} truncated"));
                 break;
             }
             let body = &data[d_off + 2..d_off + 2 + len];
             if tag == 0x02 {
                 if let Some(seg) = parse_segmentation_descriptor(body) {
                     descriptors.push(seg);
+                } else {
+                    parse_notes.push("segmentation_descriptor parse failed".into());
                 }
             }
             d_off += 2 + len;
         }
     }
 
+    let pts_time_secs = pts_time.map(|t| t as f64 / 90_000.0);
     let _ = protocol_version;
     Some(SpliceInfoSection {
         table_id,
@@ -297,9 +388,41 @@ pub fn parse_scte35_bytes(data: &[u8]) -> Option<SpliceInfoSection> {
         out_of_network_indicator: out_of_network,
         splice_event_id,
         pts_time,
+        pts_time_secs,
         break_duration_secs,
+        splice_count,
         descriptors,
+        parse_notes,
     })
+}
+
+fn parse_splice_time(data: &[u8]) -> (Option<u64>, usize) {
+    if data.is_empty() {
+        return (None, 0);
+    }
+    let time_specified = data[0] & 0x80 != 0;
+    if time_specified {
+        if data.len() < 5 {
+            return (None, data.len());
+        }
+        let pts = (((data[0] as u64) & 0x01) << 32)
+            | ((data[1] as u64) << 24)
+            | ((data[2] as u64) << 16)
+            | ((data[3] as u64) << 8)
+            | data[4] as u64;
+        (Some(pts), 5)
+    } else {
+        (None, 1)
+    }
+}
+
+fn read_break_duration_ticks(data: &[u8]) -> u64 {
+    // auto_return (1) + reserved (6) + duration (33) @ 90 kHz
+    (((data[0] as u64) & 0x01) << 32)
+        | ((data[1] as u64) << 24)
+        | ((data[2] as u64) << 16)
+        | ((data[3] as u64) << 8)
+        | data[4] as u64
 }
 
 fn parse_segmentation_descriptor(body: &[u8]) -> Option<SegmentationDescriptor> {
@@ -380,6 +503,81 @@ mod tests {
         let parsed = parse_scte35_bytes(&data).expect("parse");
         assert_eq!(parsed.splice_command_type, SpliceCommandType::TimeSignal);
         assert!(parsed.summary_line().contains("Time Signal"));
+        assert!(!parsed.parse_notes.is_empty() || parsed.pts_time.is_none());
+    }
+
+    #[test]
+    fn timesignal_pts_90khz() {
+        let mut data = vec![0u8; 22];
+        data[0] = 0xfc;
+        data[11] = 0;
+        data[12] = 5; // command length
+        data[13] = 0x06;
+        // time_specified + pts = 180_000 ticks = 2.0s
+        let ticks: u64 = 180_000;
+        data[14] = 0x80 | ((ticks >> 32) & 0x01) as u8;
+        data[15] = ((ticks >> 24) & 0xff) as u8;
+        data[16] = ((ticks >> 16) & 0xff) as u8;
+        data[17] = ((ticks >> 8) & 0xff) as u8;
+        data[18] = (ticks & 0xff) as u8;
+        data[19] = 0;
+        data[20] = 0;
+        let parsed = parse_scte35_bytes(&data).expect("parse");
+        assert_eq!(parsed.pts_time, Some(180_000));
+        let secs = parsed.pts_time_secs.expect("pts secs");
+        assert!((secs - 2.0).abs() < 0.001, "secs={secs}");
+    }
+
+    #[test]
+    fn splice_schedule_parses_count_and_duration() {
+        // Minimal schedule: 1 event, duration only, no program splice
+        let mut data = vec![0u8; 40];
+        data[0] = 0xfc;
+        data[11] = 0;
+        data[12] = 15;
+        data[13] = 0x04; // SpliceSchedule
+        data[14] = 1; // splice_count
+        data[15..19].copy_from_slice(&7u32.to_be_bytes()); // event id
+        data[19] = 0; // cancel=0
+        data[20] = 0x20; // duration_flag, !program_splice, out_of_network=0
+        let ticks: u64 = 450_000; // 5.0s
+        data[21] = ((ticks >> 32) & 0x01) as u8;
+        data[22] = ((ticks >> 24) & 0xff) as u8;
+        data[23] = ((ticks >> 16) & 0xff) as u8;
+        data[24] = ((ticks >> 8) & 0xff) as u8;
+        data[25] = (ticks & 0xff) as u8;
+        // unique_program_id + avails
+        data[26] = 0;
+        data[27] = 1;
+        data[28] = 0;
+        data[29] = 0;
+        data[30] = 0;
+        data[31] = 0;
+        let parsed = parse_scte35_bytes(&data).expect("parse");
+        assert_eq!(
+            parsed.splice_command_type,
+            SpliceCommandType::SpliceSchedule
+        );
+        assert_eq!(parsed.splice_count, Some(1));
+        assert_eq!(parsed.splice_event_id, Some(7));
+        let dur = parsed.break_duration_secs.expect("dur");
+        assert!((dur - 5.0).abs() < 0.001, "dur={dur}");
+    }
+
+    #[test]
+    fn unknown_command_emits_parse_note() {
+        let mut data = vec![0u8; 18];
+        data[0] = 0xfc;
+        data[11] = 0;
+        data[12] = 0;
+        data[13] = 0x42;
+        data[14] = 0;
+        data[15] = 0;
+        let parsed = parse_scte35_bytes(&data).expect("parse");
+        assert!(parsed
+            .parse_notes
+            .iter()
+            .any(|n| n.contains("Unknown splice_command_type")));
     }
 
     #[test]
@@ -403,11 +601,11 @@ mod tests {
         data[11] = 0;
         data[12] = 12; // command length
         data[13] = 0x05; // SpliceInsert
-        // event id
+                         // event id
         data[14..18].copy_from_slice(&1u32.to_be_bytes());
         data[18] = 0; // cancel=0
         data[19] = 0x20; // duration_flag, !program_splice
-        // break_duration: auto_return=0, duration = 900_000 @ 90kHz
+                         // break_duration: auto_return=0, duration = 900_000 @ 90kHz
         let ticks: u64 = 900_000;
         data[20] = ((ticks >> 32) & 0x01) as u8;
         data[21] = ((ticks >> 24) & 0xff) as u8;

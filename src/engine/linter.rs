@@ -410,33 +410,54 @@ pub fn parse_cdn_headers(headers: &reqwest::header::HeaderMap) -> CdnEdgeInfo {
     let cf_ray = get("cf-ray");
     let served_by = get("x-served-by");
     let via = get("via");
+    let cache_control = get("cache-control");
+    let cdn_pullzone = get("cdn-pullzone");
+    let bunny = get("cdn-proxyver").or_else(|| get("bunnycdn-cache"));
+    let azure_ref = get("x-azure-ref").or_else(|| get("x-msedge-ref"));
+    let goog = get("x-goog-generation")
+        .or_else(|| get("x-guploader-uploadid"))
+        .or_else(|| get("x-goog-hash"));
 
-    let provider = detect_cdn_provider(
-        server.as_deref(),
-        cf_cache.as_deref(),
-        x_cache.as_deref(),
-        amz_pop.as_deref(),
-        served_by.as_deref(),
-        via.as_deref(),
-        x_check_cacheable.as_deref(),
-        cf_ray.as_deref(),
-    );
+    let provider = detect_cdn_provider(CdnDetectHints {
+        server: server.as_deref(),
+        cf_cache: cf_cache.as_deref(),
+        x_cache: x_cache.as_deref(),
+        amz_pop: amz_pop.as_deref(),
+        served_by: served_by.as_deref(),
+        via: via.as_deref(),
+        x_check_cacheable: x_check_cacheable.as_deref(),
+        cf_ray: cf_ray.as_deref(),
+        cdn_pullzone: cdn_pullzone.as_deref(),
+        bunny: bunny.as_deref(),
+        azure_ref: azure_ref.as_deref(),
+        goog: goog.as_deref(),
+        cache_control: cache_control.as_deref(),
+    });
 
     let cache_status = cf_cache
         .clone()
         .or_else(|| x_cache.clone())
-        .or(x_cache_status);
+        .or(x_cache_status)
+        .or_else(|| get("cdn-cache"));
 
     let verdict = match provider.as_deref() {
         Some("Akamai") => classify_akamai(x_cache.as_deref()),
         Some("Cloudflare") => classify_cloudflare(cf_cache.as_deref()),
         Some("CloudFront") => classify_cloudfront(x_cache.as_deref()),
-        Some("Fastly") => classify_fastly(x_cache.as_deref(), age),
-        _ => classify_cache(cache_status.as_deref()),
+        Some("Fastly") => classify_fastly(x_cache.as_deref(), age, cache_control.as_deref()),
+        Some("BunnyCDN") => classify_bunny(cache_status.as_deref(), age, cache_control.as_deref()),
+        Some("Azure CDN") => {
+            classify_generic_cdn(cache_status.as_deref(), age, cache_control.as_deref())
+        }
+        Some("Google Cloud CDN") => {
+            classify_generic_cdn(cache_status.as_deref(), age, cache_control.as_deref())
+        }
+        _ => classify_generic_cdn(cache_status.as_deref(), age, cache_control.as_deref()),
     };
 
-    let pop =
-        amz_pop.or_else(|| cf_ray.map(|r| r.split('-').next_back().unwrap_or(&r).to_string()));
+    let pop = amz_pop
+        .or_else(|| cf_ray.map(|r| r.split('-').next_back().unwrap_or(&r).to_string()))
+        .or(azure_ref);
     let served_by = served_by.or(server);
 
     CdnEdgeInfo {
@@ -450,26 +471,40 @@ pub fn parse_cdn_headers(headers: &reqwest::header::HeaderMap) -> CdnEdgeInfo {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn detect_cdn_provider(
-    server: Option<&str>,
-    cf_cache: Option<&str>,
-    x_cache: Option<&str>,
-    amz_pop: Option<&str>,
-    served_by: Option<&str>,
-    via: Option<&str>,
-    x_check_cacheable: Option<&str>,
-    cf_ray: Option<&str>,
-) -> Option<String> {
-    let server_u = server.map(|s| s.to_ascii_uppercase()).unwrap_or_default();
-    let x_cache_u = x_cache.map(|s| s.to_ascii_uppercase()).unwrap_or_default();
-    let via_u = via.map(|s| s.to_ascii_uppercase()).unwrap_or_default();
-    let served_u = served_by
+struct CdnDetectHints<'a> {
+    server: Option<&'a str>,
+    cf_cache: Option<&'a str>,
+    x_cache: Option<&'a str>,
+    amz_pop: Option<&'a str>,
+    served_by: Option<&'a str>,
+    via: Option<&'a str>,
+    x_check_cacheable: Option<&'a str>,
+    cf_ray: Option<&'a str>,
+    cdn_pullzone: Option<&'a str>,
+    bunny: Option<&'a str>,
+    azure_ref: Option<&'a str>,
+    goog: Option<&'a str>,
+    cache_control: Option<&'a str>,
+}
+
+fn detect_cdn_provider(h: CdnDetectHints<'_>) -> Option<String> {
+    let server_u = h.server.map(|s| s.to_ascii_uppercase()).unwrap_or_default();
+    let x_cache_u = h
+        .x_cache
+        .map(|s| s.to_ascii_uppercase())
+        .unwrap_or_default();
+    let via_u = h.via.map(|s| s.to_ascii_uppercase()).unwrap_or_default();
+    let served_u = h
+        .served_by
+        .map(|s| s.to_ascii_uppercase())
+        .unwrap_or_default();
+    let cc_u = h
+        .cache_control
         .map(|s| s.to_ascii_uppercase())
         .unwrap_or_default();
 
     if server_u.contains("AKAMAIGHOST")
-        || x_check_cacheable.is_some()
+        || h.x_check_cacheable.is_some()
         || x_cache_u.contains("TCP_HIT")
         || x_cache_u.contains("TCP_MISS")
         || x_cache_u.contains("TCP_MEM")
@@ -477,17 +512,41 @@ fn detect_cdn_provider(
     {
         return Some("Akamai".into());
     }
-    if cf_cache.is_some() || cf_ray.is_some() || server_u.contains("CLOUDFLARE") {
+    if h.cf_cache.is_some() || h.cf_ray.is_some() || server_u.contains("CLOUDFLARE") {
         return Some("Cloudflare".into());
     }
-    if amz_pop.is_some() || x_cache_u.contains("CLOUDFRONT") || server_u.contains("CLOUDFRONT") {
+    if h.amz_pop.is_some() || x_cache_u.contains("CLOUDFRONT") || server_u.contains("CLOUDFRONT") {
         return Some("CloudFront".into());
+    }
+    if h.cdn_pullzone.is_some()
+        || h.bunny.is_some()
+        || server_u.contains("BUNNYCDN")
+        || server_u.contains("BUNNY.NET")
+    {
+        return Some("BunnyCDN".into());
+    }
+    if h.azure_ref.is_some()
+        || server_u.contains("ECACC")
+        || server_u.contains("AZURE")
+        || via_u.contains("AZURE")
+    {
+        return Some("Azure CDN".into());
+    }
+    if h.goog.is_some()
+        || via_u.contains("GOOGLE")
+        || server_u.contains("UPLOADSERVER")
+        || (via_u.contains("GFE") && !cc_u.is_empty())
+    {
+        return Some("Google Cloud CDN".into());
     }
     if served_u.contains("CACHE-")
         || via_u.contains("VARNISH")
         || via_u.contains("FASTLY")
         || server_u.contains("VARNISH")
-        || (served_by.is_some() && x_cache.is_some() && amz_pop.is_none() && cf_cache.is_none())
+        || (h.served_by.is_some()
+            && h.x_cache.is_some()
+            && h.amz_pop.is_none()
+            && h.cf_cache.is_none())
     {
         return Some("Fastly".into());
     }
@@ -540,8 +599,7 @@ fn classify_cloudfront(x_cache: Option<&str>) -> CacheVerdict {
         || (u.contains("HIT") && u.contains("CLOUDFRONT"))
     {
         CacheVerdict::Hit
-    } else if u.contains("MISS FROM CLOUDFRONT")
-        || (u.contains("MISS") && u.contains("CLOUDFRONT"))
+    } else if u.contains("MISS FROM CLOUDFRONT") || (u.contains("MISS") && u.contains("CLOUDFRONT"))
     {
         CacheVerdict::Miss
     } else {
@@ -549,7 +607,11 @@ fn classify_cloudfront(x_cache: Option<&str>) -> CacheVerdict {
     }
 }
 
-fn classify_fastly(x_cache: Option<&str>, age: Option<u64>) -> CacheVerdict {
+fn classify_fastly(
+    x_cache: Option<&str>,
+    age: Option<u64>,
+    cache_control: Option<&str>,
+) -> CacheVerdict {
     if let Some(s) = x_cache {
         let u = s.to_ascii_uppercase();
         if u.split(',').any(|p| p.trim() == "HIT") && !u.contains("MISS") {
@@ -562,9 +624,62 @@ fn classify_fastly(x_cache: Option<&str>, age: Option<u64>) -> CacheVerdict {
             return CacheVerdict::Miss;
         }
     }
-    // Age alone is ambiguous without x-cache / x-served-by confirmation.
+    // Age alone is ambiguous; only reinforce Hit with Cache-Control + Age when CDN status missing.
+    corroborate_age_hit(age, cache_control, false)
+}
+
+fn classify_bunny(
+    status: Option<&str>,
+    age: Option<u64>,
+    cache_control: Option<&str>,
+) -> CacheVerdict {
+    if let Some(s) = status {
+        let u = s.to_ascii_uppercase();
+        if u.contains("HIT") && !u.contains("MISS") {
+            return CacheVerdict::Hit;
+        }
+        if u.contains("MISS") || u.contains("BYPASS") {
+            return CacheVerdict::Miss;
+        }
+    }
+    corroborate_age_hit(age, cache_control, true)
+}
+
+fn classify_generic_cdn(
+    status: Option<&str>,
+    age: Option<u64>,
+    cache_control: Option<&str>,
+) -> CacheVerdict {
+    let from_status = classify_cache(status);
+    if from_status != CacheVerdict::Unknown {
+        return from_status;
+    }
+    corroborate_age_hit(age, cache_control, true)
+}
+
+/// Age>0 is never enough alone; require Cache-Control freshness directives (and optionally CDN headers already gated by caller).
+fn corroborate_age_hit(
+    age: Option<u64>,
+    cache_control: Option<&str>,
+    require_cdn_hint: bool,
+) -> CacheVerdict {
+    let Some(age) = age.filter(|a| *a > 0) else {
+        return CacheVerdict::Unknown;
+    };
+    let Some(cc) = cache_control.map(|s| s.to_ascii_lowercase()) else {
+        return CacheVerdict::Unknown;
+    };
+    let fresh = cc.contains("max-age")
+        || cc.contains("s-maxage")
+        || cc.contains("public")
+        || cc.contains("immutable");
+    if !fresh {
+        return CacheVerdict::Unknown;
+    }
+    // require_cdn_hint kept for API clarity when caller already verified CDN identity.
+    let _ = require_cdn_hint;
     let _ = age;
-    CacheVerdict::Unknown
+    CacheVerdict::Hit
 }
 
 fn classify_cache(status: Option<&str>) -> CacheVerdict {
@@ -980,7 +1095,6 @@ seg.ts
     }
 }
 
-
 /// Collect `#EXT-X-MEDIA` AUDIO / SUBTITLES renditions (language + name + format hints).
 pub fn scan_media_renditions(raw: &str) -> crate::models::MediaRenditions {
     use crate::models::MediaRenditions;
@@ -1085,12 +1199,64 @@ mod cdn_tests {
 
     #[test]
     fn fastly_age_alone_is_unknown() {
-        assert_eq!(classify_fastly(None, Some(120)), CacheVerdict::Unknown);
+        assert_eq!(
+            classify_fastly(None, Some(120), None),
+            CacheVerdict::Unknown
+        );
+    }
+
+    #[test]
+    fn fastly_age_with_cache_control_is_hit() {
+        assert_eq!(
+            classify_fastly(None, Some(120), Some("public, max-age=3600")),
+            CacheVerdict::Hit
+        );
     }
 
     #[test]
     fn fastly_x_cache_hit() {
-        assert_eq!(classify_fastly(Some("HIT"), Some(0)), CacheVerdict::Hit);
+        assert_eq!(
+            classify_fastly(Some("HIT"), Some(0), None),
+            CacheVerdict::Hit
+        );
+    }
+
+    #[test]
+    fn detect_bunny_azure_google() {
+        let mut h = HeaderMap::new();
+        h.insert("server", HeaderValue::from_static("BunnyCDN"));
+        h.insert("cdn-pullzone", HeaderValue::from_static("123"));
+        h.insert("cdn-cache", HeaderValue::from_static("HIT"));
+        h.insert("age", HeaderValue::from_static("10"));
+        h.insert(
+            "cache-control",
+            HeaderValue::from_static("public, max-age=60"),
+        );
+        let edge = parse_cdn_headers(&h);
+        assert_eq!(edge.provider.as_deref(), Some("BunnyCDN"));
+        assert_eq!(edge.verdict, CacheVerdict::Hit);
+
+        let mut h3 = HeaderMap::new();
+        h3.insert("x-azure-ref", HeaderValue::from_static("0abcdef"));
+        h3.insert(
+            "cache-control",
+            HeaderValue::from_static("public, max-age=30"),
+        );
+        h3.insert("age", HeaderValue::from_static("5"));
+        let azure = parse_cdn_headers(&h3);
+        assert_eq!(azure.provider.as_deref(), Some("Azure CDN"));
+        assert_eq!(azure.verdict, CacheVerdict::Hit);
+
+        let mut h4 = HeaderMap::new();
+        h4.insert("via", HeaderValue::from_static("1.1 google"));
+        h4.insert(
+            "cache-control",
+            HeaderValue::from_static("public, max-age=10"),
+        );
+        h4.insert("age", HeaderValue::from_static("3"));
+        let g = parse_cdn_headers(&h4);
+        assert_eq!(g.provider.as_deref(), Some("Google Cloud CDN"));
+        assert_eq!(g.verdict, CacheVerdict::Hit);
     }
 
     #[test]

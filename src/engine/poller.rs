@@ -48,6 +48,7 @@ pub struct ManifestPoller {
     source_url: Url,
     interval: Option<Duration>,
     probe_headers: bool,
+    probe_drm: bool,
     extra_headers: Vec<(String, String)>,
     tx: Sender<StreamEvent>,
     hook_tx: Option<Sender<StreamEvent>>,
@@ -74,6 +75,7 @@ impl ManifestPoller {
         user_agent: Option<String>,
         interval_ms: Option<u64>,
         probe_headers: bool,
+        probe_drm: bool,
         tx: Sender<StreamEvent>,
     ) -> Result<Self> {
         let source_url = Url::parse(&source_url).wrap_err("invalid stream URL")?;
@@ -86,6 +88,7 @@ impl ManifestPoller {
             source_url,
             interval,
             probe_headers,
+            probe_drm,
             extra_headers,
             tx,
             hook_tx: None,
@@ -405,6 +408,23 @@ impl ManifestPoller {
             *probe_seq = probe_seq.saturating_add(1);
         }
 
+        let mut dash_drm = summary.drm.clone();
+        if dash_drm.present {
+            self.emit_log(
+                LogLevel::Warn,
+                DiagCategory::Drm,
+                format!(
+                    "{} | scheme={}",
+                    dash_drm.badge,
+                    dash_drm.key_format.as_deref().unwrap_or("—")
+                ),
+            );
+            if self.probe_drm {
+                self.probe_drm_license(&mut dash_drm, &self.source_url)
+                    .await;
+            }
+        }
+
         self.send_event(StreamEvent::PlaylistMeta(PlaylistMeta {
             media_sequence: *probe_seq,
             target_duration: target.max(1),
@@ -417,21 +437,9 @@ impl ManifestPoller {
                 .minimum_update_period_secs
                 .map(|s| (s * 1000.0).round() as u64),
             ll_hls: Default::default(),
-            drm: summary.drm.clone(),
+            drm: dash_drm,
             renditions: Default::default(),
         }));
-
-        if summary.drm.present {
-            self.emit_log(
-                LogLevel::Warn,
-                DiagCategory::Drm,
-                format!(
-                    "{} | scheme={}",
-                    summary.drm.badge,
-                    summary.drm.key_format.as_deref().unwrap_or("—")
-                ),
-            );
-        }
 
         let probe_url = summary
             .probe_url
@@ -837,7 +845,9 @@ impl ManifestPoller {
                     drm.key_format.as_deref().unwrap_or("—")
                 ),
             );
-            self.probe_drm_license(&mut drm, playlist_url).await;
+            if self.probe_drm {
+                self.probe_drm_license(&mut drm, playlist_url).await;
+            }
         }
         for a in &rends.audio {
             self.emit_log(
