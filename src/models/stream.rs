@@ -634,6 +634,15 @@ pub struct LlHlsInfo {
     pub part_target_secs: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_part_duration_secs: Option<f64>,
+    /// Last PART index within the current partial segment (1-based).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_part_sequence: Option<u32>,
+    /// Last PART duration in milliseconds.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_part_duration_ms: Option<u64>,
+    /// Part / PRELOAD-HINT Range-probe transfer rate (kbps).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_part_transfer_kbps: Option<f64>,
     pub part_count: u32,
     pub has_preload_hint: bool,
     pub can_block_reload: bool,
@@ -649,28 +658,48 @@ pub struct LlHlsInfo {
 }
 
 impl LlHlsInfo {
+    /// Part latency for the status bar (ms), preferring measured PART duration.
+    pub fn part_latency_ms(&self) -> Option<u64> {
+        if let Some(ms) = self.last_part_duration_ms {
+            return Some(ms);
+        }
+        self.last_part_duration_secs
+            .or(self.part_target_secs)
+            .map(|s| (s * 1000.0).round() as u64)
+    }
+
     /// LL-HLS status badge for the header.
     pub fn header_badge(&self) -> Option<String> {
         if !self.is_ll_hls {
             return None;
         }
-        let part_secs = self
-            .last_part_duration_secs
-            .or(self.part_target_secs)
-            .unwrap_or(0.0);
-        let part = if part_secs > 0.0 {
-            format!("{part_secs:.2}s")
-        } else {
-            "—".into()
-        };
-        let preload = if self.preload_hint_fetched {
-            "Active Fetch"
-        } else if self.has_preload_hint {
-            "Detected (Hint)"
-        } else {
-            "Off"
-        };
-        Some(format!("LL-HLS: Part {part} | Preload Hint: {preload}"))
+        let latency = self
+            .part_latency_ms()
+            .map(|ms| format!("{ms}ms"))
+            .unwrap_or_else(|| "—".into());
+        let seq = self
+            .last_part_sequence
+            .map(|s| format!("seq={s}"))
+            .unwrap_or_else(|| format!("parts={}", self.part_count));
+        let rate = self
+            .last_part_transfer_kbps
+            .map(|k| {
+                if k >= 1000.0 {
+                    format!("{:.2} Mbps", k / 1000.0)
+                } else {
+                    format!("{k:.0} kbps")
+                }
+            })
+            .unwrap_or_else(|| {
+                if self.preload_hint_fetched {
+                    "probed".into()
+                } else if self.has_preload_hint {
+                    "hint".into()
+                } else {
+                    "—".into()
+                }
+            });
+        Some(format!("[LL-HLS] part {latency} | {seq} | {rate}"))
     }
 
     /// LL-HLS poll sleep from part duration (clamped 200–330 ms).

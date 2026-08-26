@@ -23,6 +23,7 @@ pub struct MetricsSnapshot {
     pub health_score: u8,
     pub segment_ttfb_secs: f64,
     pub latency_secs: f64,
+    pub bitstream_fps: f64,
     pub cdn_hits: u64,
     pub cdn_misses: u64,
     pub cdn_provider: String,
@@ -40,6 +41,25 @@ pub fn update_metrics(snap: &mut MetricsSnapshot, event: &StreamEvent) {
             snap.segment_ttfb_secs = s.ttfb_ms as f64 / 1000.0;
             if let Some(ms) = s.latency_ms {
                 snap.latency_secs = ms as f64 / 1000.0;
+            }
+            if let Some(wire) = &s.wire {
+                if let Some(fps) = wire.frame_rate {
+                    if fps > 0.0 {
+                        snap.bitstream_fps = fps;
+                    }
+                }
+            }
+        }
+        StreamEvent::Variants(variants) => {
+            if let Some(fps) = variants
+                .iter()
+                .find(|v| v.selected)
+                .or_else(|| variants.first())
+                .and_then(|v| v.frame_rate)
+            {
+                if fps > 0.0 {
+                    snap.bitstream_fps = fps;
+                }
             }
         }
         StreamEvent::Latency(l) => match l {
@@ -137,6 +157,9 @@ streamtop_segment_ttfb_seconds{{url="{url}"}} {ttfb:.6}
 # HELP streamtop_latency_seconds Live-edge latency (PDT or estimated)
 # TYPE streamtop_latency_seconds gauge
 streamtop_latency_seconds{{url="{url}"}} {latency:.6}
+# HELP streamtop_bitstream_fps Declared or wire-probed video frame rate
+# TYPE streamtop_bitstream_fps gauge
+streamtop_bitstream_fps{{url="{url}"}} {fps:.3}
 # HELP streamtop_cdn_cache_hits_total CDN edge cache hits
 # TYPE streamtop_cdn_cache_hits_total counter
 streamtop_cdn_cache_hits_total{{url="{url}",cdn="{cdn}"}} {hits}
@@ -161,6 +184,7 @@ streamtop_ll_hls_enabled{{url="{url}"}} {ll:.0}
         health = snap.health_score,
         ttfb = snap.segment_ttfb_secs,
         latency = snap.latency_secs,
+        fps = snap.bitstream_fps,
         hits = snap.cdn_hits,
         misses = snap.cdn_misses,
         vbuf = snap.virtual_buffer_secs,
@@ -259,6 +283,7 @@ mod tests {
             health_score: 92,
             segment_ttfb_secs: 0.045,
             latency_secs: 12.0,
+            bitstream_fps: 25.0,
             cdn_hits: 10,
             cdn_misses: 2,
             cdn_provider: "Akamai".into(),
@@ -270,6 +295,7 @@ mod tests {
         };
         let out = render_openmetrics(&snap);
         assert!(out.contains("streamtop_stream_health_score"));
+        assert!(out.contains("streamtop_bitstream_fps"));
         assert!(out.contains("streamtop_latency_seconds"));
         assert!(out.contains("streamtop_origin_stalls_total"));
         assert!(out.contains("streamtop_http_errors_total"));
