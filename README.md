@@ -36,7 +36,7 @@ scoop install streamtop/streamtop
 winget install streamtop
 ```
 
-Catalog ID is `Jorji49.streamtop` (winget requires `Publisher.Package`); install resolves via the `streamtop` moniker. PR: [microsoft/winget-pkgs#424445](https://github.com/microsoft/winget-pkgs/pull/424445).
+Catalog ID is `Jorji49.streamtop` (winget requires `Publisher.Package`); install resolves via the `streamtop` moniker. PR: [microsoft/winget-pkgs#424450](https://github.com/microsoft/winget-pkgs/pull/424445).
 
 Until the catalog indexes, from a clone (admin once: `winget settings --enable LocalManifestFiles`):
 
