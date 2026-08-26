@@ -131,6 +131,75 @@ fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
         (Color::DarkGray, Color::Black)
     };
 
+    let wire = app.last_segment.as_ref().and_then(|s| s.wire.as_ref());
+    let mut status_row2 = vec![
+        Span::raw(" "),
+        Span::styled(
+            format!(" {badge_text} "),
+            Style::default()
+                .fg(badge_fg)
+                .bg(badge_bg)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(" "),
+        Span::styled(
+            format!(" SHI {:>3} {} ", app.health.score, app.health.label),
+            Style::default()
+                .fg(score_fg)
+                .bg(score_bg)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(" "),
+        Span::styled(
+            fps_label,
+            Style::default()
+                .fg(fps_fg)
+                .bg(fps_bg)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw("  Seq "),
+        Span::styled(
+            seq,
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw("  Target "),
+        Span::styled(
+            target,
+            Style::default()
+                .fg(Color::LightYellow)
+                .add_modifier(Modifier::BOLD),
+        ),
+    ];
+    if let Some(w) = wire {
+        if let Some(gop) = w.gop_badge() {
+            let (gop_fg, gop_bg) = if gop == "IDR" {
+                (Color::Black, Color::LightGreen)
+            } else {
+                (Color::Black, Color::Yellow)
+            };
+            status_row2.push(Span::raw(" "));
+            status_row2.push(Span::styled(
+                format!(" {gop} "),
+                Style::default()
+                    .fg(gop_fg)
+                    .bg(gop_bg)
+                    .add_modifier(Modifier::BOLD),
+            ));
+        }
+        if let Some(audio) = w.audio_badge() {
+            status_row2.push(Span::raw(" "));
+            status_row2.push(Span::styled(
+                format!(" {audio} "),
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(Color::LightMagenta)
+                    .add_modifier(Modifier::BOLD),
+            ));
+        }
+    }
+
     let mut lines = vec![
         Line::from(vec![
             Span::styled(
@@ -152,46 +221,7 @@ fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
             ),
             Span::styled(url, Style::default().fg(Color::White)),
         ]),
-        Line::from(vec![
-            Span::raw(" "),
-            Span::styled(
-                format!(" {badge_text} "),
-                Style::default()
-                    .fg(badge_fg)
-                    .bg(badge_bg)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::raw(" "),
-            Span::styled(
-                format!(" SHI {:>3} {} ", app.health.score, app.health.label),
-                Style::default()
-                    .fg(score_fg)
-                    .bg(score_bg)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::raw(" "),
-            Span::styled(
-                fps_label,
-                Style::default()
-                    .fg(fps_fg)
-                    .bg(fps_bg)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::raw("  Seq "),
-            Span::styled(
-                seq,
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::raw("  Target "),
-            Span::styled(
-                target,
-                Style::default()
-                    .fg(Color::LightYellow)
-                    .add_modifier(Modifier::BOLD),
-            ),
-        ]),
+        Line::from(status_row2),
         Line::from(vec![
             Span::raw(" Latency "),
             Span::styled(
@@ -337,6 +367,17 @@ fn draw_segment_panel(frame: &mut Frame, app: &App, area: Rect) {
                         .unwrap_or_else(|| "-".into()),
                     wire.codec.as_deref().unwrap_or("-")
                 )));
+            } else if wire.codec.is_some() {
+                lines.push(Line::from(format!(
+                    " Wire           : {}",
+                    wire.codec.as_deref().unwrap_or("-")
+                )));
+            }
+            if let Some(gop) = wire.gop_label() {
+                lines.push(Line::from(format!(" GOP            : {gop}")));
+            }
+            if let Some(audio) = wire.audio_label() {
+                lines.push(Line::from(format!(" Audio          : {audio}")));
             }
         }
         lines
