@@ -136,11 +136,14 @@ fn redact_inline_header(text: &str, name: &str) -> String {
         result.push_str(REDACTED);
         let after = idx + needle.len();
         let tail = &rest[after..];
-        let end = tail
-            .find(['\n', '\r', '"', '\'', ' ', ','])
-            .unwrap_or(tail.len());
-        rest = &tail[end..];
-        rest_lower = &rest_lower[after + end..];
+        let trimmed = tail.trim_start();
+        let skipped = tail.len() - trimmed.len();
+        // Consume the full header value (spaces allowed) until a structural delimiter.
+        let end = trimmed
+            .find(['\n', '\r', '"', '\'', ',', '}'])
+            .unwrap_or(trimmed.len());
+        rest = &trimmed[end..];
+        rest_lower = &rest_lower[after + skipped + end..];
     }
     result.push_str(rest);
     result

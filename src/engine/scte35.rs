@@ -89,7 +89,7 @@ impl SpliceInfoSection {
             match self.out_of_network_indicator {
                 Some(true) => "Out of Network".to_string(),
                 Some(false) => "Return to Network".to_string(),
-                None => "—".to_string(),
+                None => "-".to_string(),
             }
         } else {
             seg_names.join(", ")
@@ -103,16 +103,16 @@ impl SpliceInfoSection {
                     .and_then(|d| d.segmentation_duration_secs)
             })
             .map(|s| format!("Duration: {s:.1}s"))
-            .unwrap_or_else(|| "Duration: —".into());
+            .unwrap_or_else(|| "Duration: -".into());
         let event = self
             .splice_event_id
             .or_else(|| seg.map(|d| d.segmentation_event_id))
             .map(|id| format!("EventID: {id}"))
-            .unwrap_or_else(|| "EventID: —".into());
+            .unwrap_or_else(|| "EventID: -".into());
         let pts = self
             .pts_time_secs
             .map(|s| format!("PTS: {s:.3}s"))
-            .unwrap_or_else(|| "PTS: —".into());
+            .unwrap_or_else(|| "PTS: -".into());
         let sched = self
             .splice_count
             .map(|n| format!("ScheduleN: {n}"))

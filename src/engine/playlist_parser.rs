@@ -12,7 +12,7 @@ use crate::models::ChannelEntry;
 /// Result of detecting and parsing an input URL/file body.
 #[derive(Debug, Clone)]
 pub enum ParsedInput {
-    /// HLS master/media or DASH MPD — open diagnostics for this URL.
+    /// HLS master/media or DASH MPD - open diagnostics for this URL.
     SingleStream { origin: String, url: String },
     /// Channel lineup → Channel Picker.
     IptvChannels {

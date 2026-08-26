@@ -1,5 +1,6 @@
 //! Split-screen dual-stream compare TUI (`--compare URL1 URL2`).
 
+use std::collections::VecDeque;
 use std::fs;
 use std::io;
 use std::path::PathBuf;
@@ -32,6 +33,42 @@ use crate::ui::app::SessionOpts;
 
 const FRAME_PERIOD: Duration = Duration::from_millis(33);
 const TOAST_SECS: u64 = 3;
+const PAUSE_RING_CAP: usize = 256;
+
+/// Bounded pause buffer: keep last N events while UI is paused, replay on resume.
+#[derive(Debug, Default)]
+pub struct PauseRingBuffer {
+    buf: VecDeque<StreamEvent>,
+    cap: usize,
+}
+
+impl PauseRingBuffer {
+    pub fn new(cap: usize) -> Self {
+        Self {
+            buf: VecDeque::with_capacity(cap),
+            cap: cap.max(1),
+        }
+    }
+
+    pub fn push(&mut self, event: StreamEvent) {
+        if self.buf.len() >= self.cap {
+            self.buf.pop_front();
+        }
+        self.buf.push_back(event);
+    }
+
+    pub fn drain(&mut self) -> Vec<StreamEvent> {
+        self.buf.drain(..).collect()
+    }
+
+    pub fn len(&self) -> usize {
+        self.buf.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.buf.is_empty()
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FocusPane {
@@ -151,6 +188,8 @@ pub struct CompareApp {
     right_poller: JoinHandle<()>,
     should_quit: bool,
     paused: bool,
+    left_pause_buf: PauseRingBuffer,
+    right_pause_buf: PauseRingBuffer,
     show_detail: bool,
     log_focus: bool,
     focus: FocusPane,
@@ -193,6 +232,8 @@ impl CompareApp {
             right_poller: tokio::spawn(async move { right_poller.run().await }),
             should_quit: false,
             paused: false,
+            left_pause_buf: PauseRingBuffer::new(PAUSE_RING_CAP),
+            right_pause_buf: PauseRingBuffer::new(PAUSE_RING_CAP),
             show_detail: false,
             log_focus: false,
             focus: FocusPane::Left,
@@ -214,12 +255,16 @@ impl CompareApp {
             tokio::select! {
                 _ = tokio::signal::ctrl_c() => app.should_quit = true,
                 Some(ev) = app.left_rx.recv() => {
-                    if !app.paused {
+                    if app.paused {
+                        app.left_pause_buf.push(ev);
+                    } else {
                         app.left.apply(ev);
                     }
                 }
                 Some(ev) = app.right_rx.recv() => {
-                    if !app.paused {
+                    if app.paused {
+                        app.right_pause_buf.push(ev);
+                    } else {
                         app.right.apply(ev);
                     }
                 }
@@ -275,15 +320,26 @@ impl CompareApp {
         match code {
             KeyCode::Char('q') | KeyCode::Esc => self.should_quit = true,
             KeyCode::Char(' ') => {
-                self.paused = !self.paused;
-                self.toast = Some((
-                    if self.paused {
-                        "paused".into()
-                    } else {
-                        "resumed".into()
-                    },
-                    Instant::now() + Duration::from_secs(TOAST_SECS),
-                ));
+                if self.paused {
+                    // Resume: replay buffered events so UI catches up to last state.
+                    for ev in self.left_pause_buf.drain() {
+                        self.left.apply(ev);
+                    }
+                    for ev in self.right_pause_buf.drain() {
+                        self.right.apply(ev);
+                    }
+                    self.paused = false;
+                    self.toast = Some((
+                        "resumed".into(),
+                        Instant::now() + Duration::from_secs(TOAST_SECS),
+                    ));
+                } else {
+                    self.paused = true;
+                    self.toast = Some((
+                        "paused (buffering)".into(),
+                        Instant::now() + Duration::from_secs(TOAST_SECS),
+                    ));
+                }
             }
             KeyCode::Char('d') | KeyCode::Char('D') => {
                 self.show_detail = !self.show_detail;
@@ -309,7 +365,7 @@ impl CompareApp {
                     Err(_) => {
                         self.focused_mut().log_tail.push(format!("curl: {cmd}"));
                         self.toast = Some((
-                            "clipboard failed — see log".into(),
+                            "clipboard failed - see log".into(),
                             Instant::now() + Duration::from_secs(TOAST_SECS),
                         ));
                     }
@@ -414,33 +470,33 @@ fn diff_line(left: &PaneState, right: &PaneState, paused: bool) -> String {
             let d = b as i64 - a as i64;
             format!("Δ Seq: {d:+}")
         }
-        _ => "Δ Seq: —".into(),
+        _ => "Δ Seq: -".into(),
     };
     let lat = match (left.latency_ms(), right.latency_ms()) {
         (Some(a), Some(b)) => {
             let d = (b as f64 - a as f64) / 1000.0;
             format!("Δ Latency: {d:+.1}s")
         }
-        _ => "Δ Latency: —".into(),
+        _ => "Δ Latency: -".into(),
     };
     let br = match (left.bitrate_kbps(), right.bitrate_kbps()) {
         (Some(a), Some(b)) => {
             let d = b as i64 - a as i64;
             format!("Δ Bitrate: {d:+} kbps ({a} vs {b})")
         }
-        _ => "Δ Bitrate: —".into(),
+        _ => "Δ Bitrate: -".into(),
     };
     let cache = format!(
         "Cache: {} vs {}",
         left.last_segment
             .as_ref()
             .map(|s| s.cdn.badge())
-            .unwrap_or_else(|| "—".into()),
+            .unwrap_or_else(|| "-".into()),
         right
             .last_segment
             .as_ref()
             .map(|s| s.cdn.badge())
-            .unwrap_or_else(|| "—".into())
+            .unwrap_or_else(|| "-".into())
     );
     let pause = if paused { " PAUSED" } else { "" };
     format!("{seq}  |  {lat}  |  {br}  |  {cache}{pause}")
@@ -490,7 +546,7 @@ fn draw_pane(
     let seq = pane
         .seq()
         .map(|s| s.to_string())
-        .unwrap_or_else(|| "—".into());
+        .unwrap_or_else(|| "-".into());
     let lat = pane.latency.display();
     let shi = format!("{} ({})", pane.health.score, pane.health.label);
     let cdn = pane
@@ -501,18 +557,18 @@ fn draw_pane(
             pane.cdn
                 .hit_ratio_pct()
                 .map(|p| format!("hit {p:.0}%"))
-                .unwrap_or_else(|| "—".into())
+                .unwrap_or_else(|| "-".into())
         });
     let net = pane
         .last_segment
         .as_ref()
         .and_then(|s| s.network.as_ref())
         .map(|n| n.display_line())
-        .unwrap_or_else(|| "DNS/TCP/TLS/TTFB: —".into());
+        .unwrap_or_else(|| "DNS/TCP/TLS/TTFB: -".into());
     let br = pane
         .bitrate_kbps()
         .map(|b| format!("{b} kbps"))
-        .unwrap_or_else(|| "—".into());
+        .unwrap_or_else(|| "-".into());
 
     let mut status_lines = vec![
         Line::from(truncate_url(
@@ -520,7 +576,7 @@ fn draw_pane(
             (area.width as usize).saturating_sub(4),
         )),
         Line::from(format!(
-            "Status : {} — {}",
+            "Status : {} - {}",
             status_tag(&pane.status),
             pane.status.message
         )),
@@ -610,5 +666,43 @@ fn truncate_url(s: &str, max: usize) -> String {
         return s.to_string();
     }
     let t: String = s.chars().take(max.saturating_sub(1)).collect();
-    format!("{t}…")
+    format!("{t}...")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::{HealthReport, StreamStatus};
+
+    #[test]
+    fn pause_ring_keeps_last_n_and_drains() {
+        let mut ring = PauseRingBuffer::new(3);
+        ring.push(StreamEvent::Status(StreamStatus::live("a")));
+        ring.push(StreamEvent::Status(StreamStatus::live("b")));
+        ring.push(StreamEvent::Status(StreamStatus::live("c")));
+        ring.push(StreamEvent::Status(StreamStatus::live("d")));
+        assert_eq!(ring.len(), 3);
+        let drained = ring.drain();
+        assert_eq!(drained.len(), 3);
+        assert!(ring.is_empty());
+        match &drained[2] {
+            StreamEvent::Status(s) => assert!(s.message.contains('d')),
+            _ => panic!("expected status"),
+        }
+    }
+
+    #[test]
+    fn pane_applies_health_after_buffer_replay() {
+        let mut pane = PaneState::new("t", "https://ex/m.m3u8");
+        let mut ring = PauseRingBuffer::new(256);
+        ring.push(StreamEvent::Health(HealthReport {
+            score: 42,
+            label: "degraded".into(),
+            deductions: vec![],
+        }));
+        for ev in ring.drain() {
+            pane.apply(ev);
+        }
+        assert_eq!(pane.health.score, 42);
+    }
 }
