@@ -21,8 +21,7 @@ use crate::models::{
     format_dvr_window, AbrHealth, AbrVariant, AdBreakInfo, CdnStats, ChannelEntry, DiagCategory,
     DiagnosticFinding, DiagnosticSummary, HealthReport, LatencyState, LogEntry, LogLevel,
     PlaylistMeta, RingBuffer, SegmentMetrics, StreamEvent, StreamSnapshot, StreamStatus,
-    VirtualBuffer, DEEP_WIRE_PROBE_BYTES, DIAGNOSTIC_DIR, EVENT_CHANNEL_CAPACITY, HISTORY_CAPACITY,
-    LOG_CAPACITY,
+    VirtualBuffer, DIAGNOSTIC_DIR, EVENT_CHANNEL_CAPACITY, HISTORY_CAPACITY, LOG_CAPACITY,
 };
 use crate::ui::channel_picker::{ChannelPicker, PickerAction};
 use crate::ui::layout;
@@ -42,6 +41,8 @@ pub struct SessionOpts {
     pub user_agent: Option<String>,
     pub interval_ms: Option<u64>,
     pub probe_headers: bool,
+    /// Optional DRM license / ClearKey / LA_URL TTFB probe (`--probe-drm`).
+    pub probe_drm: bool,
     pub webhook_url: Option<String>,
     pub alert_on: String,
 }
@@ -193,6 +194,7 @@ impl App {
             self.session.user_agent.clone(),
             self.session.interval_ms,
             self.session.probe_headers,
+            self.session.probe_drm,
             tx,
         )
         .wrap_err("failed to start poller")?;
@@ -493,24 +495,17 @@ impl App {
     }
 
     pub fn build_curl_command(&self) -> String {
-        let url = self
-            .last_segment
-            .as_ref()
-            .map(|s| s.uri.as_str())
-            .unwrap_or(self.active_url.as_str());
-        let mut parts = vec!["curl -sS -L".to_string()];
-        if self.probe_mode || self.session.probe_headers {
-            parts.push(format!("-H \"Range: bytes=0-{DEEP_WIRE_PROBE_BYTES}\""));
-        }
-        for h in &self.session.headers {
-            let escaped = h.replace('"', "\\\"");
-            parts.push(format!("-H \"{escaped}\""));
-        }
-        if let Some(ua) = &self.session.user_agent {
-            parts.push(format!("-A \"{ua}\""));
-        }
-        parts.push(format!("\"{url}\""));
-        parts.join(" ")
+        use crate::engine::export::{build_curl, ExportCapture};
+        build_curl(&ExportCapture {
+            manifest_url: self.active_url.clone(),
+            segment_url: self.last_segment.as_ref().map(|s| s.uri.clone()),
+            probe_headers: self.probe_mode || self.session.probe_headers,
+            headers: self.session.headers.clone(),
+            user_agent: self.session.user_agent.clone(),
+            last_http_status: self.last_segment.as_ref().map(|s| s.http_status),
+            last_ttfb_ms: self.last_segment.as_ref().map(|s| s.ttfb_ms),
+            last_size_bytes: self.last_segment.as_ref().map(|s| s.size_bytes),
+        })
     }
 
     fn return_to_picker(&mut self) {

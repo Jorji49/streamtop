@@ -10,6 +10,10 @@ use serde_json::json;
 use tokio::sync::mpsc;
 use tokio::time::timeout;
 
+use crate::engine::redact::{
+    is_sensitive_header, redact_header_line, redact_headers, redact_url, redact_user_agent,
+    REDACTED,
+};
 use crate::engine::ManifestPoller;
 use crate::models::{
     StreamEvent, DEEP_WIRE_PROBE_BYTES, EVENT_CHANNEL_CAPACITY, RANGE_PROBE_BYTES,
@@ -28,21 +32,22 @@ pub struct ExportCapture {
     pub last_size_bytes: Option<u64>,
 }
 
-/// Build a reproducible curl for the last segment (or manifest).
+/// Build a reproducible curl for the last segment (or manifest). Secrets are redacted.
 pub fn build_curl(cap: &ExportCapture) -> String {
-    let url = cap
-        .segment_url
-        .as_deref()
-        .unwrap_or(cap.manifest_url.as_str());
+    let url = redact_url(
+        cap.segment_url
+            .as_deref()
+            .unwrap_or(cap.manifest_url.as_str()),
+    );
     let mut parts = vec!["curl -sS -L".to_string()];
     if cap.probe_headers {
         parts.push(format!("-H \"Range: bytes=0-{DEEP_WIRE_PROBE_BYTES}\""));
     }
-    for h in &cap.headers {
+    for h in redact_headers(&cap.headers) {
         let escaped = h.replace('"', "\\\"");
         parts.push(format!("-H \"{escaped}\""));
     }
-    if let Some(ua) = &cap.user_agent {
+    if let Some(ua) = redact_user_agent(cap.user_agent.as_deref()) {
         let escaped = ua.replace('"', "\\\"");
         parts.push(format!("-A \"{escaped}\""));
     }
@@ -88,7 +93,7 @@ pub fn build_har(cap: &ExportCapture) -> serde_json::Value {
                 "version": env!("CARGO_PKG_VERSION")
             },
             "comment": format!(
-                "Exported {started}; range-probe={} (2KB audit / {}B deep wire constants)",
+                "Exported {started}; range-probe={} (2KB audit / {}B deep wire constants); secrets redacted",
                 cap.probe_headers, DEEP_WIRE_PROBE_BYTES
             ),
             "entries": entries
@@ -110,10 +115,18 @@ fn har_entry(
     }
     for h in headers {
         if let Some((k, v)) = h.split_once(':') {
-            req_headers.push(json!({"name": k.trim(), "value": v.trim()}));
+            let name = k.trim();
+            let value = if is_sensitive_header(name) {
+                REDACTED
+            } else {
+                v.trim()
+            };
+            req_headers.push(json!({"name": name, "value": value}));
+        } else {
+            let _ = redact_header_line(h);
         }
     }
-    if let Some(ua) = user_agent {
+    if let Some(ua) = redact_user_agent(user_agent) {
         req_headers.push(json!({"name": "User-Agent", "value": ua}));
     }
 
@@ -123,7 +136,7 @@ fn har_entry(
         "time": wait,
         "request": {
             "method": "GET",
-            "url": url,
+            "url": redact_url(url),
             "httpVersion": "HTTP/1.1",
             "cookies": [],
             "headers": req_headers,
@@ -175,6 +188,7 @@ pub async fn capture_for_export(
         session.user_agent.clone(),
         session.interval_ms,
         session.probe_headers,
+        session.probe_drm,
         tx,
     )?;
     let handle = tokio::spawn(async move {
@@ -241,6 +255,20 @@ mod tests {
     }
 
     #[test]
+    fn curl_redacts_auth_and_token() {
+        let cap = ExportCapture {
+            manifest_url: "https://ex/m.m3u8?token=secret".into(),
+            segment_url: None,
+            headers: vec!["Authorization: Bearer abc".into()],
+            ..Default::default()
+        };
+        let cmd = build_curl(&cap);
+        assert!(!cmd.contains("Bearer abc"));
+        assert!(!cmd.contains("token=secret"));
+        assert!(cmd.contains(REDACTED));
+    }
+
+    #[test]
     fn har_has_two_entries_with_segment() {
         let cap = ExportCapture {
             manifest_url: "https://ex/master.m3u8".into(),
@@ -254,5 +282,19 @@ mod tests {
         let entries = har["log"]["entries"].as_array().unwrap();
         assert_eq!(entries.len(), 2);
         assert_eq!(har["log"]["creator"]["name"], "streamtop");
+    }
+
+    #[test]
+    fn har_redacts_sensitive_headers() {
+        let cap = ExportCapture {
+            manifest_url: "https://ex/m.m3u8?key=abc".into(),
+            headers: vec!["Cookie: sid=1".into()],
+            ..Default::default()
+        };
+        let har = build_har(&cap);
+        let s = har.to_string();
+        assert!(!s.contains("sid=1"));
+        assert!(!s.contains("key=abc"));
+        assert!(s.contains(REDACTED));
     }
 }

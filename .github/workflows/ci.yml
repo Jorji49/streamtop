@@ -38,6 +38,56 @@ jobs:
       - name: cargo test
         run: cargo test --all-targets
 
+  smoke-live:
+    name: live HLS smoke
+    runs-on: ubuntu-latest
+    needs: check
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build binary
+        run: cargo build --release
+
+      - name: Smoke test public HLS (10s summary JSON)
+        id: smoke
+        continue-on-error: true
+        run: |
+          set -uo pipefail
+          mkdir -p artifacts
+          set +e
+          ./target/release/streamtop \
+            "https://devstreaming-cdn.apple.com/videos/streaming/examples/img_bipbop_adv_example_fmp4/master.m3u8" \
+            --summary --summary-format json --timeout 10 \
+            > artifacts/summary.json
+          code=$?
+          set -e
+          cat artifacts/summary.json || true
+          # Always attempt HAR for failure triage
+          ./target/release/streamtop \
+            "https://devstreaming-cdn.apple.com/videos/streaming/examples/img_bipbop_adv_example_fmp4/master.m3u8" \
+            --export-har artifacts/smoke.har --timeout 10 --probe-headers || true
+          exit $code
+
+      - name: Upload HAR / summary on smoke failure
+        if: steps.smoke.outcome == 'failure'
+        uses: actions/upload-artifact@v5
+        with:
+          name: smoke-failure-har
+          path: |
+            artifacts/smoke.har
+            artifacts/summary.json
+          if-no-files-found: warn
+
+      - name: Fail job if smoke failed
+        if: steps.smoke.outcome == 'failure'
+        run: exit 1
+
   build:
     name: build (${{ matrix.target }})
     needs: check

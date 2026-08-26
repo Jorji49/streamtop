@@ -30,6 +30,8 @@ scoop install streamtop/streamtop
 
 ### Windows — Winget
 
+Status: **PR [#424450](https://github.com/microsoft/winget-pkgs/pull/424450) In Review** (not merged yet). After merge:
+
 ```powershell
 winget install streamtop
 ```
@@ -47,14 +49,26 @@ brew install --formula https://raw.githubusercontent.com/Jorji49/streamtop/main/
 
 ### Arch Linux (AUR)
 
+Status: **Template Ready** (`dist/aur/PKGBUILD` in-repo). Package is **not published** to the AUR yet — do not expect `yay -S streamtop-bin` to resolve until a maintainer uploads it.
+
 ```bash
+# After AUR publish:
 yay -S streamtop-bin
 ```
 
 ### Docker
 
+Image ships the **CLI binary only** (no GUI, no `mpv` / `ffplay`). **Quick Play (`p`) will not work inside the container.**
+
 ```bash
 docker run -it --rm ghcr.io/jorji49/streamtop:latest <URL>
+```
+
+Headless / metrics example (metrics bind defaults to `127.0.0.1:9184`):
+
+```bash
+docker run --rm -p 9184:9184 ghcr.io/jorji49/streamtop:latest \
+  <URL> --prometheus --metrics-bind 0.0.0.0
 ```
 
 ### Debian / Ubuntu
@@ -122,8 +136,12 @@ streamtop <URL> --export-har incident.har --timeout 10
 # Named profile from ~/.config/streamtop/config.toml (see config.example.toml)
 streamtop <URL> --profile cdn
 
-# Prometheus metrics on :9090/metrics
+# Prometheus metrics on 127.0.0.1:9184/metrics (optional --metrics-token)
 streamtop <URL> --prometheus
+streamtop <URL> --prometheus 9184 --metrics-bind 0.0.0.0 --metrics-token "$STREAMTOP_METRICS_TOKEN"
+
+# Optional DRM license / LA_URL TTFB probe
+streamtop <URL> --probe-drm --summary
 
 # Grafana dashboard JSON (import; scrape streamtop --prometheus)
 streamtop --export-grafana
@@ -138,7 +156,7 @@ Alert kinds for `--alert-on`: `stall`, `shi_below_70`, `http_5xx`, `mismatch`, `
 | `q` / `Esc` / `Ctrl+C` | Quit (Esc returns to channel list when one is open) |
 | `Space` | Save report under `diagnostics/` |
 | `c` | Copy a curl for the last segment |
-| `p` | Quick Play via `mpv` or `ffplay` (non-blocking) |
+| `p` | Quick Play via `mpv` or `ffplay` (non-blocking; **not available in Docker**) |
 | `r` | Reset metrics |
 | `Tab` | Channel overlay |
 | `?` | Help |

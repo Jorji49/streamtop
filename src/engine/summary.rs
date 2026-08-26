@@ -9,6 +9,7 @@ use serde::Serialize;
 use tokio::sync::mpsc;
 use tokio::time::{timeout, Instant};
 
+use crate::engine::redact::redact_url;
 use crate::engine::ManifestPoller;
 use crate::models::{
     CdnStats, DiagCategory, DiagSeverity, HealthReport, LatencyState, StreamEvent, StreamStatus,
@@ -75,7 +76,7 @@ pub fn build_summary_json(
         last_http_status,
         origin_stalls,
         critical_rfc_errors,
-        url,
+        url: redact_url(&url),
         errors,
         saw_segment,
     }
@@ -94,6 +95,7 @@ pub async fn run_summary(
         session.user_agent.clone(),
         session.interval_ms,
         session.probe_headers,
+        session.probe_drm,
         tx,
     )?;
     if let Some(hook_url) = session.webhook_url.clone() {
@@ -232,7 +234,7 @@ pub async fn run_summary(
                     .unwrap_or_else(|| "—".into()),
                 origin_stalls,
                 critical_rfc_errors,
-                url
+                redact_url(&url)
             );
         }
     }
@@ -252,7 +254,7 @@ mod tests {
     fn summary_json_schema_fields() {
         let health = HealthReport::perfect();
         let payload = build_summary_json(
-            "https://ex/m.m3u8".into(),
+            "https://ex/m.m3u8?token=secret".into(),
             true,
             &health,
             "LIVE",
@@ -272,5 +274,13 @@ mod tests {
         assert_eq!(v["ok"], true);
         assert_eq!(v["saw_segment"], true);
         assert!(v.get("health_score").is_some());
+        assert!(!v["url"].as_str().unwrap().contains("secret"));
+        assert!(v["url"].as_str().unwrap().contains("[REDACTED]"));
+    }
+
+    #[test]
+    fn summary_uses_redact_helpers() {
+        use crate::engine::redact::redact_text;
+        assert!(redact_text("Cookie: a=b").contains("[REDACTED]"));
     }
 }
