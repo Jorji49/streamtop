@@ -141,6 +141,10 @@ struct Cli {
     /// Comma-separated alert kinds: stall,shi_below_70,http_5xx,mismatch,ad_start
     #[arg(long = "alert-on", value_name = "EVENTS")]
     alert_on: Option<String>,
+
+    /// Allow webhooks to private/link-local/metadata hosts (local tests only; default: blocked)
+    #[arg(long = "allow-insecure-webhooks")]
+    allow_insecure_webhooks: bool,
 }
 
 /// Clap-friendly path wrapper.
@@ -179,6 +183,7 @@ async fn main() -> Result<ExitCode> {
             probe_drm: false,
             webhook_url: None,
             alert_on: "stall,shi_below_70,http_5xx".into(),
+            allow_insecure_webhooks: false,
         },
     )?;
 
@@ -206,6 +211,13 @@ async fn main() -> Result<ExitCode> {
     }
     if session.alert_on.is_empty() {
         session.alert_on = "stall,shi_below_70,http_5xx".into();
+    }
+    if cli.allow_insecure_webhooks {
+        session.allow_insecure_webhooks = true;
+    }
+    if let Some(hook) = &session.webhook_url {
+        streamtop::engine::webhook::validate_webhook_url(hook, session.allow_insecure_webhooks)
+            .wrap_err("webhook SSRF check failed")?;
     }
 
     let client = build_http_client(&session.headers, session.user_agent.clone())?;
@@ -344,7 +356,7 @@ async fn load_input(client: &Client, input: &str) -> Result<(String, Vec<u8>, Op
             .wrap_err_with(|| format!("failed to fetch {input}"))?;
         let status = response.status();
         if !status.is_success() {
-            return Err(eyre!("HTTP {status} — {input}"));
+            return Err(eyre!("HTTP {status} - {input}"));
         }
         let content_type = response
             .headers()

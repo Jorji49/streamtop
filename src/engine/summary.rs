@@ -106,6 +106,7 @@ pub async fn run_summary(
                 crate::engine::webhook::WebhookConfig {
                     url: hook_url,
                     alerts,
+                    allow_insecure: session.allow_insecure_webhooks,
                 },
                 hook_rx,
                 url.clone(),
@@ -180,7 +181,7 @@ pub async fn run_summary(
         .unwrap_or_else(|| "UNKNOWN".into());
     let ttfb = last_ttfb
         .map(|ms| format!("{ms}ms"))
-        .unwrap_or_else(|| "—".into());
+        .unwrap_or_else(|| "-".into());
 
     let http_ok = matches!(last_http_status, Some(200) | Some(206));
     let ok = matches!(status.kind, StreamStatusKind::Live)
@@ -231,7 +232,7 @@ pub async fn run_summary(
                 ttfb,
                 last_http_status
                     .map(|c| c.to_string())
-                    .unwrap_or_else(|| "—".into()),
+                    .unwrap_or_else(|| "-".into()),
                 origin_stalls,
                 critical_rfc_errors,
                 redact_url(&url)

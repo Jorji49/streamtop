@@ -1,6 +1,7 @@
 //! Webhook alerting with Slack Block Kit / Discord embeds, retry, and delivery log.
 
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, ToSocketAddrs};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -9,6 +10,7 @@ use color_eyre::eyre::{eyre, Result};
 use reqwest::Client;
 use serde_json::{json, Value};
 use tokio::sync::mpsc::Receiver;
+use url::Url;
 
 use crate::engine::redact::{redact_text, redact_url};
 use crate::models::{SegmentMetrics, StreamEvent};
@@ -21,6 +23,8 @@ const MAX_RETRIES: u32 = 3;
 pub struct WebhookConfig {
     pub url: String,
     pub alerts: HashSet<AlertKind>,
+    /// When true, skip private/link-local/metadata destination checks (local tests only).
+    pub allow_insecure: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -148,8 +152,24 @@ pub fn spawn_webhook_listener_with_log(
     delivery: DeliveryLog,
 ) {
     tokio::spawn(async move {
+        if let Err(err) = validate_webhook_url(&cfg.url, cfg.allow_insecure) {
+            {
+                let mut st = delivery.lock().unwrap_or_else(|e| e.into_inner());
+                st.push(DeliveryRecord {
+                    at: Utc::now().to_rfc3339(),
+                    alert: "ssrf_block".into(),
+                    ok: false,
+                    detail: err.to_string(),
+                });
+            }
+            // Still drain the channel so the poller does not back up.
+            while rx.recv().await.is_some() {}
+            return;
+        }
+
         let client = Client::builder()
             .timeout(Duration::from_secs(10))
+            .redirect(reqwest::redirect::Policy::none())
             .build()
             .unwrap_or_else(|_| Client::new());
         let cfg = Arc::new(cfg);
@@ -165,11 +185,12 @@ pub fn spawn_webhook_listener_with_log(
                     }
                 }
                 let url = cfg.url.clone();
+                let allow_insecure = cfg.allow_insecure;
                 let client = client.clone();
                 let delivery = Arc::clone(&delivery);
                 let body = build_platform_body(platform, &payload);
                 tokio::spawn(async move {
-                    let result = post_with_retry(&client, &url, &body).await;
+                    let result = post_with_retry(&client, &url, &body, allow_insecure).await;
                     let mut st = delivery.lock().unwrap_or_else(|e| e.into_inner());
                     match result {
                         Ok(status) => st.push(DeliveryRecord {
@@ -191,10 +212,116 @@ pub fn spawn_webhook_listener_with_log(
     });
 }
 
-async fn post_with_retry(client: &Client, url: &str, body: &Value) -> Result<u16, String> {
+/// Reject webhook destinations that resolve to loopback, private, link-local, or cloud metadata.
+pub fn validate_webhook_url(raw: &str, allow_insecure: bool) -> Result<()> {
+    if allow_insecure {
+        return Ok(());
+    }
+    let parsed = Url::parse(raw).map_err(|e| eyre!("invalid webhook URL: {e}"))?;
+    match parsed.scheme() {
+        "http" | "https" => {}
+        other => {
+            return Err(eyre!(
+                "webhook scheme `{other}` not allowed (use http/https)"
+            ))
+        }
+    }
+    let host = parsed
+        .host_str()
+        .ok_or_else(|| eyre!("webhook URL missing host"))?;
+    let host_l = host.to_ascii_lowercase();
+    if host_l == "localhost"
+        || host_l.ends_with(".localhost")
+        || host_l == "metadata.google.internal"
+        || host_l.ends_with(".internal")
+    {
+        return Err(eyre!(
+            "webhook host `{host}` blocked (loopback/internal); use --allow-insecure-webhooks to override"
+        ));
+    }
+
+    if let Ok(ip) = host.parse::<IpAddr>() {
+        if is_blocked_ip(ip) {
+            return Err(eyre!(
+                "webhook IP {ip} blocked (private/link-local/metadata); use --allow-insecure-webhooks to override"
+            ));
+        }
+        return Ok(());
+    }
+
+    let port = parsed.port_or_known_default().unwrap_or(443);
+    let addrs = (host, port)
+        .to_socket_addrs()
+        .map_err(|e| eyre!("webhook DNS resolve failed for `{host}`: {e}"))?;
+    let mut saw = false;
+    for addr in addrs {
+        saw = true;
+        if is_blocked_ip(addr.ip()) {
+            return Err(eyre!(
+                "webhook host `{host}` resolves to blocked address {}; use --allow-insecure-webhooks to override",
+                addr.ip()
+            ));
+        }
+    }
+    if !saw {
+        return Err(eyre!("webhook host `{host}` resolved to no addresses"));
+    }
+    Ok(())
+}
+
+pub fn is_blocked_ip(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v4) => is_blocked_v4(v4),
+        IpAddr::V6(v6) => is_blocked_v6(v6),
+    }
+}
+
+fn is_blocked_v4(ip: Ipv4Addr) -> bool {
+    let o = ip.octets();
+    ip.is_loopback()
+        || ip.is_private()
+        || ip.is_link_local()
+        || ip.is_unspecified()
+        || ip.is_broadcast()
+        || (o[0] == 169 && o[1] == 254) // link-local incl. 169.254.169.254
+        || (o[0] == 100 && (o[1] & 0xc0) == 64) // CGNAT 100.64/10
+        || o[0] == 0
+}
+
+fn is_blocked_v6(ip: Ipv6Addr) -> bool {
+    if ip.is_loopback() || ip.is_unspecified() {
+        return true;
+    }
+    // Unique local fc00::/7
+    let octets = ip.octets();
+    if (octets[0] & 0xfe) == 0xfc {
+        return true;
+    }
+    // Link-local fe80::/10
+    if octets[0] == 0xfe && (octets[1] & 0xc0) == 0x80 {
+        return true;
+    }
+    // IPv4-mapped
+    if let Some(v4) = ip.to_ipv4_mapped() {
+        return is_blocked_v4(v4);
+    }
+    false
+}
+
+async fn post_with_retry(
+    client: &Client,
+    url: &str,
+    body: &Value,
+    allow_insecure: bool,
+) -> Result<u16, String> {
+    validate_webhook_url(url, allow_insecure).map_err(|e| e.to_string())?;
     let mut delay = Duration::from_millis(250);
     let mut last_err = String::new();
     for attempt in 0..MAX_RETRIES {
+        // Re-check before each attempt (DNS rebinding mitigation).
+        if let Err(e) = validate_webhook_url(url, allow_insecure) {
+            return Err(e.to_string());
+        }
         match client.post(url).json(body).send().await {
             Ok(resp) => {
                 let status = resp.status().as_u16();
@@ -537,5 +664,27 @@ mod tests {
         let mut st = DeliveryState::default();
         assert!(st.should_send("stall:critical"));
         assert!(!st.should_send("stall:critical"));
+    }
+
+    #[test]
+    fn ssrf_blocks_loopback_and_metadata() {
+        assert!(validate_webhook_url("http://127.0.0.1:8080/hook", false).is_err());
+        assert!(validate_webhook_url("http://10.0.0.5/hook", false).is_err());
+        assert!(validate_webhook_url("http://192.168.1.1/hook", false).is_err());
+        assert!(validate_webhook_url("http://172.16.0.1/hook", false).is_err());
+        assert!(validate_webhook_url("http://169.254.169.254/latest", false).is_err());
+        assert!(validate_webhook_url("http://localhost/hook", false).is_err());
+        assert!(is_blocked_ip(IpAddr::V4(Ipv4Addr::new(169, 254, 169, 254))));
+        assert!(is_blocked_ip(IpAddr::V6(Ipv6Addr::LOCALHOST)));
+    }
+
+    #[test]
+    fn ssrf_allow_insecure_bypass() {
+        assert!(validate_webhook_url("http://127.0.0.1:9/hook", true).is_ok());
+    }
+
+    #[test]
+    fn ssrf_allows_public_literal() {
+        assert!(validate_webhook_url("https://8.8.8.8/hook", false).is_ok());
     }
 }

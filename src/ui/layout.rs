@@ -70,12 +70,12 @@ fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
         .as_ref()
         .map(|s| s.media_sequence.to_string())
         .or_else(|| app.playlist.as_ref().map(|p| p.media_sequence.to_string()))
-        .unwrap_or_else(|| "—".into());
+        .unwrap_or_else(|| "-".into());
     let target = app
         .playlist
         .as_ref()
         .map(|p| format!("{}s", p.target_duration))
-        .unwrap_or_else(|| "—".into());
+        .unwrap_or_else(|| "-".into());
 
     let cdn_badge = app
         .cdn
@@ -123,7 +123,7 @@ fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
             };
             format!(" {s} FPS ")
         }
-        _ => " — FPS ".into(),
+        _ => " - FPS ".into(),
     };
     let (fps_fg, fps_bg) = if video_fps.is_some() {
         (Color::Black, Color::LightCyan)
@@ -334,8 +334,8 @@ fn draw_segment_panel(frame: &mut Frame, app: &App, area: Rect) {
                     " Wire           : {res} · {} fps · {}",
                     wire.frame_rate
                         .map(|f| format!("{f:.2}"))
-                        .unwrap_or_else(|| "—".into()),
-                    wire.codec.as_deref().unwrap_or("—")
+                        .unwrap_or_else(|| "-".into()),
+                    wire.codec.as_deref().unwrap_or("-")
                 )));
             }
         }
@@ -383,7 +383,7 @@ fn draw_abr_panel(frame: &mut Frame, app: &App, area: Rect) {
 
     let rows = app.variants.iter().map(|v| {
         let res = v.resolution_label();
-        let codecs = truncate(v.codecs.as_deref().unwrap_or("—"), 14);
+        let codecs = truncate(v.codecs.as_deref().unwrap_or("-"), 14);
         let selected = if v.selected { "●" } else { "" };
         let style = if v.mismatch.is_some() {
             Style::default()
@@ -763,7 +763,7 @@ fn centered_rect(area: Rect, pct_x: u16, pct_y: u16) -> Rect {
 
 fn latency_display(state: LatencyState) -> (String, Color) {
     match state {
-        LatencyState::Unknown => ("—".into(), Color::DarkGray),
+        LatencyState::Unknown => ("-".into(), Color::DarkGray),
         LatencyState::Estimated(ms) => {
             let secs = ms as f64 / 1000.0;
             (

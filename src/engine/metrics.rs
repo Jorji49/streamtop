@@ -421,6 +421,7 @@ pub async fn run_prometheus(
                 crate::engine::webhook::WebhookConfig {
                     url: hook_url,
                     alerts,
+                    allow_insecure: session.allow_insecure_webhooks,
                 },
                 hook_rx,
                 url,

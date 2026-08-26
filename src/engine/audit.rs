@@ -53,7 +53,7 @@ pub async fn run_audit(
                         verdict: AuditVerdict::Error,
                         http_status: None,
                         protocol: None,
-                        cdn: "—".into(),
+                        cdn: "-".into(),
                         ttfb_ms: None,
                         bitrate_profiles: Vec::new(),
                         has_pdt: false,
@@ -112,7 +112,7 @@ async fn audit_one(client: &Client, ch: &ChannelEntry) -> AuditRow {
             verdict: AuditVerdict::Error,
             http_status: None,
             protocol: None,
-            cdn: "—".into(),
+            cdn: "-".into(),
             ttfb_ms: None,
             bitrate_profiles: Vec::new(),
             has_pdt: false,
@@ -137,7 +137,7 @@ async fn audit_one_inner(client: &Client, ch: &ChannelEntry) -> Result<AuditRow>
             verdict: AuditVerdict::Error,
             http_status: Some(status),
             protocol: None,
-            cdn: "—".into(),
+            cdn: "-".into(),
             ttfb_ms: None,
             bitrate_profiles: Vec::new(),
             has_pdt: false,
@@ -193,7 +193,7 @@ async fn audit_hls(
             verdict: AuditVerdict::Stall,
             http_status: Some(manifest_status),
             protocol: Some("HLS".into()),
-            cdn: "—".into(),
+            cdn: "-".into(),
             ttfb_ms: None,
             bitrate_profiles: profiles,
             has_pdt,
@@ -368,14 +368,14 @@ fn print_matrix(report: &AuditReport) -> Result<()> {
         let http = row
             .http_status
             .map(|s| s.to_string())
-            .unwrap_or_else(|| "—".into());
+            .unwrap_or_else(|| "-".into());
         let pdt = if row.has_pdt { "yes" } else { "no" };
         let ttfb = row
             .ttfb_ms
             .map(|ms| format!("{ms}ms"))
-            .unwrap_or_else(|| "—".into());
+            .unwrap_or_else(|| "-".into());
         let name = truncate(&row.name, 28);
-        let group = truncate(row.group.as_deref().unwrap_or("—"), 12);
+        let group = truncate(row.group.as_deref().unwrap_or("-"), 12);
         let cdn = truncate(&row.cdn, 22);
         let color = match row.verdict {
             AuditVerdict::Live => Color::Green,
@@ -448,7 +448,16 @@ fn truncate(s: &str, max: usize) -> String {
 }
 
 fn write_json(report: &AuditReport) -> Result<()> {
-    let json = serde_json::to_string_pretty(report).wrap_err("audit json")?;
+    let mut report = report.clone();
+    report.source = crate::engine::redact::redact_url(&report.source);
+    for ch in &mut report.channels {
+        ch.url = crate::engine::redact::redact_url(&ch.url);
+        if let Some(err) = &ch.error {
+            ch.error = Some(crate::engine::redact::redact_text(err));
+        }
+    }
+    let json = serde_json::to_string_pretty(&report).wrap_err("audit json")?;
+    let json = crate::engine::redact::redact_text(&json);
     std::fs::write(AUDIT_REPORT_JSON, json)
         .wrap_err_with(|| format!("write {AUDIT_REPORT_JSON}"))?;
     Ok(())
@@ -467,12 +476,18 @@ fn write_csv(report: &AuditReport) -> Result<()> {
             .map(|b| b.to_string())
             .collect::<Vec<_>>()
             .join("|");
+        let url = crate::engine::redact::redact_url(&row.url);
+        let err = row
+            .error
+            .as_deref()
+            .map(crate::engine::redact::redact_text)
+            .unwrap_or_default();
         writeln!(
             f,
             "{},{},{},{},{},{},{},{},{},{},{}",
             csv_escape(&row.name),
             csv_escape(row.group.as_deref().unwrap_or("")),
-            csv_escape(&row.url),
+            csv_escape(&url),
             row.verdict.as_str(),
             row.http_status.map(|s| s.to_string()).unwrap_or_default(),
             row.protocol.as_deref().unwrap_or(""),
@@ -480,7 +495,7 @@ fn write_csv(report: &AuditReport) -> Result<()> {
             row.ttfb_ms.map(|s| s.to_string()).unwrap_or_default(),
             csv_escape(&bws),
             row.has_pdt,
-            csv_escape(row.error.as_deref().unwrap_or("")),
+            csv_escape(&err),
         )?;
     }
     Ok(())
@@ -491,5 +506,119 @@ fn csv_escape(s: &str) -> String {
         format!("\"{}\"", s.replace('"', "\"\""))
     } else {
         s.to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::routing::get;
+    use axum::Router;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    const MEDIA: &str = r#"#EXTM3U
+#EXT-X-TARGETDURATION:2
+#EXT-X-MEDIA-SEQUENCE:1
+#EXTINF:2.0,
+seg.ts
+"#;
+
+    fn unique_tmpdir() -> std::path::PathBuf {
+        static N: AtomicU64 = AtomicU64::new(0);
+        let n = N.fetch_add(1, Ordering::Relaxed);
+        let dir =
+            std::env::temp_dir().join(format!("streamtop-audit-test-{n}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[tokio::test]
+    async fn audit_local_mock_hls_is_live_or_stall() {
+        let app = Router::new()
+            .route(
+                "/ch.m3u8",
+                get(|| async {
+                    (
+                        [(
+                            axum::http::header::CONTENT_TYPE,
+                            "application/vnd.apple.mpegurl",
+                        )],
+                        MEDIA.to_string(),
+                    )
+                }),
+            )
+            .route("/seg.ts", get(|| async { vec![0x47u8; 188] }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let handle = tokio::spawn(async move {
+            axum::serve(listener, app).await.ok();
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+
+        let url = format!("http://{addr}/ch.m3u8");
+        let channels = vec![ChannelEntry {
+            name: "mock".into(),
+            url: url.clone(),
+            group: None,
+            logo: None,
+            tvg_id: None,
+        }];
+
+        let dir = unique_tmpdir();
+        let prev = std::env::current_dir().unwrap();
+        std::env::set_current_dir(&dir).unwrap();
+        let report = run_audit("local-mock", channels, vec![], None)
+            .await
+            .expect("audit");
+        std::env::set_current_dir(prev).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+        handle.abort();
+
+        assert_eq!(report.total, 1);
+        let row = &report.channels[0];
+        assert!(
+            matches!(
+                row.verdict,
+                AuditVerdict::Live | AuditVerdict::Stall | AuditVerdict::Error
+            ),
+            "verdict={:?}",
+            row.verdict
+        );
+    }
+
+    #[test]
+    fn write_json_redacts_token_in_url() {
+        let report = AuditReport {
+            captured_at: Utc::now(),
+            source: "https://ex/list.m3u?token=sekrit".into(),
+            total: 1,
+            live: 0,
+            errors: 1,
+            stalls: 0,
+            channels: vec![AuditRow {
+                name: "a".into(),
+                group: None,
+                url: "https://cdn/m.m3u8?token=sekrit".into(),
+                verdict: AuditVerdict::Error,
+                http_status: Some(403),
+                protocol: None,
+                cdn: "-".into(),
+                ttfb_ms: None,
+                bitrate_profiles: vec![],
+                has_pdt: false,
+                error: Some("Authorization: Bearer xyz".into()),
+            }],
+        };
+        let dir = unique_tmpdir();
+        let prev = std::env::current_dir().unwrap();
+        std::env::set_current_dir(&dir).unwrap();
+        write_json(&report).unwrap();
+        let raw = std::fs::read_to_string(AUDIT_REPORT_JSON).unwrap();
+        std::env::set_current_dir(prev).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(!raw.contains("sekrit"));
+        assert!(!raw.contains("Bearer xyz"));
+        assert!(raw.contains("[REDACTED]"));
     }
 }

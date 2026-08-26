@@ -1,11 +1,13 @@
-# Example: copy to ~/.config/streamtop/config.toml (Windows: %APPDATA%\streamtop\config.toml)
+# Example: copy to ~/.config/streamtop/config.toml
+# Windows: %APPDATA%\streamtop\config.toml
 # Or set STREAMTOP_CONFIG=/path/to/config.toml
 
 [default]
 # headers = ["X-Forwarded-For: 1.2.3.4"]
 # user_agent = "streamtop-ops/1.0"
 # probe_headers = true
-# webhook = "https://hooks.slack.com/services/…"
+# probe_drm = false
+# webhook = "https://hooks.slack.com/services/..."
 # alert_on = "stall,shi_below_70,http_5xx"
 
 [profiles.cdn]
@@ -14,4 +16,9 @@ probe_headers = true
 
 [profiles.ci]
 probe_headers = true
+probe_drm = false
 alert_on = "stall,http_5xx"
+
+[profiles.drm]
+probe_drm = true
+probe_headers = true
