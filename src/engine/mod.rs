@@ -10,6 +10,7 @@ pub mod network_trace;
 pub mod playlist_parser;
 pub mod poller;
 pub mod quick_play;
+pub mod redact;
 pub mod scte35;
 pub mod summary;
 pub mod webhook;

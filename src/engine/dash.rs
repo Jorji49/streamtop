@@ -260,9 +260,29 @@ fn parse_period(period: &Period, root: &Url) -> Result<PeriodParseOut> {
 
 fn merge_drm(into: &mut DrmInfo, protections: &[dash_mpd::ContentProtection]) {
     for cp in protections {
-        if let Some(info) = classify_content_protection(&cp.schemeIdUri) {
+        let la = cp
+            .laurl
+            .as_ref()
+            .and_then(|l| l.content.clone())
+            .or_else(|| cp.clearkey_laurl.as_ref().and_then(|l| l.content.clone()))
+            .filter(|s| !s.trim().is_empty());
+
+        if let Some(mut info) = classify_content_protection(&cp.schemeIdUri) {
+            if info.key_uri.is_none() {
+                info.key_uri = la;
+            }
             *into = info;
             return;
+        }
+        // Scheme unknown but LA_URL present (e.g. ClearKey endpoint only).
+        if into.key_uri.is_none() {
+            if let Some(uri) = la {
+                into.present = true;
+                into.key_uri = Some(uri);
+                if into.badge.is_empty() {
+                    into.badge = "DRM · LA_URL".into();
+                }
+            }
         }
     }
 }

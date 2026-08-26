@@ -446,7 +446,7 @@ pub enum CacheVerdict {
 }
 
 impl CacheVerdict {
-    #[allow(dead_code)]
+    /// Short TUI badge for Hit / Miss / Unknown (used by `CdnEdgeInfo::badge`).
     pub fn badge(self) -> &'static str {
         match self {
             Self::Hit => "HIT (Edge)",
@@ -492,9 +492,8 @@ pub struct CdnEdgeInfo {
 impl CdnEdgeInfo {
     pub fn badge(&self) -> String {
         let edge = match self.verdict {
-            CacheVerdict::Hit => "HIT (Edge)",
-            CacheVerdict::Miss => "MISS (Origin)",
             CacheVerdict::Unknown => self.guess_edge_badge(),
+            other => other.badge(),
         };
         match &self.provider {
             Some(p) => format!("{p} · {edge}"),

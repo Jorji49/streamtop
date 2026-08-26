@@ -45,7 +45,8 @@ pub fn load_config_file() -> Result<Option<ConfigFile>> {
         return Ok(None);
     }
     let raw = fs::read_to_string(&path).wrap_err_with(|| format!("read {}", path.display()))?;
-    let cfg: ConfigFile = toml::from_str(&raw).wrap_err_with(|| format!("parse {}", path.display()))?;
+    let cfg: ConfigFile =
+        toml::from_str(&raw).wrap_err_with(|| format!("parse {}", path.display()))?;
     Ok(Some(cfg))
 }
 
@@ -70,11 +71,7 @@ pub fn session_from_profile(
         let section = cfg.profiles.get(name).ok_or_else(|| {
             eyre!(
                 "unknown profile `{name}` (available: {})",
-                cfg.profiles
-                    .keys()
-                    .cloned()
-                    .collect::<Vec<_>>()
-                    .join(", ")
+                cfg.profiles.keys().cloned().collect::<Vec<_>>().join(", ")
             )
         })?;
         apply_section(&mut base, section);
@@ -115,6 +112,7 @@ mod tests {
             user_agent: Some("old".into()),
             interval_ms: Some(1000),
             probe_headers: false,
+            probe_drm: false,
             webhook_url: None,
             alert_on: "stall".into(),
         };

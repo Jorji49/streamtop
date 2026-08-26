@@ -1,7 +1,9 @@
 //! Split-screen dual-stream compare TUI (`--compare URL1 URL2`).
 
+use std::fs;
 use std::io;
-use std::time::Duration;
+use std::path::PathBuf;
+use std::time::{Duration, Instant};
 
 use color_eyre::eyre::{Result, WrapErr};
 use crossterm::event::{Event, EventStream, KeyCode, KeyEventKind, KeyModifiers};
@@ -19,14 +21,23 @@ use tokio::sync::mpsc::{self, Receiver};
 use tokio::task::JoinHandle;
 use tokio::time::{interval, MissedTickBehavior};
 
+use crate::engine::export::{build_curl, build_har, ExportCapture};
+use crate::engine::redact::redact_url;
 use crate::engine::ManifestPoller;
 use crate::models::{
     AbrVariant, CdnStats, HealthReport, LatencyState, PlaylistMeta, SegmentMetrics, StreamEvent,
-    StreamStatus, VirtualBuffer, EVENT_CHANNEL_CAPACITY,
+    StreamStatus, VirtualBuffer, DIAGNOSTIC_DIR, EVENT_CHANNEL_CAPACITY,
 };
 use crate::ui::app::SessionOpts;
 
 const FRAME_PERIOD: Duration = Duration::from_millis(33);
+const TOAST_SECS: u64 = 3;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FocusPane {
+    Left,
+    Right,
+}
 
 #[derive(Debug)]
 struct PaneState {
@@ -41,6 +52,7 @@ struct PaneState {
     cdn: CdnStats,
     buffer: VirtualBuffer,
     log_tail: Vec<String>,
+    log_scroll: u16,
 }
 
 impl PaneState {
@@ -57,6 +69,7 @@ impl PaneState {
             cdn: CdnStats::default(),
             buffer: VirtualBuffer::default(),
             log_tail: Vec::new(),
+            log_scroll: 0,
         }
     }
 
@@ -72,8 +85,8 @@ impl PaneState {
             StreamEvent::Buffer(b) => self.buffer = b,
             StreamEvent::Log { message, .. } => {
                 self.log_tail.push(message);
-                if self.log_tail.len() > 40 {
-                    let n = self.log_tail.len() - 40;
+                if self.log_tail.len() > 80 {
+                    let n = self.log_tail.len() - 80;
                     self.log_tail.drain(0..n);
                 }
             }
@@ -97,6 +110,36 @@ impl PaneState {
             LatencyState::Unknown => self.last_segment.as_ref().and_then(|s| s.latency_ms),
         }
     }
+
+    fn bitrate_kbps(&self) -> Option<u64> {
+        self.last_segment
+            .as_ref()
+            .and_then(|s| s.download_kbps)
+            .or_else(|| {
+                self.variants
+                    .iter()
+                    .find(|v| v.selected)
+                    .or_else(|| self.variants.first())
+                    .map(|v| v.bandwidth / 1000)
+            })
+    }
+
+    fn export_capture(&self, session: &SessionOpts) -> ExportCapture {
+        ExportCapture {
+            manifest_url: self
+                .playlist
+                .as_ref()
+                .map(|p| p.url.clone())
+                .unwrap_or_else(|| self.url.clone()),
+            segment_url: self.last_segment.as_ref().map(|s| s.uri.clone()),
+            probe_headers: session.probe_headers,
+            headers: session.headers.clone(),
+            user_agent: session.user_agent.clone(),
+            last_http_status: self.last_segment.as_ref().map(|s| s.http_status),
+            last_ttfb_ms: self.last_segment.as_ref().map(|s| s.ttfb_ms),
+            last_size_bytes: self.last_segment.as_ref().map(|s| s.size_bytes),
+        }
+    }
 }
 
 pub struct CompareApp {
@@ -107,6 +150,12 @@ pub struct CompareApp {
     left_poller: JoinHandle<()>,
     right_poller: JoinHandle<()>,
     should_quit: bool,
+    paused: bool,
+    show_detail: bool,
+    log_focus: bool,
+    focus: FocusPane,
+    session: SessionOpts,
+    toast: Option<(String, Instant)>,
 }
 
 impl CompareApp {
@@ -120,6 +169,7 @@ impl CompareApp {
             session.user_agent.clone(),
             session.interval_ms,
             session.probe_headers,
+            session.probe_drm,
             l_tx,
         )
         .wrap_err("failed to start primary poller")?;
@@ -129,6 +179,7 @@ impl CompareApp {
             session.user_agent.clone(),
             session.interval_ms,
             session.probe_headers,
+            session.probe_drm,
             r_tx,
         )
         .wrap_err("failed to start backup poller")?;
@@ -141,6 +192,12 @@ impl CompareApp {
             left_poller: tokio::spawn(async move { left_poller.run().await }),
             right_poller: tokio::spawn(async move { right_poller.run().await }),
             should_quit: false,
+            paused: false,
+            show_detail: false,
+            log_focus: false,
+            focus: FocusPane::Left,
+            session,
+            toast: None,
         };
 
         enable_raw_mode()?;
@@ -156,18 +213,20 @@ impl CompareApp {
         while !app.should_quit {
             tokio::select! {
                 _ = tokio::signal::ctrl_c() => app.should_quit = true,
-                Some(ev) = app.left_rx.recv() => app.left.apply(ev),
-                Some(ev) = app.right_rx.recv() => app.right.apply(ev),
+                Some(ev) = app.left_rx.recv() => {
+                    if !app.paused {
+                        app.left.apply(ev);
+                    }
+                }
+                Some(ev) = app.right_rx.recv() => {
+                    if !app.paused {
+                        app.right.apply(ev);
+                    }
+                }
                 maybe = events.next() => {
                     match maybe {
                         Some(Ok(Event::Key(key))) if key.kind == KeyEventKind::Press => {
-                            match key.code {
-                                KeyCode::Char('q') | KeyCode::Esc => app.should_quit = true,
-                                KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                                    app.should_quit = true;
-                                }
-                                _ => {}
-                            }
+                            app.handle_key(key.code, key.modifiers)?;
                         }
                         Some(Ok(Event::Resize(_, _))) => {
                             terminal.draw(|f| draw_compare(f, &app))?;
@@ -177,6 +236,11 @@ impl CompareApp {
                     }
                 }
                 _ = frames.tick() => {
+                    if let Some((_, until)) = app.toast {
+                        if Instant::now() >= until {
+                            app.toast = None;
+                        }
+                    }
                     terminal.draw(|f| draw_compare(f, &app))?;
                 }
             }
@@ -188,6 +252,108 @@ impl CompareApp {
         execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
         Ok(())
     }
+
+    fn focused_mut(&mut self) -> &mut PaneState {
+        match self.focus {
+            FocusPane::Left => &mut self.left,
+            FocusPane::Right => &mut self.right,
+        }
+    }
+
+    fn focused(&self) -> &PaneState {
+        match self.focus {
+            FocusPane::Left => &self.left,
+            FocusPane::Right => &self.right,
+        }
+    }
+
+    fn handle_key(&mut self, code: KeyCode, mods: KeyModifiers) -> Result<()> {
+        if mods.contains(KeyModifiers::CONTROL) && code == KeyCode::Char('c') {
+            self.should_quit = true;
+            return Ok(());
+        }
+        match code {
+            KeyCode::Char('q') | KeyCode::Esc => self.should_quit = true,
+            KeyCode::Char(' ') => {
+                self.paused = !self.paused;
+                self.toast = Some((
+                    if self.paused {
+                        "paused".into()
+                    } else {
+                        "resumed".into()
+                    },
+                    Instant::now() + Duration::from_secs(TOAST_SECS),
+                ));
+            }
+            KeyCode::Char('d') | KeyCode::Char('D') => {
+                self.show_detail = !self.show_detail;
+            }
+            KeyCode::Char('l') | KeyCode::Char('L') => {
+                self.log_focus = !self.log_focus;
+            }
+            KeyCode::Tab => {
+                self.focus = match self.focus {
+                    FocusPane::Left => FocusPane::Right,
+                    FocusPane::Right => FocusPane::Left,
+                };
+            }
+            KeyCode::Char('c') | KeyCode::Char('C') => {
+                let cmd = build_curl(&self.focused().export_capture(&self.session));
+                match arboard::Clipboard::new().and_then(|mut cb| cb.set_text(cmd.clone())) {
+                    Ok(()) => {
+                        self.toast = Some((
+                            "curl copied (redacted)".into(),
+                            Instant::now() + Duration::from_secs(TOAST_SECS),
+                        ));
+                    }
+                    Err(_) => {
+                        self.focused_mut().log_tail.push(format!("curl: {cmd}"));
+                        self.toast = Some((
+                            "clipboard failed — see log".into(),
+                            Instant::now() + Duration::from_secs(TOAST_SECS),
+                        ));
+                    }
+                }
+            }
+            KeyCode::Char('h') | KeyCode::Char('H') | KeyCode::Char('e') | KeyCode::Char('E') => {
+                self.export_har()?;
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                let pane = self.focused_mut();
+                pane.log_scroll = pane.log_scroll.saturating_add(1);
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                let pane = self.focused_mut();
+                pane.log_scroll = pane.log_scroll.saturating_sub(1);
+            }
+            KeyCode::Char('?') => {
+                self.toast = Some((
+                    "Space pause · d detail · l log · c curl · h HAR · Tab focus · q quit".into(),
+                    Instant::now() + Duration::from_secs(5),
+                ));
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn export_har(&mut self) -> Result<()> {
+        fs::create_dir_all(DIAGNOSTIC_DIR)?;
+        let side = match self.focus {
+            FocusPane::Left => "A",
+            FocusPane::Right => "B",
+        };
+        let stamp = chrono::Utc::now().format("%Y%m%d_%H%M%S");
+        let path = PathBuf::from(DIAGNOSTIC_DIR).join(format!("compare_{side}_{stamp}.har"));
+        let cap = self.focused().export_capture(&self.session);
+        let doc = build_har(&cap);
+        fs::write(&path, serde_json::to_string_pretty(&doc)?)?;
+        self.toast = Some((
+            format!("HAR {}", path.display()),
+            Instant::now() + Duration::from_secs(TOAST_SECS),
+        ));
+        Ok(())
+    }
 }
 
 fn draw_compare(frame: &mut Frame, app: &CompareApp) {
@@ -197,19 +363,42 @@ fn draw_compare(frame: &mut Frame, app: &CompareApp) {
         .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
         .split(area);
 
-    draw_pane(frame, &app.left, cols[0], Color::LightGreen);
-    draw_pane(frame, &app.right, cols[1], Color::LightCyan);
+    draw_pane(
+        frame,
+        &app.left,
+        cols[0],
+        Color::LightGreen,
+        app.focus == FocusPane::Left,
+        app.show_detail,
+        app.log_focus,
+        app.paused,
+    );
+    draw_pane(
+        frame,
+        &app.right,
+        cols[1],
+        Color::LightCyan,
+        app.focus == FocusPane::Right,
+        app.show_detail,
+        app.log_focus,
+        app.paused,
+    );
 
-    let delta = diff_line(&app.left, &app.right);
+    let delta = diff_line(&app.left, &app.right, app.paused);
     let footer = Rect {
         x: area.x,
         y: area.y.saturating_add(area.height.saturating_sub(1)),
         width: area.width,
         height: 1,
     };
+    let footer_text = if let Some((msg, _)) = &app.toast {
+        format!(" {delta}  |  {msg} ")
+    } else {
+        format!(" {delta}  |  Space pause  d detail  l log  c curl  h HAR  Tab focus  q quit ")
+    };
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(
-            format!(" {delta}  |  q/Esc quit "),
+            footer_text,
             Style::default()
                 .fg(Color::Black)
                 .bg(Color::LightYellow)
@@ -219,7 +408,7 @@ fn draw_compare(frame: &mut Frame, app: &CompareApp) {
     );
 }
 
-fn diff_line(left: &PaneState, right: &PaneState) -> String {
+fn diff_line(left: &PaneState, right: &PaneState, paused: bool) -> String {
     let seq = match (left.seq(), right.seq()) {
         (Some(a), Some(b)) => {
             let d = b as i64 - a as i64;
@@ -234,6 +423,13 @@ fn diff_line(left: &PaneState, right: &PaneState) -> String {
         }
         _ => "Δ Latency: —".into(),
     };
+    let br = match (left.bitrate_kbps(), right.bitrate_kbps()) {
+        (Some(a), Some(b)) => {
+            let d = b as i64 - a as i64;
+            format!("Δ Bitrate: {d:+} kbps ({a} vs {b})")
+        }
+        _ => "Δ Bitrate: —".into(),
+    };
     let cache = format!(
         "Cache: {} vs {}",
         left.last_segment
@@ -246,22 +442,47 @@ fn diff_line(left: &PaneState, right: &PaneState) -> String {
             .map(|s| s.cdn.badge())
             .unwrap_or_else(|| "—".into())
     );
-    format!("{seq}  |  {lat}  |  {cache}")
+    let pause = if paused { " PAUSED" } else { "" };
+    format!("{seq}  |  {lat}  |  {br}  |  {cache}{pause}")
 }
 
-fn draw_pane(frame: &mut Frame, pane: &PaneState, area: Rect, accent: Color) {
+#[allow(clippy::too_many_arguments)]
+fn draw_pane(
+    frame: &mut Frame,
+    pane: &PaneState,
+    area: Rect,
+    accent: Color,
+    focused: bool,
+    show_detail: bool,
+    log_focus: bool,
+    paused: bool,
+) {
+    let title = format!(
+        " {}{}{} ",
+        pane.label,
+        if focused { " ●" } else { "" },
+        if paused { " ⏸" } else { "" }
+    );
     let block = Block::default()
         .borders(Borders::ALL)
-        .title(format!(" {} ", pane.label))
-        .border_style(Style::default().fg(accent));
+        .title(title)
+        .border_style(Style::default().fg(if focused { Color::Yellow } else { accent }));
     let inner = block.inner(area);
     frame.render_widget(block, area);
+
+    let (top_h, mid_h) = if log_focus {
+        (3u16, 2u16)
+    } else if show_detail {
+        (9, 4)
+    } else {
+        (7, 4)
+    };
 
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(7),
-            Constraint::Length(4),
+            Constraint::Length(top_h),
+            Constraint::Length(mid_h),
             Constraint::Min(3),
         ])
         .split(inner);
@@ -288,10 +509,14 @@ fn draw_pane(frame: &mut Frame, pane: &PaneState, area: Rect, accent: Color) {
         .and_then(|s| s.network.as_ref())
         .map(|n| n.display_line())
         .unwrap_or_else(|| "DNS/TCP/TLS/TTFB: —".into());
+    let br = pane
+        .bitrate_kbps()
+        .map(|b| format!("{b} kbps"))
+        .unwrap_or_else(|| "—".into());
 
-    let status = Paragraph::new(vec![
+    let mut status_lines = vec![
         Line::from(truncate_url(
-            &pane.url,
+            &redact_url(&pane.url),
             (area.width as usize).saturating_sub(4),
         )),
         Line::from(format!(
@@ -300,12 +525,32 @@ fn draw_pane(frame: &mut Frame, pane: &PaneState, area: Rect, accent: Color) {
             pane.status.message
         )),
         Line::from(format!("SHI    : {shi}")),
-        Line::from(format!("Seq    : {seq}  |  Latency: {lat}")),
+        Line::from(format!(
+            "Seq    : {seq}  |  Latency: {lat}  |  Bitrate: {br}"
+        )),
         Line::from(format!("CDN    : {cdn}")),
         Line::from(format!("Buffer : {}", pane.buffer.display())),
-        Line::from(Span::styled(net, Style::default().fg(Color::Cyan))),
-    ]);
-    frame.render_widget(status, chunks[0]);
+    ];
+    if show_detail {
+        status_lines.push(Line::from(Span::styled(
+            net,
+            Style::default().fg(Color::Cyan),
+        )));
+        if let Some(seg) = &pane.last_segment {
+            status_lines.push(Line::from(format!(
+                "Seg    : TTFB {}ms HTTP {} {}",
+                seg.ttfb_ms,
+                seg.http_status,
+                truncate_url(&redact_url(&seg.uri), 40)
+            )));
+        }
+    } else if !log_focus {
+        status_lines.push(Line::from(Span::styled(
+            net,
+            Style::default().fg(Color::Cyan),
+        )));
+    }
+    frame.render_widget(Paragraph::new(status_lines), chunks[0]);
 
     let abr = if pane.variants.is_empty() {
         "Single / no ABR ladder".into()
@@ -329,16 +574,21 @@ fn draw_pane(frame: &mut Frame, pane: &PaneState, area: Rect, accent: Color) {
         chunks[1],
     );
 
+    let visible = chunks[2].height as usize;
+    let scroll = pane.log_scroll as usize;
     let logs: Vec<Line> = pane
         .log_tail
         .iter()
         .rev()
-        .take(chunks[2].height as usize)
+        .skip(scroll)
+        .take(visible)
+        .collect::<Vec<_>>()
+        .into_iter()
         .rev()
         .map(|m| Line::from(truncate_url(m, (area.width as usize).saturating_sub(4))))
         .collect();
     frame.render_widget(
-        Paragraph::new(logs).block(Block::default().title(" Log ")),
+        Paragraph::new(logs).block(Block::default().title(" Log (j/k) ")),
         chunks[2],
     );
 }

@@ -88,6 +88,10 @@ struct Cli {
     #[arg(long = "probe-headers", alias = "range-probe")]
     probe_headers: bool,
 
+    /// Probe DRM license / `#EXT-X-KEY` URI / DASH LA_URL ClearKey endpoints (TTFB)
+    #[arg(long = "probe-drm")]
+    probe_drm: bool,
+
     /// Batch range-probe every channel; write audit_report.json/.csv
     #[arg(long = "audit", alias = "matrix")]
     audit: bool,
@@ -104,19 +108,31 @@ struct Cli {
     #[arg(long = "timeout", value_name = "SECS", default_value_t = 8)]
     timeout_secs: u64,
 
-    /// Prometheus exporter on /metrics (default port 9090)
+    /// Prometheus exporter on /metrics (default port 9184, bind 127.0.0.1)
     #[arg(
         long = "prometheus",
         alias = "metrics",
         value_name = "PORT",
         num_args = 0..=1,
-        default_missing_value = "9090"
+        default_missing_value = "9184"
     )]
     prometheus: Option<u16>,
 
     /// Alias for --prometheus <PORT>
     #[arg(long = "metrics-port", value_name = "PORT", hide = true)]
     metrics_port: Option<u16>,
+
+    /// Metrics bind address (default: 127.0.0.1)
+    #[arg(
+        long = "metrics-bind",
+        value_name = "ADDR",
+        default_value = "127.0.0.1"
+    )]
+    metrics_bind: String,
+
+    /// Optional bearer/query token required to scrape /metrics
+    #[arg(long = "metrics-token", value_name = "TOKEN")]
+    metrics_token: Option<String>,
 
     /// Webhook URL for crisis alerts (Slack / Discord / generic REST)
     #[arg(long = "webhook", value_name = "URL")]
@@ -160,6 +176,7 @@ async fn main() -> Result<ExitCode> {
             user_agent: None,
             interval_ms: None,
             probe_headers: false,
+            probe_drm: false,
             webhook_url: None,
             alert_on: "stall,shi_below_70,http_5xx".into(),
         },
@@ -178,6 +195,9 @@ async fn main() -> Result<ExitCode> {
     if cli.probe_headers {
         session.probe_headers = true;
     }
+    if cli.probe_drm {
+        session.probe_drm = true;
+    }
     if cli.webhook.is_some() {
         session.webhook_url = cli.webhook.clone();
     }
@@ -190,6 +210,14 @@ async fn main() -> Result<ExitCode> {
 
     let client = build_http_client(&session.headers, session.user_agent.clone())?;
     let metrics_port = cli.metrics_port.or(cli.prometheus);
+    let metrics_bind: std::net::IpAddr = cli
+        .metrics_bind
+        .parse()
+        .wrap_err("invalid --metrics-bind")?;
+    let metrics_token = cli
+        .metrics_token
+        .clone()
+        .or_else(|| std::env::var("STREAMTOP_METRICS_TOKEN").ok());
 
     if let Some(urls) = &cli.compare {
         if urls.len() != 2 {
@@ -227,9 +255,13 @@ async fn main() -> Result<ExitCode> {
                 ));
             }
             if cli.audit {
-                let report =
-                    run_audit(&origin, channels, session.headers.clone(), session.user_agent.clone())
-                        .await?;
+                let report = run_audit(
+                    &origin,
+                    channels,
+                    session.headers.clone(),
+                    session.user_agent.clone(),
+                )
+                .await?;
                 Ok(if report.errors == 0 && report.stalls == 0 {
                     ExitCode::SUCCESS
                 } else {
@@ -257,7 +289,7 @@ async fn main() -> Result<ExitCode> {
                 }
                 Ok(ExitCode::SUCCESS)
             } else if let Some(port) = metrics_port {
-                run_prometheus(url, session, port).await
+                run_prometheus(url, session, port, metrics_bind, metrics_token).await
             } else if cli.audit {
                 let name = Path::new(input_url)
                     .file_stem()
@@ -271,9 +303,13 @@ async fn main() -> Result<ExitCode> {
                     logo: None,
                     tvg_id: None,
                 }];
-                let report =
-                    run_audit(&origin, channels, session.headers.clone(), session.user_agent.clone())
-                        .await?;
+                let report = run_audit(
+                    &origin,
+                    channels,
+                    session.headers.clone(),
+                    session.user_agent.clone(),
+                )
+                .await?;
                 Ok(if report.errors == 0 && report.stalls == 0 {
                     ExitCode::SUCCESS
                 } else {
