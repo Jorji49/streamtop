@@ -1,5 +1,6 @@
 # streamtop
 
+[![Awesome Ratatui](https://img.shields.io/badge/awesome-ratatui-ff4400?logo=rust&logoColor=white)](https://github.com/ratatui/awesome-ratatui)
 [![Crates.io](https://img.shields.io/crates/v/streamtop.svg)](https://crates.io/crates/streamtop)
 [![Downloads](https://img.shields.io/crates/d/streamtop.svg)](https://crates.io/crates/streamtop)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
