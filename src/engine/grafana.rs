@@ -117,6 +117,13 @@ pub fn grafana_dashboard_json() -> Value {
             "short",
             [12.0, 46.0, 12.0, 6.0],
         ),
+        timeseries_panel(
+            15,
+            "Channel dropped events",
+            "streamtop_channel_dropped_total",
+            "short",
+            [0.0, 52.0, 24.0, 6.0],
+        ),
     ];
 
     json!({
@@ -242,6 +249,7 @@ mod tests {
             "streamtop_drm_license_ttfb_seconds",
             "streamtop_llhls_part_duration_seconds",
             "streamtop_codec_mismatch_total",
+            "streamtop_channel_dropped_total",
         ] {
             assert!(text.contains(needle), "missing {needle}");
         }
