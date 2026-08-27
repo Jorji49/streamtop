@@ -31,7 +31,11 @@ scoop install streamtop/streamtop
 
 ### Windows (Winget)
 
-Package submission is in review ([PR #424450](https://github.com/microsoft/winget-pkgs/pull/424450) for 0.3.2). Manifests for 0.3.3 live under `dist/winget/` and will be submitted after merge. After the package is available:
+In review:
+- [PR #425211](https://github.com/microsoft/winget-pkgs/pull/425211) — **0.3.3** (preferred)
+- [PR #424450](https://github.com/microsoft/winget-pkgs/pull/424450) — 0.3.2 (superseded)
+
+After merge:
 
 ```powershell
 winget install streamtop
@@ -50,7 +54,15 @@ brew install --formula https://raw.githubusercontent.com/Jorji49/streamtop/main/
 
 ### Arch Linux (AUR)
 
-A packaging template lives at `dist/aur/PKGBUILD`. The package is not published to the AUR yet.
+Official AUR listing is pending. Until then, build from the packaging mirror:
+
+```bash
+git clone https://github.com/Jorji49/streamtop-bin.git
+cd streamtop-bin
+makepkg -si
+```
+
+The same `PKGBUILD` also lives at `dist/aur/PKGBUILD` in the main repo.
 
 ### Docker
 
