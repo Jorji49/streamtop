@@ -7,7 +7,7 @@ use std::path::Path;
 
 pub const GRAFANA_DASHBOARD_FILENAME: &str = "streamtop-grafana.json";
 
-/// Write a ready-to-import Grafana dashboard that scrapes streamtop `--prometheus` metrics.
+/// Write a Grafana dashboard JSON file for streamtop `--prometheus` metrics.
 pub fn export_grafana_dashboard(path: impl AsRef<Path>) -> Result<()> {
     let doc = grafana_dashboard_json();
     let text = serde_json::to_string_pretty(&doc).wrap_err("serialize grafana dashboard")?;

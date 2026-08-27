@@ -60,7 +60,7 @@ struct Cli {
     #[arg(long = "export-grafana")]
     export_grafana: bool,
 
-    /// After a short poll, print a ticket-ready curl for the last segment
+    /// After a short poll, print a curl command for the last segment
     #[arg(long = "export-curl")]
     export_curl: bool,
 
@@ -134,7 +134,7 @@ struct Cli {
     #[arg(long = "metrics-token", value_name = "TOKEN")]
     metrics_token: Option<String>,
 
-    /// Webhook URL for crisis alerts (Slack / Discord / generic REST)
+    /// Webhook URL for alerts (Slack / Discord / generic REST)
     #[arg(long = "webhook", value_name = "URL")]
     webhook: Option<String>,
 
@@ -214,6 +214,9 @@ async fn main() -> Result<ExitCode> {
     }
     if cli.allow_insecure_webhooks {
         session.allow_insecure_webhooks = true;
+        eprintln!(
+            "warning: --allow-insecure-webhooks enables private/link-local/metadata webhook targets"
+        );
     }
     if let Some(hook) = &session.webhook_url {
         streamtop::engine::webhook::validate_webhook_url(hook, session.allow_insecure_webhooks)
@@ -226,10 +229,15 @@ async fn main() -> Result<ExitCode> {
         .metrics_bind
         .parse()
         .wrap_err("invalid --metrics-bind")?;
-    let metrics_token = cli
-        .metrics_token
-        .clone()
-        .or_else(|| std::env::var("STREAMTOP_METRICS_TOKEN").ok());
+    let metrics_token = streamtop::engine::metrics::normalize_metrics_token(
+        cli.metrics_token
+            .clone()
+            .or_else(|| std::env::var("STREAMTOP_METRICS_TOKEN").ok()),
+    );
+    if metrics_port.is_some() {
+        streamtop::engine::metrics::require_metrics_token_for_bind(metrics_bind, &metrics_token)
+            .wrap_err("metrics bind security check failed")?;
+    }
 
     if let Some(urls) = &cli.compare {
         if urls.len() != 2 {

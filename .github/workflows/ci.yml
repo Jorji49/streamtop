@@ -38,6 +38,23 @@ jobs:
       - name: cargo test
         run: cargo test --all-targets
 
+  audit:
+    name: cargo audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-audit
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+
+      - name: cargo audit
+        run: cargo audit
+
   smoke-live:
     name: live HLS smoke
     runs-on: ubuntu-latest

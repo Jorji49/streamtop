@@ -2,6 +2,8 @@
 
 use std::borrow::Cow;
 
+use url::Url;
+
 const SENSITIVE_HEADER_NAMES: &[&str] = &[
     "authorization",
     "cookie",
@@ -18,17 +20,24 @@ const SENSITIVE_HEADER_NAMES: &[&str] = &[
 const SENSITIVE_QUERY_KEYS: &[&str] = &[
     "token",
     "access_token",
+    "id_token",
+    "refresh_token",
+    "jwt",
     "auth",
     "key",
     "api_key",
     "apikey",
     "signature",
     "sig",
+    "policy",
+    "hdnts",
+    "hdnea",
     "x-amz-signature",
     "x-amz-credential",
     "x-amz-security-token",
     "password",
     "secret",
+    "session",
 ];
 
 pub const REDACTED: &str = "[REDACTED]";
@@ -58,17 +67,51 @@ pub fn is_sensitive_header(name: &str) -> bool {
         || (n.contains("key") && !n.contains("keyformat"))
 }
 
-/// Redact sensitive query parameters in a URL (and fragment).
+/// Redact userinfo, sensitive query parameters, and sensitive fragment params.
 pub fn redact_url(url: &str) -> String {
-    let Some((base, query)) = url.split_once('?') else {
-        return url.to_string();
+    if let Ok(mut parsed) = Url::parse(url) {
+        let had_userinfo = !parsed.username().is_empty() || parsed.password().is_some();
+        if had_userinfo {
+            let _ = parsed.set_username("");
+            let _ = parsed.set_password(None);
+        }
+        let mut out = parsed.to_string();
+        // Url::to_string may re-encode; still scrub query/fragment by string pass.
+        out = scrub_query_and_fragment(&out);
+        if had_userinfo && !out.contains(REDACTED) {
+            // Ensure credentials never leak even if query scrub was a no-op.
+            if let Ok(mut again) = Url::parse(&out) {
+                let _ = again.set_username("");
+                let _ = again.set_password(None);
+                return again.to_string();
+            }
+        }
+        return out;
+    }
+    scrub_query_and_fragment(url)
+}
+
+fn scrub_query_and_fragment(url: &str) -> String {
+    let (without_frag, frag) = match url.split_once('#') {
+        Some((b, f)) => (b, Some(f)),
+        None => (url, None),
     };
-    let (query, frag) = match query.split_once('#') {
-        Some((q, f)) => (q, Some(f)),
-        None => (query, None),
+    let Some((base, query)) = without_frag.split_once('?') else {
+        return match frag {
+            Some(f) => format!("{without_frag}#{}", scrub_param_string(f)),
+            None => without_frag.to_string(),
+        };
     };
-    let parts: Vec<String> = query
-        .split('&')
+    let mut out = format!("{base}?{}", scrub_param_string(query));
+    if let Some(f) = frag {
+        out.push('#');
+        out.push_str(&scrub_param_string(f));
+    }
+    out
+}
+
+fn scrub_param_string(raw: &str) -> String {
+    raw.split('&')
         .filter(|p| !p.is_empty())
         .map(|pair| {
             let (k, v) = pair.split_once('=').unwrap_or((pair, ""));
@@ -80,17 +123,8 @@ pub fn redact_url(url: &str) -> String {
                 format!("{k}={v}")
             }
         })
-        .collect();
-    let mut out = if parts.is_empty() {
-        base.to_string()
-    } else {
-        format!("{base}?{}", parts.join("&"))
-    };
-    if let Some(f) = frag {
-        out.push('#');
-        out.push_str(f);
-    }
-    out
+        .collect::<Vec<_>>()
+        .join("&")
 }
 
 fn is_sensitive_query_key(key: &str) -> bool {
@@ -100,6 +134,7 @@ fn is_sensitive_query_key(key: &str) -> bool {
         || k.contains("token")
         || k.contains("signature")
         || k.contains("secret")
+        || k.contains("password")
         || (k.contains("key") && k != "keyformat")
 }
 
@@ -116,7 +151,6 @@ pub fn redact_text(text: &str) -> String {
     ] {
         out = redact_inline_header(&out, name);
     }
-    // Rough URL scrubbing for embedded http(s) links
     if out.contains("http") {
         out = scrub_urls_in_text(&out);
     }
@@ -138,7 +172,6 @@ fn redact_inline_header(text: &str, name: &str) -> String {
         let tail = &rest[after..];
         let trimmed = tail.trim_start();
         let skipped = tail.len() - trimmed.len();
-        // Consume the full header value (spaces allowed) until a structural delimiter.
         let end = trimmed
             .find(['\n', '\r', '"', '\'', ',', '}'])
             .unwrap_or(trimmed.len());
@@ -221,5 +254,28 @@ mod tests {
     fn redacts_text_cookie() {
         let t = redact_text("Cookie: session=abc\nOK");
         assert!(t.contains(&format!("Cookie: {REDACTED}")));
+    }
+
+    #[test]
+    fn redacts_userinfo() {
+        let r = redact_url("https://user:sekrit@cdn.example/path?ok=1");
+        assert!(!r.contains("sekrit"));
+        assert!(!r.contains("user:"));
+        assert!(r.contains("cdn.example"));
+    }
+
+    #[test]
+    fn redacts_fragment_token() {
+        let r = redact_url("https://cdn.example/x#token=abc&n=1");
+        assert!(r.contains("token=[REDACTED]"));
+        assert!(r.contains("n=1"));
+    }
+
+    #[test]
+    fn redacts_cdn_policy_and_jwt() {
+        let r = redact_url("https://cdn.example/x?Policy=abc&jwt=eyJ&hdnts=1");
+        assert!(r.contains("Policy=[REDACTED]"));
+        assert!(r.contains("jwt=[REDACTED]"));
+        assert!(r.contains("hdnts=[REDACTED]"));
     }
 }
