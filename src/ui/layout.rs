@@ -4,6 +4,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Cell, Clear, Paragraph, Row, Sparkline, Table};
 use ratatui::Frame;
 
+use crate::engine::redact::redact_url;
 use crate::models::{
     format_dvr_window, format_url_mid_ellipsis, DiagCategory, LatencyState, LogLevel,
     StreamStatusKind,
@@ -98,7 +99,10 @@ fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
         .as_ref()
         .map(|p| format_dvr_window(p.window_segments, p.window_secs));
 
-    let url = format_url_mid_ellipsis(&app.active_url, area.width.saturating_sub(14) as usize);
+    let url = format_url_mid_ellipsis(
+        &redact_url(&app.active_url),
+        area.width.saturating_sub(14) as usize,
+    );
     let buf = app.buffer.display();
     let buf_color = if app.buffer.stall_risk_pct >= 50 {
         Color::Red

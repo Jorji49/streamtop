@@ -361,6 +361,7 @@ struct MetricsAuth {
 }
 
 /// Validate `Authorization: Bearer <token>` using constant-time comparison.
+/// Scheme matching is case-insensitive (`Bearer` / `bearer` / `BEARER`).
 pub fn authorize_metrics_bearer(headers: &HeaderMap, expected: &str) -> bool {
     let Some(value) = headers
         .get(header::AUTHORIZATION)
@@ -368,13 +369,44 @@ pub fn authorize_metrics_bearer(headers: &HeaderMap, expected: &str) -> bool {
     else {
         return false;
     };
-    let Some(token) = value.strip_prefix("Bearer ") else {
+    let value = value.trim();
+    let Some((scheme, token)) = value.split_once(char::is_whitespace) else {
         return false;
     };
-    if token.len() != expected.len() {
+    if !scheme.eq_ignore_ascii_case("bearer") {
+        return false;
+    }
+    let token = token.trim();
+    if token.is_empty() || expected.is_empty() || token.len() != expected.len() {
         return false;
     }
     token.as_bytes().ct_eq(expected.as_bytes()).into()
+}
+
+/// Non-loopback binds must use a non-empty `--metrics-token` (or `STREAMTOP_METRICS_TOKEN`).
+pub fn require_metrics_token_for_bind(bind: IpAddr, token: &Option<String>) -> Result<()> {
+    if bind.is_loopback() {
+        return Ok(());
+    }
+    match token {
+        Some(t) if !t.trim().is_empty() => Ok(()),
+        _ => Err(color_eyre::eyre::eyre!(
+            "--metrics-bind {bind} is not loopback; set a non-empty --metrics-token \
+             (or STREAMTOP_METRICS_TOKEN) so /metrics is not publicly scrapable"
+        )),
+    }
+}
+
+/// Normalize metrics token: empty / whitespace-only → `None`.
+pub fn normalize_metrics_token(token: Option<String>) -> Option<String> {
+    token.and_then(|t| {
+        let t = t.trim().to_string();
+        if t.is_empty() {
+            None
+        } else {
+            Some(t)
+        }
+    })
 }
 
 async fn metrics_handler(
@@ -542,5 +574,31 @@ mod tests {
         let mut headers = HeaderMap::new();
         headers.insert(header::AUTHORIZATION, "Bearer other".parse().unwrap());
         assert!(!authorize_metrics_bearer(&headers, "secret-token"));
+    }
+
+    #[test]
+    fn bearer_auth_accepts_case_insensitive_scheme() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::AUTHORIZATION,
+            "bearer secret-token".parse().unwrap(),
+        );
+        assert!(authorize_metrics_bearer(&headers, "secret-token"));
+    }
+
+    #[test]
+    fn non_loopback_bind_requires_token() {
+        assert!(require_metrics_token_for_bind(IpAddr::V4(Ipv4Addr::UNSPECIFIED), &None).is_err());
+        assert!(require_metrics_token_for_bind(
+            IpAddr::V4(Ipv4Addr::UNSPECIFIED),
+            &Some("  ".into())
+        )
+        .is_err());
+        assert!(require_metrics_token_for_bind(
+            IpAddr::V4(Ipv4Addr::UNSPECIFIED),
+            &Some("secret".into())
+        )
+        .is_ok());
+        assert!(require_metrics_token_for_bind(IpAddr::V4(Ipv4Addr::LOCALHOST), &None).is_ok());
     }
 }

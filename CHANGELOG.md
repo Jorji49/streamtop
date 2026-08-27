@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.3.4
+
+- Security: `--metrics-bind` outside loopback requires a non-empty `--metrics-token` / `STREAMTOP_METRICS_TOKEN`
+- Security: `--probe-drm` applies webhook SSRF checks (private/link-local/metadata) and disables HTTP redirects
+- Security: metrics Bearer scheme is case-insensitive; empty tokens ignored
+- Redaction: scrub URL userinfo, fragment params, and extra CDN query keys; TUI status URL uses `redact_url`
+- Webhook SSRF: block additional metadata / `.local` hostnames
+- Docs: Docker metrics example includes required token; trim marketing fluff in CLI help / Grafana docs
+- CI: `cargo audit` job on check path
+
 ## 0.3.3
 
 - Cross-segment GOP interval: track keyframe PTS across consecutive segments; expose `gop_duration_sec` and `is_fixed_cadence` on wire probe / diagnostic JSON
@@ -22,7 +32,7 @@
 - Tests: local mock poller, compare pause buffer, audit redaction/mock
 - Fix cargo-binstall: valid `pkg-fmt` (`tgz`/`zip`) and release URLs that match published assets (`.tar.gz` / `.zip`)
 - Sync `Cargo.lock` package version so Docker `--locked` builds succeed on GHCR publish
-- Slack/Discord webhooks, redact module, CDN/DRM/SCTE depth, Prometheus histograms, compare parity
+- Slack/Discord webhooks, redact module, CDN/DRM/SCTE depth, Prometheus histograms, compare mode parity
 
 ## 0.3.1
 

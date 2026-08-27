@@ -896,9 +896,35 @@ impl ManifestPoller {
                 }
             }
         };
+        // Same SSRF policy as webhooks: block private/link-local/metadata targets.
+        if let Err(err) = crate::engine::webhook::validate_webhook_url(&key_url, false) {
+            drm.license_error = Some(format!("DRM probe blocked: {err}"));
+            self.emit_log(
+                LogLevel::Warn,
+                DiagCategory::Drm,
+                format!(
+                    "License/key probe blocked ({}): {err}",
+                    crate::engine::redact::redact_url(&key_url)
+                ),
+            );
+            return;
+        }
+        let Ok(probe_client) = Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .timeout(Duration::from_secs(10))
+            .connect_timeout(Duration::from_secs(5))
+            .build()
+        else {
+            drm.license_error = Some("failed to build DRM probe client".into());
+            return;
+        };
         let started = Instant::now();
-        match self
-            .client
+        // Re-validate immediately before request (DNS rebinding mitigation).
+        if let Err(err) = crate::engine::webhook::validate_webhook_url(&key_url, false) {
+            drm.license_error = Some(format!("DRM probe blocked: {err}"));
+            return;
+        }
+        match probe_client
             .get(&key_url)
             .header(RANGE, "bytes=0-0")
             .send()
