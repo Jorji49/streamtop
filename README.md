@@ -31,7 +31,7 @@ scoop install streamtop/streamtop
 
 ### Windows (Winget)
 
-Package submission is in review ([PR #424450](https://github.com/microsoft/winget-pkgs/pull/424450)). After merge:
+Package submission is in review ([PR #424450](https://github.com/microsoft/winget-pkgs/pull/424450) for 0.3.2). Manifests for 0.3.3 live under `dist/winget/` and will be submitted after merge. After the package is available:
 
 ```powershell
 winget install streamtop

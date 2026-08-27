@@ -4,7 +4,7 @@ class Streamtop < Formula
   desc "Terminal diagnostic engine for live HLS, DASH, and IPTV streams"
   homepage "https://github.com/Jorji49/streamtop"
   url "https://github.com/Jorji49/streamtop/archive/refs/tags/v0.3.3.tar.gz"
-  sha256 "64262606124eb2e70cfacb42f1419009f383715cbfaca9f5cda4f24442a947ae"
+  sha256 "a5daeecd7859da506c8a5ac2141994699cbea909aab241d6171fefb38dc6907e"
   license "MIT"
   head "https://github.com/Jorji49/streamtop.git", branch: "main"
 

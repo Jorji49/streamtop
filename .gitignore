@@ -8,12 +8,17 @@
 !/dist/winget/**
 
 /target/
+/stage/
+/release-assets/
+/verify-hashes/
 diagnostics/
 *.log
 audit_report.*
 streamtop_diagnostic*.json
 streamtop_snapshot*.json
 streamtop-grafana.json
+streamtop-*.zip
+streamtop-*.tar.gz
 .env
 .env.*
 !.env.example

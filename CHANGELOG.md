@@ -6,6 +6,7 @@
 - Wire probe: GOP and audio codec info in TUI (IDR/Delta badges, Last Segment GOP/Audio lines)
 - Metrics auth: Bearer-only (`Authorization: Bearer`); query `?token=` removed; constant-time token compare
 - Telemetry: `streamtop_channel_dropped_total` Prometheus counter and `dropped_events` in summary / diagnostic JSON
+- Packaging: Scoop / Winget / Homebrew / AUR manifests at 0.3.3 with release-verified SHA256 hashes
 - Tests: GOP cadence, metrics Bearer auth, channel drop counter
 
 ## 0.3.2
