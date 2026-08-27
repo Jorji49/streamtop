@@ -6,7 +6,7 @@
 [![Downloads](https://img.shields.io/crates/d/streamtop.svg)](https://crates.io/crates/streamtop)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-Live HLS, DASH, and IPTV stream diagnostics in the terminal. Current release: **v0.3.3**.
+Live HLS, DASH, and IPTV stream diagnostics in the terminal. Current release: **v0.3.4**.
 
 <p align="center">
   <img width="700" alt="streamtop demo" src="https://github.com/user-attachments/assets/6b5428ae-a7ea-484b-8f4f-308953a142a7" />
@@ -14,7 +14,7 @@ Live HLS, DASH, and IPTV stream diagnostics in the terminal. Current release: **
 
 ## Installation
 
-Verify after install: `streamtop --version` → `streamtop 0.3.3`.
+Verify after install: `streamtop --version` → `streamtop 0.3.4`.
 
 ### Rust
 
@@ -34,7 +34,7 @@ scoop update streamtop   # if an older copy was cached
 
 ### Windows (Winget)
 
-Package **0.3.3** is in review: [PR #425211](https://github.com/microsoft/winget-pkgs/pull/425211). After merge:
+Package **0.3.4** will be submitted to winget-pkgs after this release. Previous: [PR #425211](https://github.com/microsoft/winget-pkgs/pull/425211) (0.3.3). After merge:
 
 ```powershell
 winget install streamtop
@@ -54,7 +54,7 @@ brew install --formula https://raw.githubusercontent.com/Jorji49/streamtop/main/
 
 ### Arch Linux
 
-Official AUR listing is pending. Build **0.3.3** from the packaging mirror:
+Official AUR listing is pending. Build **0.3.4** from the packaging mirror:
 
 ```bash
 git clone https://github.com/Jorji49/streamtop-bin.git
@@ -67,14 +67,15 @@ makepkg -si
 ### Docker
 
 ```bash
-docker run -it --rm ghcr.io/jorji49/streamtop:v0.3.3 <URL>
+docker run -it --rm ghcr.io/jorji49/streamtop:v0.3.4 <URL>
 # or rolling:
 docker run -it --rm ghcr.io/jorji49/streamtop:latest <URL>
 ```
 
 ```bash
-docker run --rm -p 9184:9184 ghcr.io/jorji49/streamtop:v0.3.3 \
-  <URL> --prometheus --metrics-bind 0.0.0.0
+docker run --rm -p 9184:9184 -e STREAMTOP_METRICS_TOKEN=change-me \
+  ghcr.io/jorji49/streamtop:v0.3.4 \
+  <URL> --prometheus --metrics-bind 0.0.0.0 --metrics-token "$STREAMTOP_METRICS_TOKEN"
 ```
 
 ### Debian / Ubuntu
@@ -87,7 +88,7 @@ sudo dpkg -i target/debian/streamtop_*.deb
 
 ### From source / GitHub Release
 
-Latest binaries: [v0.3.3](https://github.com/Jorji49/streamtop/releases/tag/v0.3.3)
+Latest binaries: [v0.3.4](https://github.com/Jorji49/streamtop/releases/tag/v0.3.4)
 
 ```bash
 git clone https://github.com/Jorji49/streamtop.git

@@ -233,7 +233,11 @@ pub fn validate_webhook_url(raw: &str, allow_insecure: bool) -> Result<()> {
     if host_l == "localhost"
         || host_l.ends_with(".localhost")
         || host_l == "metadata.google.internal"
+        || host_l == "metadata.azure.com"
+        || host_l == "metadata.goog"
+        || host_l == "instance-data.ec2.internal"
         || host_l.ends_with(".internal")
+        || host_l.ends_with(".local")
     {
         return Err(eyre!(
             "webhook host `{host}` blocked (loopback/internal); use --allow-insecure-webhooks to override"
