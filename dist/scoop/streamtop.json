@@ -1,12 +1,12 @@
 {
-    "version":  "0.3.3",
+    "version":  "0.3.4",
     "description":  "Terminal diagnostic engine for live HLS, DASH, and IPTV streams",
     "homepage":  "https://github.com/Jorji49/streamtop",
     "license":  "MIT",
     "architecture":  {
                          "64bit":  {
-                                       "url":  "https://github.com/Jorji49/streamtop/releases/download/v0.3.3/streamtop-windows-x86_64-0.3.3.zip",
-                                       "hash":  "9cea4dac379eedb714f4a6c26d96533e5ab7f260a68e0bd9de01916f6930d1f4"
+                                       "url":  "https://github.com/Jorji49/streamtop/releases/download/v0.3.4/streamtop-windows-x86_64-0.3.4.zip",
+                                       "hash":  "5bb8c5149c76db8dfb81b086da4aff09e34bfb31c0f64e95e52f7f982d1e7d54"
                                    }
                      },
     "bin":  "streamtop.exe",
