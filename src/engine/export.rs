@@ -1,4 +1,4 @@
-//! curl / HAR export for ticket attach (Jira, GitHub Issues).
+//! curl / HAR export for debugging and incident reports.
 
 use std::fs;
 use std::path::Path;
@@ -93,7 +93,7 @@ pub fn build_har(cap: &ExportCapture) -> serde_json::Value {
                 "version": env!("CARGO_PKG_VERSION")
             },
             "comment": format!(
-                "Exported {started}; range-probe={} (2KB audit / {}B deep wire constants); secrets redacted",
+                "Exported {started}; range-probe={} (2KB audit / {}B wire probe); secrets redacted",
                 cap.probe_headers, DEEP_WIRE_PROBE_BYTES
             ),
             "entries": entries

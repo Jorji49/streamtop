@@ -1,10 +1,10 @@
-# Example: copy to ~/.config/streamtop/config.toml
+# Example → ~/.config/streamtop/config.toml
 # Windows: %APPDATA%\streamtop\config.toml
-# Or set STREAMTOP_CONFIG=/path/to/config.toml
+# Or: STREAMTOP_CONFIG=/path/to/config.toml
 
 [default]
 # headers = ["X-Forwarded-For: 1.2.3.4"]
-# user_agent = "streamtop-ops/1.0"
+# user_agent = "MyPlayer/1.0"
 # probe_headers = true
 # probe_drm = false
 # webhook = "https://hooks.slack.com/services/..."

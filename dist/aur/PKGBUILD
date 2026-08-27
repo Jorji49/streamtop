@@ -3,7 +3,7 @@
 pkgname=streamtop-bin
 pkgver=0.3.4
 pkgrel=1
-pkgdesc="Terminal diagnostic engine for live HLS, DASH, and IPTV streams"
+pkgdesc="HLS/DASH/IPTV stream diagnostics in the terminal"
 arch=('x86_64')
 url="https://github.com/Jorji49/streamtop"
 license=('MIT')
