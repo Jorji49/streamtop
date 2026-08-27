@@ -11,6 +11,7 @@
 /stage/
 /release-assets/
 /verify-hashes/
+/check-rel/
 diagnostics/
 *.log
 audit_report.*
@@ -19,9 +20,12 @@ streamtop_snapshot*.json
 streamtop-grafana.json
 streamtop-*.zip
 streamtop-*.tar.gz
+streamtop-0.*.tar.gz
 .env
 .env.*
 !.env.example
 .DS_Store
 Thumbs.db
 *.pdb
+*.exe
+!**/src/**/*.exe
