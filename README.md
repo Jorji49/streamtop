@@ -34,7 +34,7 @@ scoop update streamtop   # if an older copy was cached
 
 ### Windows (Winget)
 
-Package **0.3.4** will be submitted to winget-pkgs after this release. Previous: [PR #425211](https://github.com/microsoft/winget-pkgs/pull/425211) (0.3.3). After merge:
+Package **0.3.4** winget PR is submitted after each release (see microsoft/winget-pkgs). After merge:
 
 ```powershell
 winget install streamtop

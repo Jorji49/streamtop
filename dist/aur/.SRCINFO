@@ -1,16 +1,16 @@
 pkgbase = streamtop-bin
 pkgname = streamtop-bin
-pkgver = 0.3.3
-pkgrel = 2
+pkgver = 0.3.4
+pkgrel = 1
 pkgdesc = Terminal diagnostic engine for live HLS, DASH, and IPTV streams
 url = https://github.com/Jorji49/streamtop
 arch = x86_64
 license = MIT
 provides = streamtop
 conflicts = streamtop
-source = streamtop-bin-0.3.3.tar.gz::https://github.com/Jorji49/streamtop/releases/download/v0.3.3/streamtop-x86_64-unknown-linux-gnu.tar.gz
-source = LICENSE::https://raw.githubusercontent.com/Jorji49/streamtop/v0.3.3/LICENSE
-sha256sums = 731952b8c1d355060bbea7fd236a3b4dfe64744f9f8fa52de29d3c9515cd3941
+source = streamtop-bin-0.3.4.tar.gz::https://github.com/Jorji49/streamtop/releases/download/v0.3.4/streamtop-x86_64-unknown-linux-gnu.tar.gz
+source = LICENSE::https://raw.githubusercontent.com/Jorji49/streamtop/v0.3.4/LICENSE
+sha256sums = 0e1140ec9bd0fd3e627d51470b664506c172a5e98f78df1483cf3b5849358e2a
 sha256sums = SKIP
 
 pkgname = streamtop-bin

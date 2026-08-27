@@ -1,8 +1,8 @@
 # Maintainer: Ahmet Kayra Kama <kamaahmetkayra@gmail.com>
 # Contributor: Ahmet Kayra Kama <kamaahmetkayra@gmail.com>
 pkgname=streamtop-bin
-pkgver=0.3.3
-pkgrel=2
+pkgver=0.3.4
+pkgrel=1
 pkgdesc="Terminal diagnostic engine for live HLS, DASH, and IPTV streams"
 arch=('x86_64')
 url="https://github.com/Jorji49/streamtop"
@@ -12,7 +12,7 @@ provides=('streamtop')
 conflicts=('streamtop')
 source=("${pkgname}-${pkgver}.tar.gz::https://github.com/Jorji49/streamtop/releases/download/v${pkgver}/streamtop-x86_64-unknown-linux-gnu.tar.gz"
         "LICENSE::https://raw.githubusercontent.com/Jorji49/streamtop/v${pkgver}/LICENSE")
-sha256sums=('731952b8c1d355060bbea7fd236a3b4dfe64744f9f8fa52de29d3c9515cd3941'
+sha256sums=('0e1140ec9bd0fd3e627d51470b664506c172a5e98f78df1483cf3b5849358e2a'
             'SKIP')
 
 package() {
