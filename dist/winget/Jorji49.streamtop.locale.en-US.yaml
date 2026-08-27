@@ -12,8 +12,8 @@ PackageUrl: https://github.com/Jorji49/streamtop
 License: MIT
 LicenseUrl: https://github.com/Jorji49/streamtop/blob/main/LICENSE
 Copyright: Copyright (c) 2026 Ahmet Kayra Kama
-ShortDescription: Terminal diagnostic engine for live HLS, DASH, and IPTV streams
-Description: Live HLS, DASH, and IPTV stream diagnostics TUI with wire probe (GOP cadence, audio), LL-HLS telemetry, SCTE-35, Prometheus (Bearer metrics), and Quick Play.
+ShortDescription: HLS/DASH/IPTV stream diagnostics in the terminal
+Description: Diagnose live HLS, DASH, and IPTV streams. Wire probe (GOP, audio), LL-HLS, SCTE-35, Prometheus metrics with Bearer auth, and Quick Play.
 Moniker: streamtop
 Tags:
   - hls

@@ -52,23 +52,23 @@ struct Cli {
     #[arg(required_unless_present_any = ["compare", "export_grafana"])]
     url: Option<String>,
 
-    /// Split-screen compare two live streams (Primary | Backup)
+    /// Compare two live streams side by side
     #[arg(long = "compare", num_args = 2, value_names = ["URL_1", "URL_2"])]
     compare: Option<Vec<String>>,
 
-    /// Write Grafana dashboard JSON for Prometheus metrics (streamtop-grafana.json) and exit
+    /// Write streamtop-grafana.json for Prometheus and exit
     #[arg(long = "export-grafana")]
     export_grafana: bool,
 
-    /// After a short poll, print a curl command for the last segment
+    /// Print a curl command for the last segment after a short poll
     #[arg(long = "export-curl")]
     export_curl: bool,
 
-    /// After a short poll, write HAR 1.2 for manifest + last segment
+    /// Write HAR 1.2 for manifest + last segment after a short poll
     #[arg(long = "export-har", value_name = "FILE")]
     export_har: Option<PathBufArg>,
 
-    /// Load named profile from ~/.config/streamtop/config.toml
+    /// Named profile from ~/.config/streamtop/config.toml
     #[arg(long = "profile", value_name = "NAME")]
     profile: Option<String>,
 
@@ -76,7 +76,7 @@ struct Cli {
     #[arg(short = 'H', long = "header", value_name = "KEY: VALUE")]
     headers: Vec<String>,
 
-    /// Custom User-Agent
+    /// User-Agent string
     #[arg(short = 'A', long = "user-agent")]
     user_agent: Option<String>,
 
@@ -84,31 +84,31 @@ struct Cli {
     #[arg(short = 'i', long = "interval", value_name = "MS")]
     interval_ms: Option<u64>,
 
-    /// Fetch only Range bytes for deep wire probe (no full segment download)
+    /// Range-request the start of each segment only (wire/header probe)
     #[arg(long = "probe-headers", alias = "range-probe")]
     probe_headers: bool,
 
-    /// Probe DRM license / `#EXT-X-KEY` URI / DASH LA_URL ClearKey endpoints (TTFB)
+    /// Probe DRM license / EXT-X-KEY / DASH LA_URL ClearKey TTFB
     #[arg(long = "probe-drm")]
     probe_drm: bool,
 
-    /// Batch range-probe every channel; write audit_report.json/.csv
+    /// Range-probe every channel; write audit_report.json/.csv
     #[arg(long = "audit", alias = "matrix")]
     audit: bool,
 
-    /// Headless summary (no TUI); print PASS/FAIL
+    /// Headless PASS/FAIL summary (no TUI)
     #[arg(long = "summary", alias = "headless")]
     summary: bool,
 
-    /// Summary output: text or json (`streamtop.summary.v1`)
+    /// Summary format: text or json (streamtop.summary.v1)
     #[arg(long = "summary-format", value_enum, default_value_t = SummaryFormatArg::Text)]
     summary_format: SummaryFormatArg,
 
-    /// Seconds to listen in --summary / export modes (default: 8)
+    /// Listen seconds for --summary / export modes (default: 8)
     #[arg(long = "timeout", value_name = "SECS", default_value_t = 8)]
     timeout_secs: u64,
 
-    /// Prometheus exporter on /metrics (default port 9184, bind 127.0.0.1)
+    /// Serve Prometheus /metrics (default port 9184, bind 127.0.0.1)
     #[arg(
         long = "prometheus",
         alias = "metrics",
@@ -122,7 +122,7 @@ struct Cli {
     #[arg(long = "metrics-port", value_name = "PORT", hide = true)]
     metrics_port: Option<u16>,
 
-    /// Metrics bind address (default: 127.0.0.1)
+    /// Metrics listen address (default: 127.0.0.1)
     #[arg(
         long = "metrics-bind",
         value_name = "ADDR",
@@ -130,24 +130,24 @@ struct Cli {
     )]
     metrics_bind: String,
 
-    /// Bearer token required to scrape /metrics (Authorization: Bearer only)
+    /// Bearer token for /metrics (Authorization: Bearer …)
     #[arg(long = "metrics-token", value_name = "TOKEN")]
     metrics_token: Option<String>,
 
-    /// Webhook URL for alerts (Slack / Discord / generic REST)
+    /// Webhook URL (Slack / Discord / HTTP)
     #[arg(long = "webhook", value_name = "URL")]
     webhook: Option<String>,
 
-    /// Comma-separated alert kinds: stall,shi_below_70,http_5xx,mismatch,ad_start
+    /// Alert kinds: stall,shi_below_70,http_5xx,mismatch,ad_start
     #[arg(long = "alert-on", value_name = "EVENTS")]
     alert_on: Option<String>,
 
-    /// Allow webhooks to private/link-local/metadata hosts (local tests only; default: blocked)
+    /// Allow webhook targets on private/link-local/metadata hosts (tests only)
     #[arg(long = "allow-insecure-webhooks")]
     allow_insecure_webhooks: bool,
 }
 
-/// Clap-friendly path wrapper.
+/// Path argument for clap.
 #[derive(Debug, Clone)]
 struct PathBufArg(std::path::PathBuf);
 
@@ -169,7 +169,7 @@ async fn main() -> Result<ExitCode> {
 
     if cli.export_grafana {
         export_grafana_dashboard(GRAFANA_DASHBOARD_FILENAME)?;
-        eprintln!("Wrote {GRAFANA_DASHBOARD_FILENAME} (import into Grafana; scrape streamtop --prometheus)");
+        eprintln!("Wrote {GRAFANA_DASHBOARD_FILENAME}");
         return Ok(ExitCode::SUCCESS);
     }
 
