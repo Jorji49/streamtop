@@ -1,6 +1,6 @@
 {
     "version":  "0.3.4",
-    "description":  "Terminal diagnostic engine for live HLS, DASH, and IPTV streams",
+    "description":  "HLS/DASH/IPTV stream diagnostics in the terminal",
     "homepage":  "https://github.com/Jorji49/streamtop",
     "license":  "MIT",
     "architecture":  {

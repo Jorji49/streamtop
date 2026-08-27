@@ -13,7 +13,7 @@ pub const STALL_MULTIPLIER: f64 = 1.5;
 pub const TTFB_SPIKE_MS: u64 = 500;
 pub const BUFFER_STALL_THRESHOLD_SECS: f64 = 4.0;
 pub const RANGE_PROBE_BYTES: u64 = 2048;
-/// Bytes fetched for deep wire probe (SPS/PPS / moov / PAT-PMT).
+/// Bytes fetched for wire probe (SPS/PPS / moov / PAT-PMT).
 pub const DEEP_WIRE_PROBE_BYTES: u64 = 65535;
 /// Bounded poller→UI/webhook queue; full = drop (prefer latest via try_send).
 pub const EVENT_CHANNEL_CAPACITY: usize = 512;

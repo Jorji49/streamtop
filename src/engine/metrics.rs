@@ -431,7 +431,7 @@ async fn metrics_handler(
     )
 }
 
-/// Run headless diagnostics with Prometheus scrape endpoint (no TUI).
+/// Run headless mode with a Prometheus `/metrics` endpoint (no TUI).
 pub async fn run_prometheus(
     url: String,
     session: SessionOpts,
