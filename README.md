@@ -8,7 +8,9 @@
 
 Live HLS, DASH, and IPTV stream diagnostics in the terminal. Current release: **v0.3.3**.
 
-<img width="820" height="626" alt="WindowsTerminal_oVryrNogV4" src="https://github.com/user-attachments/assets/6b5428ae-a7ea-484b-8f4f-308953a142a7" />
+<p align="center">
+  <img width="700" alt="streamtop demo" src="https://github.com/user-attachments/assets/6b5428ae-a7ea-484b-8f4f-308953a142a7" />
+</p>
 
 ## Installation
 
