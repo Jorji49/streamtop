@@ -2,24 +2,24 @@
 
 [![Awesome Ratatui](https://img.shields.io/badge/awesome-ratatui-ff4400?logo=rust&logoColor=white)](https://github.com/ratatui/awesome-ratatui)
 [![Crates.io](https://img.shields.io/crates/v/streamtop.svg)](https://crates.io/crates/streamtop)
+[![Release](https://img.shields.io/github/v/release/Jorji49/streamtop?label=release)](https://github.com/Jorji49/streamtop/releases/latest)
 [![Downloads](https://img.shields.io/crates/d/streamtop.svg)](https://crates.io/crates/streamtop)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-Live HLS, DASH, and IPTV stream diagnostics in the terminal.
+Live HLS, DASH, and IPTV stream diagnostics in the terminal. Current release: **v0.3.3**.
 
 <img width="1200" height="560" alt="Animation" src="https://github.com/user-attachments/assets/92b89472-ed4a-45ac-b9ff-c5f4a85fd4b8" />
 
 ## Installation
 
+Verify after install: `streamtop --version` → `streamtop 0.3.3`.
+
 ### Rust
 
 ```bash
 cargo install streamtop
-```
-
-```bash
-cargo install cargo-binstall
-cargo binstall streamtop
+# or
+cargo install cargo-binstall && cargo binstall streamtop
 ```
 
 ### Windows (Scoop)
@@ -27,15 +27,12 @@ cargo binstall streamtop
 ```powershell
 scoop bucket add streamtop https://github.com/Jorji49/streamtop
 scoop install streamtop/streamtop
+scoop update streamtop   # if an older copy was cached
 ```
 
 ### Windows (Winget)
 
-In review:
-- [PR #425211](https://github.com/microsoft/winget-pkgs/pull/425211) — **0.3.3** (preferred)
-- [PR #424450](https://github.com/microsoft/winget-pkgs/pull/424450) — 0.3.2 (superseded)
-
-After merge:
+Package **0.3.3** is in review: [PR #425211](https://github.com/microsoft/winget-pkgs/pull/425211). After merge:
 
 ```powershell
 winget install streamtop
@@ -46,15 +43,16 @@ winget install streamtop
 ```bash
 brew tap Jorji49/tap
 brew install streamtop
+brew upgrade streamtop   # if previously installed
 ```
 
 ```bash
 brew install --formula https://raw.githubusercontent.com/Jorji49/streamtop/main/Formula/streamtop.rb
 ```
 
-### Arch Linux (AUR)
+### Arch Linux
 
-Official AUR listing is pending. Until then, build from the packaging mirror:
+Official AUR listing is pending. Build **0.3.3** from the packaging mirror:
 
 ```bash
 git clone https://github.com/Jorji49/streamtop-bin.git
@@ -62,18 +60,18 @@ cd streamtop-bin
 makepkg -si
 ```
 
-The same `PKGBUILD` also lives at `dist/aur/PKGBUILD` in the main repo.
+`PKGBUILD` also lives at `dist/aur/PKGBUILD` in this repo.
 
 ### Docker
 
-The image contains the CLI binary only (no `mpv` / `ffplay`). Quick Play is unavailable in the container.
-
 ```bash
+docker run -it --rm ghcr.io/jorji49/streamtop:v0.3.3 <URL>
+# or rolling:
 docker run -it --rm ghcr.io/jorji49/streamtop:latest <URL>
 ```
 
 ```bash
-docker run --rm -p 9184:9184 ghcr.io/jorji49/streamtop:latest \
+docker run --rm -p 9184:9184 ghcr.io/jorji49/streamtop:v0.3.3 \
   <URL> --prometheus --metrics-bind 0.0.0.0
 ```
 
@@ -85,9 +83,9 @@ cargo deb
 sudo dpkg -i target/debian/streamtop_*.deb
 ```
 
-### From source
+### From source / GitHub Release
 
-Release binaries: [latest release](https://github.com/Jorji49/streamtop/releases/latest)
+Latest binaries: [v0.3.3](https://github.com/Jorji49/streamtop/releases/tag/v0.3.3)
 
 ```bash
 git clone https://github.com/Jorji49/streamtop.git
