@@ -3,7 +3,17 @@ name: Docker Publish
 on:
   push:
     branches: [main]
+    paths:
+      - "src/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "Dockerfile"
+      - ".github/workflows/docker-publish.yml"
     tags: ["v*"]
+
+concurrency:
+  group: docker-publish-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
