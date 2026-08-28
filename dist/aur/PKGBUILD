@@ -1,7 +1,7 @@
 # Maintainer: Ahmet Kayra Kama <kayraak@pm.me>
 # Contributor: Ahmet Kayra Kama <kayraak@pm.me>
 pkgname=streamtop-bin
-pkgver=1.0.0
+pkgver=1.0.1
 pkgrel=1
 pkgdesc="HLS/DASH/IPTV stream diagnostics in the terminal"
 arch=('x86_64')
