@@ -1,4 +1,4 @@
-//! In-memory Tokio HTTP server serving synthetic HLS/DASH for hermetic tests.
+//! In-memory Tokio HTTP server serving synthetic HLS for hermetic tests.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -9,41 +9,17 @@ use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 
 #[derive(Debug, Clone, Copy)]
-#[allow(dead_code)]
 pub enum MockScenario {
     Normal,
-    /// Delay every HTTP response (manifest stall simulation).
-    Stall {
-        delay_ms: u64,
-    },
-    DriftDuration,
-    Segment404,
-    /// Invalid fMP4 init bytes for wire-probe error paths.
-    CorruptFmp4,
-    /// Manifest carries malformed SCTE-35 base64.
-    CorruptScte35,
-    /// Response includes synthetic clock-skew header.
-    ClockSkew,
-    Scte35Ad,
-    /// Abort TCP connection mid-body after partial payload.
-    TcpResetMidDownload,
-    /// Send Content-Length larger than body (truncated payload).
-    TruncatedPayload,
-    /// Chunked transfer with jittery delivery delays.
-    JitterChunked,
-    /// LL-HLS parts listed out of order in media playlist.
+    Stall { delay_ms: u64 },
     OutOfOrderLlHls,
-    /// WebVTT subtitle track with intentional PTS drift.
     SubtitleDrift,
-    /// fMP4 segment with corrupted PSSH box.
     CorruptPssh,
 }
 
 #[derive(Debug, Clone)]
 pub struct MockStreamServer {
     pub base_url: String,
-    #[allow(dead_code)]
-    pub scenario: MockScenario,
     shutdown: Arc<oneshot::Sender<()>>,
 }
 
@@ -84,26 +60,9 @@ impl MockStreamServer {
                             if let MockScenario::Stall { delay_ms } = scenario {
                                 tokio::time::sleep(Duration::from_millis(delay_ms)).await;
                             }
-                            if matches!(scenario, MockScenario::JitterChunked) && path.ends_with(".ts") {
-                                serve_jitter_chunked(&mut stream, path, scenario).await;
-                                return;
-                            }
-                            if matches!(scenario, MockScenario::TcpResetMidDownload) && path.ends_with(".ts") {
-                                serve_tcp_reset(&mut stream, path, scenario).await;
-                                return;
-                            }
-                            let (status, body, ctype, extra) = route_hls(path, scenario);
-                            if matches!(scenario, MockScenario::TruncatedPayload) && path.ends_with(".ts") {
-                                let response = format!(
-                                    "HTTP/1.1 {status}\r\nContent-Type: {ctype}\r\nContent-Length: {}\r\nConnection: close{extra}\r\n\r\n",
-                                    body.len().saturating_add(512)
-                                );
-                                let _ = stream.write_all(response.as_bytes()).await;
-                                let _ = stream.write_all(body.as_bytes()).await;
-                                return;
-                            }
+                            let (status, body, ctype) = route_hls(path, scenario);
                             let response = format!(
-                                "HTTP/1.1 {status}\r\nContent-Type: {ctype}\r\nContent-Length: {}\r\nConnection: close{extra}\r\n\r\n",
+                                "HTTP/1.1 {status}\r\nContent-Type: {ctype}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
                                 body.len()
                             );
                             let _ = stream.write_all(response.as_bytes()).await;
@@ -114,11 +73,7 @@ impl MockStreamServer {
             }
             let _ = shutdown_poll;
         });
-        Self {
-            base_url,
-            scenario,
-            shutdown,
-        }
+        Self { base_url, shutdown }
     }
 }
 
@@ -130,65 +85,17 @@ impl Drop for MockStreamServer {
     }
 }
 
-async fn serve_tcp_reset(stream: &mut tokio::net::TcpStream, path: &str, scenario: MockScenario) {
-    let (_, body, ctype, extra) = route_hls(path, scenario);
-    let partial = &body[..body.len().min(64)];
-    let response = format!(
-        "HTTP/1.1 200 OK\r\nContent-Type: {ctype}\r\nContent-Length: {}\r\nConnection: close{extra}\r\n\r\n",
-        body.len()
-    );
-    let _ = stream.write_all(response.as_bytes()).await;
-    let _ = stream.write_all(partial.as_bytes()).await;
-    let _ = stream.shutdown().await;
-}
-
-async fn serve_jitter_chunked(
-    stream: &mut tokio::net::TcpStream,
-    path: &str,
-    scenario: MockScenario,
-) {
-    let (_, body, ctype, extra) = route_hls(path, scenario);
-    let headers = format!(
-        "HTTP/1.1 200 OK\r\nContent-Type: {ctype}\r\nTransfer-Encoding: chunked\r\nConnection: close{extra}\r\n\r\n"
-    );
-    let _ = stream.write_all(headers.as_bytes()).await;
-    for chunk in body.as_bytes().chunks(47) {
-        tokio::time::sleep(Duration::from_millis(15)).await;
-        let hex = format!("{:x}\r\n", chunk.len());
-        let _ = stream.write_all(hex.as_bytes()).await;
-        let _ = stream.write_all(chunk).await;
-        let _ = stream.write_all(b"\r\n").await;
-    }
-    let _ = stream.write_all(b"0\r\n\r\n").await;
-}
-
-fn route_hls(
-    path: &str,
-    scenario: MockScenario,
-) -> (&'static str, String, &'static str, &'static str) {
-    let extra = match scenario {
-        MockScenario::ClockSkew => "\r\nX-Streamtop-Clock-Skew-Ms: 2500",
-        _ => "",
-    };
+fn route_hls(path: &str, scenario: MockScenario) -> (&'static str, String, &'static str) {
     if path.ends_with(".vtt") {
         let body = if matches!(scenario, MockScenario::SubtitleDrift) {
             "WEBVTT\n\n00:00:05.000 --> 00:00:08.000\nDrifted cue\n".into()
         } else {
             "WEBVTT\n\n00:00:01.000 --> 00:00:04.000\nOK\n".into()
         };
-        return ("200 OK", body, "text/vtt", extra);
+        return ("200 OK", body, "text/vtt");
     }
     if path.ends_with(".m3u8") {
         let body = match scenario {
-            MockScenario::DriftDuration => {
-                "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:4\n#EXT-X-MEDIA-SEQUENCE:1\n#EXTINF:2.0,\nseg.ts\n#EXTINF:3.5,\nseg2.ts\n".into()
-            }
-            MockScenario::Scte35Ad => {
-                "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:2\n#EXT-X-MEDIA-SEQUENCE:1\n#EXT-X-CUE-OUT:30\n#EXTINF:2.0,\nseg.ts\n".into()
-            }
-            MockScenario::CorruptScte35 => {
-                "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:2\n#EXT-X-MEDIA-SEQUENCE:1\n#EXT-X-SCTE35:!!!not-valid-base64!!!\n#EXTINF:2.0,\nseg.ts\n".into()
-            }
             MockScenario::OutOfOrderLlHls => {
                 "#EXTM3U\n#EXT-X-VERSION:9\n#EXT-X-TARGETDURATION:2\n#EXT-X-PART-TARGET:0.5\n#EXT-X-MEDIA-SEQUENCE:1\n#EXT-X-PART:DURATION=0.5,URI=\"part1.m4s\"\n#EXT-X-PART:DURATION=0.5,URI=\"part0.m4s\"\n#EXTINF:2.0,\nseg.ts\n".into()
             }
@@ -197,17 +104,11 @@ fn route_hls(
             }
             _ => "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:2\n#EXT-X-MEDIA-SEQUENCE:1\n#EXTINF:2.0,\nseg.ts\n".into(),
         };
-        return ("200 OK", body, "application/vnd.apple.mpegurl", extra);
+        return ("200 OK", body, "application/vnd.apple.mpegurl");
     }
     if path.ends_with(".ts") || path.ends_with(".m4s") {
-        if matches!(scenario, MockScenario::Segment404) {
-            return ("404 Not Found", String::new(), "text/plain", extra);
-        }
-        if matches!(scenario, MockScenario::CorruptFmp4) {
-            return ("200 OK", "not-a-valid-box".into(), "video/mp4", extra);
-        }
         if matches!(scenario, MockScenario::CorruptPssh) {
-            return ("200 OK", corrupt_pssh_segment(), "video/mp4", extra);
+            return ("200 OK", corrupt_pssh_segment(), "video/mp4");
         }
         let seq = SEGMENT_SEQ.fetch_add(1, Ordering::Relaxed);
         let mut pkt = vec![0u8; 188];
@@ -217,10 +118,9 @@ fn route_hls(
             "200 OK",
             String::from_utf8(pkt).unwrap_or_default(),
             "video/mp2t",
-            extra,
         );
     }
-    ("404 Not Found", String::new(), "text/plain", extra)
+    ("404 Not Found", String::new(), "text/plain")
 }
 
 pub fn corrupt_pssh_segment() -> String {

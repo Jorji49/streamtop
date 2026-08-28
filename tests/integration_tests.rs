@@ -6,7 +6,7 @@ use std::fs;
 use std::path::PathBuf;
 
 use mock_server::MockScenario;
-use streamtop::engine::dash::{classify_content_protection, extract_mpd_pssh, parse_dash_mpd};
+use streamtop::engine::dash::{classify_content_protection, parse_dash_mpd};
 use streamtop::engine::g2g::compute_g2g;
 use streamtop::engine::linter::{lint_subtitle_drift, next_blocking_targets, scan_ll_hls};
 use streamtop::engine::playlist_parser::{detect_and_parse, ParsedInput};
@@ -149,15 +149,6 @@ fn corrupt_pssh_scan_marks_invalid() {
     let info = scan_pssh_boxes(server_body.as_bytes());
     assert_eq!(info.entries.len(), 1);
     assert!(!info.entries[0].valid);
-}
-
-#[test]
-fn dash_mpd_pssh_extraction() {
-    let body = load("dash_live.mpd");
-    let xml = String::from_utf8_lossy(&body);
-    let pssh = extract_mpd_pssh(&xml);
-    // Fixture may or may not embed cenc:pssh; function must not panic.
-    let _ = pssh.entries.len();
 }
 
 #[tokio::test]

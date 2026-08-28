@@ -1,7 +1,6 @@
 # Keep build context small for GHCR publishes.
 /target
 /dist
-!/dist/scoop
 !/dist/aur
 !/dist/winget
 /diagnostics
