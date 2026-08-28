@@ -40,13 +40,35 @@ impl SpliceCommandType {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SegmentationDescriptor {
     pub segmentation_event_id: u32,
     pub segmentation_type_id: u8,
     pub segmentation_type_name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub segmentation_duration_secs: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub upid_type: Option<u8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub upid_type_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub upid_hex: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub segment_num: Option<u8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub segments_expected: Option<u8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sub_segment_num: Option<u8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sub_segments_expected: Option<u8>,
+    #[serde(default)]
+    pub sub_segment_alignment: bool,
+    #[serde(default)]
+    pub delivery_not_restricted: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub web_delivery_allowed: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub no_regional_blackout: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -67,6 +89,8 @@ pub struct SpliceInfoSection {
     /// SpliceInsert / SpliceSchedule break_duration (90 kHz ticks → seconds).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub break_duration_secs: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub break_auto_return: Option<bool>,
     /// Number of scheduled splice events (SpliceSchedule).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub splice_count: Option<u8>,
@@ -130,6 +154,27 @@ impl SpliceInfoSection {
                 format!(" | {sched}")
             }
         )
+    }
+}
+
+pub fn upid_type_name(id: u8) -> &'static str {
+    match id {
+        0x00 => "Not Used",
+        0x01 => "User Defined",
+        0x02 => "ISCI",
+        0x03 => "Ad-ID",
+        0x04 => "UMID",
+        0x05 => "ISAN",
+        0x06 => "Tribune Media",
+        0x07 => "Advisory",
+        0x08 => "EIDR",
+        0x09 => "ATSC Content Identifier",
+        0x0a => "MPU",
+        0x0b => "MID",
+        0x0c => "ADS Information",
+        0x0d => "URI",
+        0x0e => "UUID",
+        _ => "Reserved",
     }
 }
 
@@ -217,6 +262,9 @@ fn attr_quoted(line: &str, key: &str) -> Option<String> {
 }
 
 pub fn parse_scte35_bytes(data: &[u8]) -> Option<SpliceInfoSection> {
+    if data.len() > crate::models::MAX_SCTE35_BYTES {
+        return None;
+    }
     if data.len() < 14 {
         return None;
     }
@@ -234,6 +282,7 @@ pub fn parse_scte35_bytes(data: &[u8]) -> Option<SpliceInfoSection> {
     let mut splice_event_id = None;
     let mut pts_time = None;
     let mut break_duration_secs = None;
+    let mut break_auto_return = None;
     let mut splice_count = None;
     let mut parse_notes = Vec::new();
 
@@ -260,8 +309,11 @@ pub fn parse_scte35_bytes(data: &[u8]) -> Option<SpliceInfoSection> {
                         off += consumed;
                     }
                     if duration_flag && off + 5 <= cmd_end {
-                        let ticks = read_break_duration_ticks(&data[off..]);
+                        let (ticks, auto_ret) = read_break_duration(&data[off..]);
                         break_duration_secs = Some(ticks as f64 / 90_000.0);
+                        if break_auto_return.is_none() {
+                            break_auto_return = Some(auto_ret);
+                        }
                         off += 5;
                     }
                     let _ = off;
@@ -323,9 +375,10 @@ pub fn parse_scte35_bytes(data: &[u8]) -> Option<SpliceInfoSection> {
                         off += consumed;
                     }
                     if duration_flag && off + 5 <= cmd_end {
-                        let ticks = read_break_duration_ticks(&data[off..]);
+                        let (ticks, auto_ret) = read_break_duration(&data[off..]);
                         if break_duration_secs.is_none() {
                             break_duration_secs = Some(ticks as f64 / 90_000.0);
+                            break_auto_return = Some(auto_ret);
                         }
                         off += 5;
                     }
@@ -390,6 +443,7 @@ pub fn parse_scte35_bytes(data: &[u8]) -> Option<SpliceInfoSection> {
         pts_time,
         pts_time_secs,
         break_duration_secs,
+        break_auto_return,
         splice_count,
         descriptors,
         parse_notes,
@@ -416,13 +470,14 @@ fn parse_splice_time(data: &[u8]) -> (Option<u64>, usize) {
     }
 }
 
-fn read_break_duration_ticks(data: &[u8]) -> u64 {
-    // auto_return (1) + reserved (6) + duration (33) @ 90 kHz
-    (((data[0] as u64) & 0x01) << 32)
+fn read_break_duration(data: &[u8]) -> (u64, bool) {
+    let auto_return = data.first().is_some_and(|b| b & 0x80 != 0);
+    let ticks = (((data[0] as u64) & 0x01) << 32)
         | ((data[1] as u64) << 24)
         | ((data[2] as u64) << 16)
         | ((data[3] as u64) << 8)
-        | data[4] as u64
+        | data[4] as u64;
+    (ticks, auto_return)
 }
 
 fn parse_segmentation_descriptor(body: &[u8]) -> Option<SegmentationDescriptor> {
@@ -430,29 +485,41 @@ fn parse_segmentation_descriptor(body: &[u8]) -> Option<SegmentationDescriptor> 
         return None;
     }
     let segmentation_event_id = u32::from_be_bytes([body[4], body[5], body[6], body[7]]);
-    let cancel = body[8] & 0x80 != 0;
-    if cancel {
+    if body[8] & 0x80 != 0 {
         return Some(SegmentationDescriptor {
             segmentation_event_id,
-            segmentation_type_id: 0,
             segmentation_type_name: "Cancel".into(),
-            segmentation_duration_secs: None,
+            ..Default::default()
         });
     }
     let mut off = 9usize;
     if off >= body.len() {
         return None;
     }
-    let program_seg = body[off] & 0x80 != 0;
-    let has_duration = body[off] & 0x40 != 0;
+    let flags = body[off];
     off += 1;
+    let program_seg = flags & 0x80 != 0;
+    let has_duration = flags & 0x40 != 0;
+    let delivery_not_restricted = flags & 0x20 != 0;
+    let web_delivery_allowed = Some(flags & 0x10 != 0);
+    let no_regional_blackout = if delivery_not_restricted {
+        None
+    } else {
+        Some(flags & 0x08 != 0)
+    };
+
     if !program_seg {
         if off >= body.len() {
             return None;
         }
         let n = body[off] as usize;
-        off += 1 + n * 6;
+        off += 1;
+        off = off.saturating_add(n.saturating_mul(6));
+        if off > body.len() {
+            return None;
+        }
     }
+
     let mut duration_secs = None;
     if has_duration {
         if off + 5 > body.len() {
@@ -466,15 +533,63 @@ fn parse_segmentation_descriptor(body: &[u8]) -> Option<SegmentationDescriptor> 
         duration_secs = Some(ticks as f64 / 90_000.0);
         off += 5;
     }
-    if off >= body.len() {
+
+    if off + 2 > body.len() {
+        return None;
+    }
+    let upid_type = body[off];
+    let upid_len = body[off + 1] as usize;
+    off += 2;
+    if off + upid_len > body.len() {
+        return None;
+    }
+    let upid_bytes = &body[off..off + upid_len];
+    off += upid_len;
+
+    if off + 3 > body.len() {
         return None;
     }
     let type_id = body[off];
+    let segment_num = body[off + 1];
+    let segments_expected = body[off + 2];
+    off += 3;
+
+    let mut sub_segment_num = None;
+    let mut sub_segments_expected = None;
+    let sub_segment_alignment = segments_expected > 0 && off + 2 <= body.len();
+    if sub_segment_alignment {
+        sub_segment_num = Some(body[off]);
+        sub_segments_expected = Some(body[off + 1]);
+    }
+
+    let upid_hex = if upid_len == 0 {
+        None
+    } else {
+        Some(
+            upid_bytes
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect::<Vec<_>>()
+                .join(""),
+        )
+    };
+
     Some(SegmentationDescriptor {
         segmentation_event_id,
         segmentation_type_id: type_id,
         segmentation_type_name: segmentation_type_name(type_id),
         segmentation_duration_secs: duration_secs,
+        upid_type: Some(upid_type),
+        upid_type_name: Some(upid_type_name(upid_type).into()),
+        upid_hex,
+        segment_num: Some(segment_num),
+        segments_expected: Some(segments_expected),
+        sub_segment_num,
+        sub_segments_expected,
+        sub_segment_alignment,
+        delivery_not_restricted,
+        web_delivery_allowed,
+        no_regional_blackout,
     })
 }
 
@@ -595,28 +710,47 @@ mod tests {
 
     #[test]
     fn splice_insert_break_duration_90khz() {
-        // Minimal SpliceInsert with duration_flag and 5-byte break_duration = 900000 ticks = 10.0s
         let mut data = vec![0u8; 32];
         data[0] = 0xfc;
         data[11] = 0;
-        data[12] = 12; // command length
-        data[13] = 0x05; // SpliceInsert
-                         // event id
+        data[12] = 12;
+        data[13] = 0x05;
         data[14..18].copy_from_slice(&1u32.to_be_bytes());
-        data[18] = 0; // cancel=0
-        data[19] = 0x20; // duration_flag, !program_splice
-                         // break_duration: auto_return=0, duration = 900_000 @ 90kHz
+        data[18] = 0;
+        data[19] = 0x20;
         let ticks: u64 = 900_000;
         data[20] = ((ticks >> 32) & 0x01) as u8;
         data[21] = ((ticks >> 24) & 0xff) as u8;
         data[22] = ((ticks >> 16) & 0xff) as u8;
         data[23] = ((ticks >> 8) & 0xff) as u8;
         data[24] = (ticks & 0xff) as u8;
-        data[25] = 0; // desc loop len hi
-        data[26] = 0; // desc loop len lo
+        data[25] = 0;
+        data[26] = 0;
         let parsed = parse_scte35_bytes(&data).expect("parse");
         assert_eq!(parsed.splice_command_type, SpliceCommandType::SpliceInsert);
         let dur = parsed.break_duration_secs.expect("break_duration");
         assert!((dur - 10.0).abs() < 0.001, "dur={dur}");
+    }
+
+    #[test]
+    fn splice_insert_auto_return_flag() {
+        let mut data = vec![0u8; 32];
+        data[0] = 0xfc;
+        data[11] = 0;
+        data[12] = 12;
+        data[13] = 0x05;
+        data[14..18].copy_from_slice(&1u32.to_be_bytes());
+        data[18] = 0;
+        data[19] = 0xA0; // duration_flag + auto_return on break_duration
+        let ticks: u64 = 900_000;
+        data[20] = 0x80 | ((ticks >> 32) & 0x01) as u8;
+        data[21] = ((ticks >> 24) & 0xff) as u8;
+        data[22] = ((ticks >> 16) & 0xff) as u8;
+        data[23] = ((ticks >> 8) & 0xff) as u8;
+        data[24] = (ticks & 0xff) as u8;
+        data[25] = 0;
+        data[26] = 0;
+        let parsed = parse_scte35_bytes(&data).expect("parse");
+        assert_eq!(parsed.break_auto_return, Some(true));
     }
 }

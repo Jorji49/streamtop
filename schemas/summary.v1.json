@@ -21,7 +21,7 @@
   ],
   "properties": {
     "schema": { "const": "streamtop.summary.v1" },
-    "schema_version": { "const": 1 },
+    "schema_version": { "type": "integer", "minimum": 1 },
     "verdict": { "enum": ["PASS", "FAIL"] },
     "ok": { "type": "boolean" },
     "health_score": { "type": "integer", "minimum": 0, "maximum": 100 },
@@ -36,7 +36,15 @@
     "url": { "type": "string" },
     "errors": { "type": "integer", "minimum": 0 },
     "saw_segment": { "type": "boolean" },
-    "dropped_events": { "type": "integer", "minimum": 0 }
+    "dropped_events": { "type": "integer", "minimum": 0 },
+    "g2g_total_ms": { "type": ["integer", "null"] },
+    "virtual_buffer_secs": { "type": ["number", "null"] },
+    "rebuffer_probability_pct": { "type": ["integer", "null"], "minimum": 0, "maximum": 100 },
+    "subtitle_drift_ms": { "type": ["integer", "null"] },
+    "pssh_systems": {
+      "type": ["array", "null"],
+      "items": { "type": "string" }
+    }
   },
   "additionalProperties": false
 }
