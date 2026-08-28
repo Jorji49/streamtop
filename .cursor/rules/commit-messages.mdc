@@ -1,0 +1,29 @@
+---
+description: Kisa commit mesajlari; temizlik/AI silme islerini yazma
+alwaysApply: true
+---
+
+# Commit mesajlari
+
+- Tek satir, kisa: `fix: grafana panel grid`, `chore: scoop hash`
+- Ne degisti yaz; neden harika / ne temizlendi anlatma
+- AI metni, em dash, template, prose, normalize, leftover gibi meta kelimeleri commit mesajinda kullanma
+- AI veya pazarlama metni sildiginde commit mesajinda hic bahsetme; normal fix/chore gibi yaz
+
+## Ornek
+
+```
+fix: winget installer hash
+chore: grafana tests
+fix: comment dashes in grafana.rs
+```
+
+Yasak:
+
+```
+chore: remove AI-generated prose and template leftovers from README
+chore: add no-emdash rule and normalize arrow comments in docs
+fix: normalize comment dashes in models and grafana engine (removed em dashes)
+```
+
+Body ve bullet list kullanma; repo stili tek satirlik subject.
