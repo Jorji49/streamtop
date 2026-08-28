@@ -598,6 +598,7 @@ impl App {
             }
             StreamEvent::Buffer(b) => self.buffer = b,
             StreamEvent::G2g(g) => self.g2g = g,
+            StreamEvent::SubtitleSync(_) => {}
             StreamEvent::ProbeMode(on) => self.probe_mode = on,
             StreamEvent::Finding(f) => {
                 self.findings.push(f);

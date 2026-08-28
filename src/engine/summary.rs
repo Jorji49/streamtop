@@ -162,7 +162,7 @@ pub async fn run_summary(
     let mut g2g_total_ms: Option<i64> = None;
     let mut virtual_buffer_secs: Option<f64> = None;
     let mut rebuffer_probability_pct: Option<u8> = None;
-    let subtitle_drift_ms: Option<i64> = None;
+    let mut subtitle_drift_ms: Option<i64> = None;
     let mut pssh_systems: Option<Vec<String>> = None;
 
     let deadline = Instant::now() + Duration::from_secs(timeout_secs.max(1));
@@ -178,6 +178,9 @@ pub async fn run_summary(
                 StreamEvent::Buffer(b) => {
                     virtual_buffer_secs = Some(b.buffer_secs);
                     rebuffer_probability_pct = Some(b.rebuffer_probability_pct);
+                }
+                StreamEvent::SubtitleSync(sync) => {
+                    subtitle_drift_ms = sync.subtitle_drift_ms;
                 }
                 StreamEvent::PlaylistMeta(m) => {
                     if let Some(pssh) = &m.drm.pssh {

@@ -1524,6 +1524,7 @@ impl ManifestPoller {
             .probe_subtitle_sync(&fetch.segment_url, video_pts_ms)
             .await
         {
+            self.send_event(StreamEvent::SubtitleSync(sync.clone()));
             if sync.desync_warning {
                 if let Some(drift) = sync.subtitle_drift_ms {
                     self.emit_log(

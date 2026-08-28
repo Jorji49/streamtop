@@ -1129,6 +1129,7 @@ pub enum StreamEvent {
     AdBreak(AdBreakInfo),
     Buffer(VirtualBuffer),
     G2g(G2gMetrics),
+    SubtitleSync(SubtitleSyncInfo),
     ProbeMode(bool),
     Finding(DiagnosticFinding),
     WireProbe(WireProbeInfo),
