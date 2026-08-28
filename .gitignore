@@ -1,7 +1,5 @@
 # Ignore build outputs under dist/, keep packaging manifests tracked.
 /dist/**
-!/dist/scoop/
-!/dist/scoop/**
 !/dist/aur/
 !/dist/aur/**
 !/dist/winget/
