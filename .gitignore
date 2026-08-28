@@ -19,7 +19,6 @@ streamtop_snapshot*.json
 streamtop-grafana.json
 streamtop-*.zip
 streamtop-*.tar.gz
-streamtop-0.*.tar.gz
 .env
 .env.*
 !.env.example
