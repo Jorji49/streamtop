@@ -261,4 +261,16 @@ jobs:
             echo "::warning::CARGO_REGISTRY_TOKEN secret missing; skip crates.io publish"
             exit 0
           fi
-          cargo publish --locked
+          set +e
+          out=$(cargo publish --locked 2>&1)
+          code=$?
+          set -e
+          if [ "$code" -ne 0 ]; then
+            if echo "$out" | grep -q 'already exists on crates.io'; then
+              echo "::warning::Version already on crates.io; skip"
+              exit 0
+            fi
+            echo "$out"
+            exit "$code"
+          fi
+          echo "$out"

@@ -162,7 +162,7 @@ pub async fn run_summary(
     let mut g2g_total_ms: Option<i64> = None;
     let mut virtual_buffer_secs: Option<f64> = None;
     let mut rebuffer_probability_pct: Option<u8> = None;
-    let subtitle_drift_ms: Option<i64> = None;
+    let mut subtitle_drift_ms: Option<i64> = None;
     let mut pssh_systems: Option<Vec<String>> = None;
 
     let deadline = Instant::now() + Duration::from_secs(timeout_secs.max(1));
@@ -215,6 +215,15 @@ pub async fn run_summary(
                     ..
                 } => {
                     origin_stalls = origin_stalls.saturating_add(1);
+                }
+                StreamEvent::Log {
+                    category: DiagCategory::AvSync,
+                    message,
+                    ..
+                } => {
+                    if let Some(drift) = parse_subtitle_drift_ms(&message) {
+                        subtitle_drift_ms = Some(drift);
+                    }
                 }
                 _ => {}
             },
@@ -308,6 +317,17 @@ pub async fn run_summary(
     })
 }
 
+fn parse_subtitle_drift_ms(message: &str) -> Option<i64> {
+    let rest = message
+        .strip_prefix("Subtitle drift ")
+        .or_else(|| message.strip_prefix("Subtitle PTS drift "))?;
+    let num: String = rest
+        .chars()
+        .take_while(|c| c.is_ascii_digit() || *c == '-')
+        .collect();
+    num.parse().ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -345,6 +365,18 @@ mod tests {
         assert!(v.get("health_score").is_some());
         assert!(!v["url"].as_str().unwrap().contains("secret"));
         assert!(v["url"].as_str().unwrap().contains("[REDACTED]"));
+    }
+
+    #[test]
+    fn parse_subtitle_drift_from_log_line() {
+        assert_eq!(
+            parse_subtitle_drift_ms("Subtitle drift 420ms exceeds ±200ms threshold"),
+            Some(420)
+        );
+        assert_eq!(
+            parse_subtitle_drift_ms("Subtitle PTS drift -150ms exceeds ±200ms"),
+            Some(-150)
+        );
     }
 
     #[test]
