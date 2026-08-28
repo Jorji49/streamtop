@@ -139,6 +139,12 @@ streamtop ./channels.m3u --audit
 # Headless PASS/FAIL (CI). Schema: schemas/summary.v1.json
 streamtop <URL> --summary --summary-format json --timeout 10
 
+# VOD playlist crawl
+streamtop <URL> --vod --summary
+
+# OTEL trace export
+streamtop <URL> --otel-endpoint http://127.0.0.1:4318
+
 # Curl / HAR for the last segment (secrets redacted)
 streamtop <URL> --export-curl --probe-headers
 streamtop <URL> --export-har incident.har --timeout 10
