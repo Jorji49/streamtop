@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.1
+
+- CI: skip crates.io publish when the version is already on the index
+- Summary JSON: fill `subtitle_drift_ms` from AvSync log lines
+- README: `--vod` and `--otel-endpoint` usage
+
 ## 1.0.0
 
 - Unified glass-to-glass latency engine: `prft` + HLS PDT + DASH publish time → `g2g_total_ms`, ingestion lag, edge propagation
