@@ -35,7 +35,7 @@ fn datasource_variable() -> Value {
 
 /// Dashboard JSON (Grafana import format: `{ "dashboard": { ... } }`).
 pub fn grafana_dashboard_json() -> Value {
-    // 24-column grid: health gauges → latency/G2G → buffer → CDN → errors/ops
+    // 24-column grid: health gauges -> latency/G2G -> buffer -> CDN -> errors/ops
     let panels = vec![
         // Row 0 - health gauges
         shi_gauge_panel(1, [0.0, 0.0, 12.0, 8.0]),
