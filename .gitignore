@@ -5,6 +5,8 @@
 !/dist/winget/
 !/dist/winget/**
 
+/.cursor/
+
 /target/
 /fuzz/target/
 /stage/
