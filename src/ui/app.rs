@@ -19,8 +19,8 @@ use crate::engine::quick_play::{launch_quick_play, QuickPlayResult};
 use crate::engine::ManifestPoller;
 use crate::models::{
     format_dvr_window, AbrHealth, AbrVariant, AdBreakInfo, CdnStats, ChannelEntry, DiagCategory,
-    DiagnosticFinding, DiagnosticSummary, HealthReport, LatencyState, LogEntry, LogLevel,
-    PlaylistMeta, RingBuffer, SegmentMetrics, StreamEvent, StreamSnapshot, StreamStatus,
+    DiagnosticFinding, DiagnosticSummary, G2gMetrics, HealthReport, LatencyState, LogEntry,
+    LogLevel, PlaylistMeta, RingBuffer, SegmentMetrics, StreamEvent, StreamSnapshot, StreamStatus,
     VirtualBuffer, DIAGNOSTIC_DIR, EVENT_CHANNEL_CAPACITY, HISTORY_CAPACITY, LOG_CAPACITY,
 };
 use crate::ui::channel_picker::{ChannelPicker, PickerAction};
@@ -47,6 +47,8 @@ pub struct SessionOpts {
     pub alert_on: String,
     /// Bypass webhook SSRF checks (local tests only).
     pub allow_insecure_webhooks: bool,
+    /// OTLP trace export endpoint (e.g. http://127.0.0.1:4318).
+    pub otel_endpoint: Option<String>,
 }
 
 pub struct App {
@@ -63,6 +65,7 @@ pub struct App {
     pub abr_health: AbrHealth,
     pub active_ad: Option<AdBreakInfo>,
     pub buffer: VirtualBuffer,
+    pub g2g: G2gMetrics,
     pub probe_mode: bool,
     pub findings: Vec<DiagnosticFinding>,
     pub latency_history: RingBuffer,
@@ -140,6 +143,7 @@ impl App {
             abr_health: AbrHealth::default(),
             active_ad: None,
             buffer: VirtualBuffer::default(),
+            g2g: G2gMetrics::default(),
             probe_mode: session.probe_headers,
             findings: Vec::new(),
             latency_history: RingBuffer::new(HISTORY_CAPACITY),
@@ -593,6 +597,7 @@ impl App {
                 }
             }
             StreamEvent::Buffer(b) => self.buffer = b,
+            StreamEvent::G2g(g) => self.g2g = g,
             StreamEvent::ProbeMode(on) => self.probe_mode = on,
             StreamEvent::Finding(f) => {
                 self.findings.push(f);

@@ -21,6 +21,7 @@ use streamtop::engine::playlist_parser::{
 };
 use streamtop::engine::poller::build_http_client;
 use streamtop::engine::summary::{run_summary, SummaryFormat};
+use streamtop::engine::vod::run_vod;
 use streamtop::models::ChannelEntry;
 use streamtop::ui::app::SessionOpts;
 use streamtop::ui::{App, CompareApp};
@@ -49,7 +50,7 @@ impl From<SummaryFormatArg> for SummaryFormat {
 )]
 struct Cli {
     /// Stream URL, local playlist/MPD, or channel lineup (M3U / JSON / YAML)
-    #[arg(required_unless_present_any = ["compare", "export_grafana"])]
+    #[arg(required_unless_present_any = ["compare", "export_grafana", "vod"])]
     url: Option<String>,
 
     /// Compare two live streams side by side
@@ -99,6 +100,14 @@ struct Cli {
     /// Headless PASS/FAIL summary (no TUI)
     #[arg(long = "summary", alias = "headless")]
     summary: bool,
+
+    /// VOD inspection: crawl playlist/MPD tree without live polling
+    #[arg(long = "vod", value_name = "URL")]
+    vod: Option<String>,
+
+    /// OTLP trace export endpoint (e.g. http://127.0.0.1:4318)
+    #[arg(long = "otel-endpoint", value_name = "URL")]
+    otel_endpoint: Option<String>,
 
     /// Summary format: text or json (streamtop.summary.v1)
     #[arg(long = "summary-format", value_enum, default_value_t = SummaryFormatArg::Text)]
@@ -184,6 +193,7 @@ async fn main() -> Result<ExitCode> {
             webhook_url: None,
             alert_on: "stall,shi_below_70,http_5xx".into(),
             allow_insecure_webhooks: false,
+            otel_endpoint: None,
         },
     )?;
 
@@ -217,6 +227,15 @@ async fn main() -> Result<ExitCode> {
         eprintln!(
             "warning: --allow-insecure-webhooks enables private/link-local/metadata webhook targets"
         );
+    }
+    if cli.otel_endpoint.is_some() {
+        session.otel_endpoint = cli.otel_endpoint.clone();
+    }
+
+    if let Some(vod_url) = &cli.vod {
+        let exit = run_vod(vod_url.clone(), session, cli.summary_format.into()).await?;
+        restore_terminal();
+        return Ok(exit);
     }
     if let Some(hook) = &session.webhook_url {
         streamtop::engine::webhook::validate_webhook_url(hook, session.allow_insecure_webhooks)

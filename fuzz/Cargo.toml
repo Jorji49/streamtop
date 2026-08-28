@@ -1,0 +1,38 @@
+[package]
+name = "streamtop-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+streamtop = { path = ".." }
+libfuzzer-sys = "0.4"
+m3u8-rs = "6.0"
+url = "2"
+
+[[bin]]
+name = "fuzz_hls_parser"
+path = "fuzz_targets/fuzz_hls_parser.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_mpd_parser"
+path = "fuzz_targets/fuzz_mpd_parser.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_container_probe"
+path = "fuzz_targets/fuzz_container_probe.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_scte35"
+path = "fuzz_targets/fuzz_scte35.rs"
+test = false
+doc = false

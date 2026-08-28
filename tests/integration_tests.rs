@@ -1,11 +1,17 @@
 //! Integration tests: input router classification against fixtures.
 
+mod mock_server;
+
 use std::fs;
 use std::path::PathBuf;
 
-use streamtop::engine::dash::{classify_content_protection, parse_dash_mpd};
-use streamtop::engine::linter::{next_blocking_targets, scan_ll_hls};
+use mock_server::MockScenario;
+use streamtop::engine::dash::{classify_content_protection, extract_mpd_pssh, parse_dash_mpd};
+use streamtop::engine::g2g::compute_g2g;
+use streamtop::engine::linter::{lint_subtitle_drift, next_blocking_targets, scan_ll_hls};
 use streamtop::engine::playlist_parser::{detect_and_parse, ParsedInput};
+use streamtop::engine::pssh::scan_pssh_boxes;
+use streamtop::engine::subtitle_probe::{compute_subtitle_drift, probe_subtitle_payload};
 use url::Url;
 
 fn fixture(name: &str) -> PathBuf {
@@ -106,4 +112,77 @@ fn dash_fixture_parses_widevine_content_protection() {
 
     let d = classify_content_protection("urn:uuid:9a04f079-9840-4286-ab92-e65be0885f95").unwrap();
     assert_eq!(d.method.as_deref(), Some("PlayReady"));
+}
+
+#[test]
+fn g2g_correlates_prft_and_pdt() {
+    use chrono::{TimeZone, Utc};
+    let prft = 1_700_000_000_000u64;
+    let pdt = Utc.timestamp_millis_opt(prft as i64 + 500).single();
+    let m = compute_g2g(Some(prft), pdt.as_ref(), None, Some(80), prft + 3_000);
+    assert_eq!(m.ingestion_lag_ms, Some(500));
+    assert_eq!(m.edge_propagation_ms, Some(80));
+    assert_eq!(m.g2g_total_ms, Some(3_000));
+}
+
+#[tokio::test]
+async fn mock_chaos_subtitle_drift_integrates() {
+    let server = mock_server::MockStreamServer::start_with(MockScenario::SubtitleDrift).await;
+    let vtt_url = format!("{}/sub.vtt", server.base_url);
+    let body = reqwest::Client::new()
+        .get(&vtt_url)
+        .send()
+        .await
+        .expect("get")
+        .bytes()
+        .await
+        .expect("bytes");
+    let probe = probe_subtitle_payload(&body);
+    let sync = compute_subtitle_drift(&probe, Some(1000));
+    assert!(sync.desync_warning);
+    assert!(!lint_subtitle_drift(&sync).is_empty());
+}
+
+#[test]
+fn corrupt_pssh_scan_marks_invalid() {
+    let server_body = mock_server::corrupt_pssh_segment();
+    let info = scan_pssh_boxes(server_body.as_bytes());
+    assert_eq!(info.entries.len(), 1);
+    assert!(!info.entries[0].valid);
+}
+
+#[test]
+fn dash_mpd_pssh_extraction() {
+    let body = load("dash_live.mpd");
+    let xml = String::from_utf8_lossy(&body);
+    let pssh = extract_mpd_pssh(&xml);
+    // Fixture may or may not embed cenc:pssh; function must not panic.
+    let _ = pssh.entries.len();
+}
+
+#[tokio::test]
+async fn vod_scans_mock_hls_playlist() {
+    use std::process::ExitCode;
+
+    use streamtop::engine::summary::SummaryFormat;
+    use streamtop::engine::vod::run_vod;
+    use streamtop::ui::app::SessionOpts;
+
+    let server = mock_server::MockStreamServer::start_hls().await;
+    let url = format!("{}/live.m3u8", server.base_url);
+    let session = SessionOpts {
+        headers: vec![],
+        user_agent: None,
+        interval_ms: None,
+        probe_headers: true,
+        probe_drm: false,
+        webhook_url: None,
+        alert_on: String::new(),
+        allow_insecure_webhooks: false,
+        otel_endpoint: None,
+    };
+    let exit = run_vod(url, session, SummaryFormat::Json)
+        .await
+        .expect("vod crawl");
+    assert_eq!(exit, ExitCode::SUCCESS);
 }

@@ -20,7 +20,7 @@ use crate::ui::app::SessionOpts;
 
 /// Stable machine-readable schema id for `--summary --summary-format json`.
 pub const SUMMARY_SCHEMA: &str = "streamtop.summary.v1";
-pub const SUMMARY_SCHEMA_VERSION: u32 = 1;
+pub const SUMMARY_SCHEMA_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SummaryFormat {
@@ -48,6 +48,16 @@ pub struct SummaryJson {
     pub errors: u32,
     pub saw_segment: bool,
     pub dropped_events: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub g2g_total_ms: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub virtual_buffer_secs: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rebuffer_probability_pct: Option<u8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subtitle_drift_ms: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pssh_systems: Option<Vec<String>>,
 }
 
 pub fn build_summary_json(
@@ -64,6 +74,11 @@ pub fn build_summary_json(
     errors: u32,
     saw_segment: bool,
     dropped_events: u64,
+    g2g_total_ms: Option<i64>,
+    virtual_buffer_secs: Option<f64>,
+    rebuffer_probability_pct: Option<u8>,
+    subtitle_drift_ms: Option<i64>,
+    pssh_systems: Option<Vec<String>>,
 ) -> SummaryJson {
     SummaryJson {
         schema: SUMMARY_SCHEMA,
@@ -83,6 +98,11 @@ pub fn build_summary_json(
         errors,
         saw_segment,
         dropped_events,
+        g2g_total_ms,
+        virtual_buffer_secs,
+        rebuffer_probability_pct,
+        subtitle_drift_ms,
+        pssh_systems,
     }
 }
 
@@ -92,6 +112,11 @@ pub async fn run_summary(
     timeout_secs: u64,
     format: SummaryFormat,
 ) -> Result<ExitCode> {
+    let otel = if let Some(ep) = &session.otel_endpoint {
+        Some(crate::engine::otel::OtelExporter::new(ep)?)
+    } else {
+        None
+    };
     let (tx, mut rx) = mpsc::channel(EVENT_CHANNEL_CAPACITY);
     let mut poller = ManifestPoller::new(
         url.clone(),
@@ -102,6 +127,9 @@ pub async fn run_summary(
         session.probe_drm,
         tx,
     )?;
+    if let Some(exporter) = otel.clone() {
+        poller = poller.with_otel(exporter);
+    }
     if let Some(hook_url) = session.webhook_url.clone() {
         if let Ok(alerts) = crate::engine::webhook::AlertKind::parse_list(&session.alert_on) {
             let (hook_tx, hook_rx) = mpsc::channel(EVENT_CHANNEL_CAPACITY);
@@ -131,6 +159,11 @@ pub async fn run_summary(
     let mut origin_stalls = 0u32;
     let mut critical_rfc_errors = 0u32;
     let mut saw_segment = false;
+    let mut g2g_total_ms: Option<i64> = None;
+    let mut virtual_buffer_secs: Option<f64> = None;
+    let mut rebuffer_probability_pct: Option<u8> = None;
+    let subtitle_drift_ms: Option<i64> = None;
+    let mut pssh_systems: Option<Vec<String>> = None;
 
     let deadline = Instant::now() + Duration::from_secs(timeout_secs.max(1));
     while Instant::now() < deadline {
@@ -141,6 +174,20 @@ pub async fn run_summary(
                 StreamEvent::Status(s) => status = s,
                 StreamEvent::Latency(l) => latency = l,
                 StreamEvent::CdnStats(c) => cdn = c,
+                StreamEvent::G2g(g) => g2g_total_ms = g.g2g_total_ms,
+                StreamEvent::Buffer(b) => {
+                    virtual_buffer_secs = Some(b.buffer_secs);
+                    rebuffer_probability_pct = Some(b.rebuffer_probability_pct);
+                }
+                StreamEvent::PlaylistMeta(m) => {
+                    if let Some(pssh) = &m.drm.pssh {
+                        let systems: Vec<String> =
+                            pssh.entries.iter().map(|e| e.drm_system.clone()).collect();
+                        if !systems.is_empty() {
+                            pssh_systems = Some(systems);
+                        }
+                    }
+                }
                 StreamEvent::Segment(s) => {
                     saw_segment = true;
                     last_ttfb = Some(s.ttfb_ms);
@@ -177,6 +224,10 @@ pub async fn run_summary(
     }
 
     handle.abort();
+
+    if let Some(exporter) = otel {
+        let _ = exporter.flush().await;
+    }
 
     let cdn_badge = cdn
         .last
@@ -217,6 +268,11 @@ pub async fn run_summary(
                 errors,
                 saw_segment,
                 channel_dropped_total(),
+                g2g_total_ms,
+                virtual_buffer_secs,
+                rebuffer_probability_pct,
+                subtitle_drift_ms,
+                pssh_systems,
             );
             println!("{}", serde_json::to_string(&payload)?);
         }
@@ -273,6 +329,11 @@ mod tests {
             0,
             true,
             0,
+            Some(3200),
+            Some(6.5),
+            Some(12),
+            None,
+            Some(vec!["Widevine".into()]),
         );
         let v = serde_json::to_value(&payload).unwrap();
         assert_eq!(v["schema"], SUMMARY_SCHEMA);

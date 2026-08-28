@@ -1,6 +1,8 @@
 //! Codec / resolution / FPS probe for fMP4 and MPEG-TS.
 
-use crate::models::{ContainerKind, WireProbeInfo};
+use std::collections::HashMap;
+
+use crate::models::{ContainerKind, WireProbeInfo, WireTimingInfo};
 
 /// Probe segment bytes for codec / resolution / FPS.
 pub fn deep_wire_probe(bytes: &[u8]) -> WireProbeInfo {
@@ -13,7 +15,74 @@ pub fn deep_wire_probe(bytes: &[u8]) -> WireProbeInfo {
     info.container = kind;
     let codec_hint = info.codec.clone();
     info.keyframe_pts_sec = extract_keyframe_pts_sec(bytes, kind, codec_hint.as_deref());
+    info.timing = probe_wire_timing(bytes, kind);
+    probe_audio_wire(bytes, kind, &mut info);
+    info.pssh = crate::engine::pssh::scan_pssh_boxes(bytes);
     info
+}
+
+fn probe_audio_wire(bytes: &[u8], kind: ContainerKind, info: &mut WireProbeInfo) {
+    if kind == ContainerKind::Ts || bytes.windows(2).any(|w| w == [0xff, 0xf0]) {
+        info.adts_sync_valid = validate_adts_sync(bytes);
+        info.audio_silent_suspect = detect_silent_audio(bytes);
+    }
+}
+
+fn validate_adts_sync(data: &[u8]) -> bool {
+    for i in 0..data.len().saturating_sub(7) {
+        if data[i] == 0xff && (data[i + 1] & 0xf6) == 0xf0 {
+            return true;
+        }
+    }
+    false
+}
+
+fn detect_silent_audio(data: &[u8]) -> bool {
+    if data.len() < 64 {
+        return false;
+    }
+    let sample = &data[..data.len().min(4096)];
+    let zeros = sample.iter().filter(|&&b| b == 0).count();
+    zeros * 100 / sample.len().max(1) > 92
+}
+
+const NTP_UNIX_EPOCH_OFFSET: u64 = 2208988800;
+
+fn apply_prft(payload: &[u8], timing: &mut WireTimingInfo) {
+    if payload.len() < 24 {
+        return;
+    }
+    let _version = payload[0];
+    let ntp_secs = u64::from_be_bytes([
+        payload[8],
+        payload[9],
+        payload[10],
+        payload[11],
+        payload[12],
+        payload[13],
+        payload[14],
+        payload[15],
+    ]);
+    let media_time = u64::from_be_bytes([
+        payload[16],
+        payload[17],
+        payload[18],
+        payload[19],
+        payload[20],
+        payload[21],
+        payload[22],
+        payload[23],
+    ]);
+    timing.prft_media_time_ticks = Some(media_time);
+    if ntp_secs >= NTP_UNIX_EPOCH_OFFSET {
+        let unix_ms = (ntp_secs - NTP_UNIX_EPOCH_OFFSET).saturating_mul(1000);
+        timing.prft_ntp_unix_ms = Some(unix_ms);
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(unix_ms);
+        timing.glass_to_glass_ms = Some(now_ms as i64 - unix_ms as i64);
+    }
 }
 
 fn classify_container(bytes: &[u8]) -> ContainerKind {
@@ -655,6 +724,7 @@ fn probe_mpeg_ts(bytes: &[u8]) -> WireProbeInfo {
 
     let codec_hint = info.codec.clone();
     apply_gop_scan(&video_payload, codec_hint.as_deref(), &mut info);
+    info.timing = probe_wire_timing(bytes, ContainerKind::Ts);
     info
 }
 
@@ -1266,6 +1336,235 @@ pub fn fill_abr_from_wire(
     filled
 }
 
+/// Extract ISO-BMFF / MPEG-TS timing signals from the probe buffer.
+pub fn probe_wire_timing(bytes: &[u8], kind: ContainerKind) -> WireTimingInfo {
+    match kind {
+        ContainerKind::Fmp4 => probe_fmp4_timing(bytes),
+        ContainerKind::Ts => probe_ts_timing(bytes),
+        ContainerKind::Unknown => WireTimingInfo::default(),
+    }
+}
+
+fn probe_fmp4_timing(bytes: &[u8]) -> WireTimingInfo {
+    let mut timing = WireTimingInfo::default();
+    let mut moof_timescale = 90000u32;
+    let mut default_duration = 0u32;
+    let mut default_flags = 0u32;
+    walk_boxes(bytes, 0, bytes.len(), &mut |name, payload| {
+        match name {
+            b"sidx" => apply_sidx(payload, &mut timing),
+            b"mdhd" if payload.len() >= 20 => {
+                moof_timescale =
+                    u32::from_be_bytes([payload[16], payload[17], payload[18], payload[19]]);
+            }
+            b"tfdt" => {
+                timing.moof_base_decode_time = parse_tfdt(payload);
+                timing.moof_timescale = Some(moof_timescale);
+            }
+            b"tfhd" => {
+                let (dur, flags) = parse_tfhd(payload);
+                if dur > 0 {
+                    default_duration = dur;
+                }
+                default_flags = flags;
+            }
+            b"trun" => {
+                let (count, total) = parse_trun_timeline(payload, default_duration, default_flags);
+                timing.trun_sample_count = Some(count);
+                timing.trun_total_duration_ticks = Some(total);
+                if timing.wire_duration_sec.is_none() && moof_timescale > 0 && total > 0 {
+                    timing.wire_duration_sec =
+                        Some(total as f64 / f64::from(moof_timescale.max(1)));
+                }
+            }
+            b"prft" => apply_prft(payload, &mut timing),
+            _ => {}
+        }
+        true
+    });
+    if timing.moof_timescale.is_none() && moof_timescale > 0 {
+        timing.moof_timescale = Some(moof_timescale);
+    }
+    timing
+}
+
+fn apply_sidx(payload: &[u8], timing: &mut WireTimingInfo) {
+    if payload.len() < 24 {
+        return;
+    }
+    let version = payload[0];
+    timing.sidx_timescale = Some(u32::from_be_bytes([
+        payload[8],
+        payload[9],
+        payload[10],
+        payload[11],
+    ]));
+    let (earliest, ref_count_off) = if version == 1 {
+        if payload.len() < 32 {
+            return;
+        }
+        (
+            u64::from_be_bytes([
+                payload[12],
+                payload[13],
+                payload[14],
+                payload[15],
+                payload[16],
+                payload[17],
+                payload[18],
+                payload[19],
+            ]),
+            30usize,
+        )
+    } else {
+        (
+            u32::from_be_bytes([payload[12], payload[13], payload[14], payload[15]]) as u64,
+            22usize,
+        )
+    };
+    timing.sidx_earliest_presentation_time = Some(earliest);
+    if payload.len() < ref_count_off + 2 {
+        return;
+    }
+    let ref_count = u16::from_be_bytes([payload[ref_count_off], payload[ref_count_off + 1]]) as u32;
+    timing.sidx_reference_count = Some(ref_count);
+    let first_ref = ref_count_off + 2;
+    if ref_count > 0 && payload.len() >= first_ref + 12 {
+        timing.sidx_first_subsegment_duration_ticks = Some(u32::from_be_bytes([
+            payload[first_ref + 8],
+            payload[first_ref + 9],
+            payload[first_ref + 10],
+            payload[first_ref + 11],
+        ]));
+    }
+}
+
+fn parse_trun_timeline(trun: &[u8], default_duration: u32, default_flags: u32) -> (u32, u64) {
+    if trun.len() < 8 {
+        return (0, 0);
+    }
+    let flags = u32::from_be_bytes([0, trun[1], trun[2], trun[3]]);
+    let sample_count = u32::from_be_bytes([trun[4], trun[5], trun[6], trun[7]]);
+    let has_duration = flags & 0x000100 != 0;
+    let has_sample_flags = flags & 0x000400 != 0;
+    let mut off = 8usize;
+    if flags & 0x000001 != 0 {
+        off += 4;
+    }
+    let mut first_flags = default_flags;
+    if flags & 0x000004 != 0 && off + 4 <= trun.len() {
+        first_flags = u32::from_be_bytes([trun[off], trun[off + 1], trun[off + 2], trun[off + 3]]);
+        off += 4;
+    }
+    let mut total = 0u64;
+    for _ in 0..sample_count {
+        let mut duration = default_duration;
+        if has_duration {
+            if off + 4 > trun.len() {
+                break;
+            }
+            duration = u32::from_be_bytes([trun[off], trun[off + 1], trun[off + 2], trun[off + 3]]);
+            off += 4;
+        }
+        if flags & 0x000200 != 0 {
+            off = off.saturating_add(4);
+        }
+        if has_sample_flags {
+            off = off.saturating_add(4);
+        }
+        total = total.saturating_add(u64::from(duration));
+        let _ = first_flags;
+    }
+    (sample_count, total)
+}
+
+fn probe_ts_timing(bytes: &[u8]) -> WireTimingInfo {
+    let mut timing = WireTimingInfo::default();
+    let packets: Vec<&[u8]> = bytes
+        .chunks(188)
+        .filter(|p| p.len() == 188 && p[0] == 0x47)
+        .collect();
+    if packets.is_empty() {
+        return timing;
+    }
+    timing.ts_continuity_errors = Some(ts_continuity_errors(&packets));
+    if let Some(drift) = ts_pcr_pts_drift_ms(&packets) {
+        timing.pcr_pts_drift_ms = Some(drift);
+    }
+    timing
+}
+
+fn ts_continuity_errors(packets: &[&[u8]]) -> u32 {
+    let mut last_cc: HashMap<u16, u8> = HashMap::new();
+    let mut errors = 0u32;
+    for pkt in packets {
+        let adaptation = (pkt[3] >> 4) & 0x3;
+        if adaptation == 0 || adaptation == 2 {
+            continue;
+        }
+        let pid = packet_pid(pkt);
+        let cc = pkt[3] & 0x0f;
+        if let Some(prev) = last_cc.get(&pid) {
+            let expected = (*prev + 1) & 0x0f;
+            if cc != *prev && cc != expected {
+                errors = errors.saturating_add(1);
+            }
+        }
+        last_cc.insert(pid, cc);
+    }
+    errors
+}
+
+fn ts_pcr_pts_drift_ms(packets: &[&[u8]]) -> Option<f64> {
+    let mut pcr_ticks: Option<u64> = None;
+    let mut pts_ticks: Option<u64> = None;
+    for pkt in packets {
+        if let Some(pcr) = parse_ts_pcr(pkt) {
+            pcr_ticks = Some(pcr);
+        }
+        if let Some(payload) = ts_payload(pkt) {
+            if payload.len() >= 14
+                && payload[0] == 0
+                && payload[1] == 0
+                && payload[2] == 1
+                && (0xE0..=0xEF).contains(&payload[3])
+            {
+                if let Some(pts) = parse_pes_pts(payload) {
+                    pts_ticks = Some(pts);
+                }
+            }
+        }
+        if pcr_ticks.is_some() && pts_ticks.is_some() {
+            break;
+        }
+    }
+    let pcr = pcr_ticks?;
+    let pts = pts_ticks?;
+    let drift_ticks = pts.abs_diff(pcr);
+    Some(drift_ticks as f64 / 90.0)
+}
+
+fn parse_ts_pcr(pkt: &[u8]) -> Option<u64> {
+    let adaptation = (pkt[3] >> 4) & 0x3;
+    if adaptation != 2 && adaptation != 3 {
+        return None;
+    }
+    let afl = *pkt.get(4)? as usize;
+    if afl < 7 || pkt.len() < 5 + afl {
+        return None;
+    }
+    let flags = pkt[5];
+    if flags & 0x10 == 0 {
+        return None;
+    }
+    let base = u64::from(pkt[6]) << 25
+        | u64::from(pkt[7]) << 17
+        | u64::from(pkt[8]) << 9
+        | u64::from(pkt[9]) << 1
+        | u64::from(pkt[10] >> 7);
+    Some(base)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1369,5 +1668,72 @@ mod tests {
         assert!(wire.audio_label().unwrap().contains("aac-lc"));
         assert_eq!(wire.gop_badge(), Some("IDR"));
         assert!(wire.audio_badge().unwrap().contains("48k"));
+    }
+
+    #[test]
+    fn prft_sets_glass_to_glass() {
+        let ntp_unix = 1_700_000_000u64 + NTP_UNIX_EPOCH_OFFSET;
+        let mut prft_payload = vec![0u8; 24];
+        prft_payload[0] = 0;
+        prft_payload[8..16].copy_from_slice(&ntp_unix.to_be_bytes());
+        prft_payload[16..24].copy_from_slice(&90000u64.to_be_bytes());
+        let mut buf = vec![0u8; 8 + prft_payload.len()];
+        let total = buf.len() as u32;
+        buf[0..4].copy_from_slice(&total.to_be_bytes());
+        buf[4..8].copy_from_slice(b"prft");
+        buf[8..].copy_from_slice(&prft_payload);
+        let timing = probe_wire_timing(&buf, ContainerKind::Fmp4);
+        assert!(timing.prft_ntp_unix_ms.is_some());
+        assert!(timing.glass_to_glass_ms.is_some());
+    }
+
+    #[test]
+    fn sidx_timing_parsed() {
+        let mut payload = vec![0u8; 36];
+        payload[0] = 0; // version
+        payload[8..12].copy_from_slice(&90000u32.to_be_bytes());
+        payload[12..16].copy_from_slice(&1000u32.to_be_bytes());
+        payload[22..24].copy_from_slice(&1u16.to_be_bytes());
+        payload[24..28].copy_from_slice(&1u32.to_be_bytes());
+        payload[28..32].copy_from_slice(&4096u32.to_be_bytes());
+        payload[32..36].copy_from_slice(&180000u32.to_be_bytes());
+        let total_len = 8 + payload.len();
+        let mut buf = vec![0u8; total_len];
+        buf[0..4].copy_from_slice(&(total_len as u32).to_be_bytes());
+        buf[4..8].copy_from_slice(b"sidx");
+        buf[8..].copy_from_slice(&payload);
+        let timing = probe_wire_timing(&buf, ContainerKind::Fmp4);
+        assert_eq!(timing.sidx_timescale, Some(90000));
+        assert_eq!(timing.sidx_earliest_presentation_time, Some(1000));
+        assert_eq!(timing.sidx_reference_count, Some(1));
+        assert_eq!(timing.sidx_first_subsegment_duration_ticks, Some(180000));
+    }
+
+    #[test]
+    fn trun_total_duration_computed() {
+        let mut trun = vec![0u8; 20];
+        trun[1] = 0x00;
+        trun[2] = 0x01;
+        trun[3] = 0x01; // flags 0x000101
+        trun[4..8].copy_from_slice(&2u32.to_be_bytes());
+        trun[8..12].copy_from_slice(&0u32.to_be_bytes());
+        trun[12..16].copy_from_slice(&45000u32.to_be_bytes());
+        trun[16..20].copy_from_slice(&45000u32.to_be_bytes());
+        let (count, total) = parse_trun_timeline(&trun, 0, 0);
+        assert_eq!(count, 2);
+        assert_eq!(total, 90000);
+    }
+
+    #[test]
+    fn ts_continuity_error_detected() {
+        let mut p1 = vec![0u8; 188];
+        p1[0] = 0x47;
+        p1[1] = 0x00;
+        p1[2] = 0x10;
+        p1[3] = 0x10; // payload only, cc=0
+        let mut p2 = p1.clone();
+        p2[3] = 0x13; // cc=3, expected 1
+        let errors = ts_continuity_errors(&[&p1[..], &p2[..]]);
+        assert!(errors >= 1);
     }
 }

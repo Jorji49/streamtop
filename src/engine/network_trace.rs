@@ -8,11 +8,13 @@ use std::time::{Duration, Instant};
 use color_eyre::eyre::{eyre, Result, WrapErr};
 use http::HeaderMap;
 use rustls::pki_types::ServerName;
+use serde_json::Value;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio_rustls::TlsConnector;
 use url::Url;
 
+use crate::engine::ip_pin::{pick_connect_addr, resolve_pinned_addrs, validate_outbound_url};
 use crate::models::NetworkTiming;
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
@@ -24,14 +26,16 @@ pub struct TracedResponse {
     pub body: Vec<u8>,
     pub timing: NetworkTiming,
     pub download_ms: u64,
+    pub chunked_transfer: bool,
 }
 
-/// Perform a timed HTTP/1.1 GET with optional Range header.
+/// Perform a timed HTTP/1.1 GET with optional Range header and W3C trace context.
 pub async fn traced_get(
     url: &str,
     extra_headers: &[(String, String)],
     range: Option<&str>,
     max_body: Option<usize>,
+    traceparent: Option<&str>,
 ) -> Result<TracedResponse> {
     let parsed = Url::parse(url).wrap_err("invalid URL")?;
     let scheme = parsed.scheme();
@@ -53,16 +57,15 @@ pub async fn traced_get(
     let path = if path.is_empty() { "/".into() } else { path };
 
     let dns_start = Instant::now();
-    let mut addrs: Vec<SocketAddr> = tokio::net::lookup_host((host.as_str(), port))
+    let addrs = tokio::net::lookup_host((host.as_str(), port))
         .await
         .wrap_err("DNS lookup failed")?
-        .collect();
+        .collect::<Vec<SocketAddr>>();
     let dns_ms = dns_start.elapsed().as_millis() as u64;
     if addrs.is_empty() {
         return Err(eyre!("DNS returned no addresses for {host}"));
     }
-    addrs.sort_by_key(|a| if a.is_ipv4() { 0 } else { 1 });
-    let addr = addrs[0];
+    let addr = pick_connect_addr(&addrs);
 
     let tcp_start = Instant::now();
     let tcp = tokio::time::timeout(DEFAULT_TIMEOUT, TcpStream::connect(addr))
@@ -76,10 +79,14 @@ pub async fn traced_get(
     let total_start = Instant::now();
 
     let mut request = format!(
-        "GET {path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\nAccept: */*\r\nUser-Agent: streamtop/0.2\r\n"
+        "GET {path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\nAccept: */*\r\nUser-Agent: streamtop/{}\r\n",
+        env!("CARGO_PKG_VERSION")
     );
     if let Some(r) = range {
         request.push_str(&format!("Range: {r}\r\n"));
+    }
+    if let Some(tp) = traceparent {
+        request.push_str(&format!("traceparent: {tp}\r\n"));
     }
     for (k, v) in extra_headers {
         if k.eq_ignore_ascii_case("host") || k.eq_ignore_ascii_case("connection") {
@@ -118,6 +125,7 @@ pub async fn traced_get(
     };
 
     let download_ms = total_start.elapsed().as_millis() as u64;
+    let chunked_transfer = headers_indicate_chunked(&headers);
     Ok(TracedResponse {
         status,
         headers,
@@ -129,6 +137,7 @@ pub async fn traced_get(
             ttfb_ms,
         },
         download_ms: download_ms.max(1),
+        chunked_transfer,
     })
 }
 
@@ -178,7 +187,9 @@ async fn read_http_response<S: AsyncReadExt + Unpin>(
         .and_then(|v| v.to_str().ok())
         .and_then(|s| s.parse::<usize>().ok());
 
-    let limit = max_body.or(content_length).unwrap_or(usize::MAX);
+    let limit = max_body
+        .or(content_length)
+        .unwrap_or(crate::models::MAX_SEGMENT_BYTES);
     while body.len() < limit {
         let want = (limit - body.len()).min(tmp.len());
         match stream.read(&mut tmp[..want]).await {
@@ -249,6 +260,78 @@ pub fn timing_from_ttfb(ttfb_ms: u64) -> NetworkTiming {
         tls_ms: None,
         ttfb_ms,
     }
+}
+
+pub fn headers_indicate_chunked(headers: &HeaderMap) -> bool {
+    headers
+        .get("transfer-encoding")
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| v.to_ascii_lowercase().contains("chunked"))
+}
+
+pub fn reqwest_headers_chunked(headers: &reqwest::header::HeaderMap) -> bool {
+    headers
+        .get("transfer-encoding")
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| v.to_ascii_lowercase().contains("chunked"))
+}
+
+/// IP-pinned POST with SSRF validation (webhooks / DRM license endpoints).
+pub async fn pinned_post_json(
+    url: &str,
+    body: &Value,
+    allow_insecure: bool,
+    timeout: Duration,
+) -> Result<u16> {
+    validate_outbound_url(url, allow_insecure)?;
+    let parsed = Url::parse(url).wrap_err("invalid URL")?;
+    let host = parsed
+        .host_str()
+        .ok_or_else(|| eyre!("URL missing host"))?
+        .to_string();
+    let port = parsed
+        .port_or_known_default()
+        .ok_or_else(|| eyre!("URL missing port"))?;
+    let addrs = resolve_pinned_addrs(&host, port, allow_insecure)?;
+    let addr = pick_connect_addr(&addrs);
+    let path = if parsed.query().is_some() {
+        format!("{}?{}", parsed.path(), parsed.query().unwrap_or(""))
+    } else {
+        parsed.path().to_string()
+    };
+    let path = if path.is_empty() { "/".into() } else { path };
+    let payload = body.to_string();
+    let request = format!(
+        "POST {path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: {}\r\nUser-Agent: streamtop/{}\r\n\r\n{payload}",
+        payload.len(),
+        env!("CARGO_PKG_VERSION")
+    );
+    let scheme = parsed.scheme();
+    let (status, _headers, _body, _) = if scheme == "https" {
+        let connector = build_tls_connector()?;
+        let server_name =
+            ServerName::try_from(host.clone()).map_err(|_| eyre!("invalid TLS server name"))?;
+        let tcp = tokio::time::timeout(timeout, TcpStream::connect(addr))
+            .await
+            .map_err(|_| eyre!("TCP connect timeout"))?
+            .wrap_err("TCP connect failed")?;
+        let mut tls = tokio::time::timeout(timeout, connector.connect(server_name, tcp))
+            .await
+            .map_err(|_| eyre!("TLS handshake timeout"))?
+            .wrap_err("TLS handshake failed")?;
+        tls.write_all(request.as_bytes()).await?;
+        tls.flush().await?;
+        read_http_response(&mut tls, Some(65536)).await?
+    } else {
+        let mut tcp = tokio::time::timeout(timeout, TcpStream::connect(addr))
+            .await
+            .map_err(|_| eyre!("TCP connect timeout"))?
+            .wrap_err("TCP connect failed")?;
+        tcp.write_all(request.as_bytes()).await?;
+        tcp.flush().await?;
+        read_http_response(&mut tcp, Some(65536)).await?
+    };
+    Ok(status)
 }
 
 #[cfg(test)]
