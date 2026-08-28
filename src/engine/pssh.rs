@@ -3,7 +3,7 @@
 use crate::models::{PsshEntry, PsshProbeInfo};
 
 pub const WIDEVINE_SYSTEM_ID: &str = "edef8ba9-79d6-4ace-a3c8-27dcd51d21ed";
-pub const PLAYREADY_SYSTEM_ID: &str = "9a04f079-9840-4286-abab-2c844c5f2e65";
+pub const PLAYREADY_SYSTEM_ID: &str = "9a04f079-9840-4286-ab92-e65be0885f95";
 pub const FAIRPLAY_SYSTEM_ID: &str = "94ce86fb-07ff-4f43-adb4-93fb26514845";
 pub const CLEARKEY_SYSTEM_ID: &str = "1077efec-c0b2-4d02-ace3-3c48c139a369";
 

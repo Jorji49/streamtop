@@ -11,8 +11,8 @@ keywords = ["hls", "dash", "tui", "iptv", "diagnostics"]
 categories = ["command-line-utilities", "multimedia::video"]
 
 [package.metadata.deb]
-maintainer = "Ahmet Kayra Kama <kamaahmetkayra@gmail.com>"
-copyright = "2026, Ahmet Kayra Kama <kamaahmetkayra@gmail.com>"
+maintainer = "Ahmet Kayra Kama <kayraak@pm.me>"
+copyright = "2026, Ahmet Kayra Kama <kayraak@pm.me>"
 license-file = ["LICENSE", "4"]
 extended-description = "Diagnose live HLS, DASH, and IPTV streams from the terminal."
 section = "utils"

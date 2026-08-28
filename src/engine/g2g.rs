@@ -25,8 +25,6 @@ pub fn compute_g2g(
 
     let g2g_total_ms = if let Some(prft) = prft_ntp_unix_ms {
         Some(wall_now_ms as i64 - prft as i64)
-    } else if let (Some(origin), Some(ttfb)) = (origin_available_ms, segment_ttfb_ms) {
-        Some(wall_now_ms as i64 - origin + ttfb as i64)
     } else {
         origin_available_ms.map(|origin| wall_now_ms as i64 - origin)
     };

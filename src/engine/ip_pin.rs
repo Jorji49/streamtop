@@ -121,6 +121,9 @@ pub fn resolve_pinned_addrs(
 
 /// Prefer IPv4 for CDN compatibility; stable ordering for pinning.
 pub fn pick_connect_addr(addrs: &[SocketAddr]) -> SocketAddr {
+    if addrs.is_empty() {
+        return SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0);
+    }
     let mut sorted: Vec<SocketAddr> = addrs.to_vec();
     sorted.sort_by_key(|a| if a.is_ipv4() { 0 } else { 1 });
     sorted[0]

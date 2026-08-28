@@ -78,7 +78,7 @@ pub fn simulate_segment_fetch(
     vbuf.buffer_secs = (vbuf.buffer_secs - download_secs + duration).clamp(0.0, 120.0);
 
     // Rebuffer probability rises when download exceeds remaining buffer headroom.
-    let headroom = vbuf.buffer_secs + duration - download_secs;
+    let headroom = vbuf.buffer_secs;
     vbuf.rebuffer_probability_pct = if headroom >= BUFFER_STALL_THRESHOLD_SECS {
         0
     } else {
