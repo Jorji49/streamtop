@@ -37,10 +37,10 @@ fn datasource_variable() -> Value {
 pub fn grafana_dashboard_json() -> Value {
     // 24-column grid: health gauges → latency/G2G → buffer → CDN → errors/ops
     let panels = vec![
-        // Row 0 — health gauges
+        // Row 0 - health gauges
         shi_gauge_panel(1, [0.0, 0.0, 12.0, 8.0]),
         rebuffer_gauge_panel(2, [12.0, 0.0, 12.0, 8.0]),
-        // Row 1 — latency / G2G
+        // Row 1 - latency / G2G
         timeseries_panel(
             3,
             "Glass-to-Glass Latency (G2G)",
@@ -55,7 +55,7 @@ pub fn grafana_dashboard_json() -> Value {
             "s",
             [12.0, 8.0, 12.0, 8.0],
         ),
-        // Row 2 — TTFB / stall risk
+        // Row 2 - TTFB / stall risk
         timeseries_panel(
             5,
             "Segment TTFB (avg)",
@@ -70,7 +70,7 @@ pub fn grafana_dashboard_json() -> Value {
             "short",
             [12.0, 16.0, 12.0, 8.0],
         ),
-        // Row 3 — buffer dynamics
+        // Row 3 - buffer dynamics
         timeseries_panel(
             7,
             "Virtual buffer",
@@ -85,7 +85,7 @@ pub fn grafana_dashboard_json() -> Value {
             "fps",
             [12.0, 24.0, 12.0, 8.0],
         ),
-        // Row 4 — CDN
+        // Row 4 - CDN
         timeseries_panel(
             9,
             "CDN cache hits",
@@ -100,7 +100,7 @@ pub fn grafana_dashboard_json() -> Value {
             "short",
             [12.0, 32.0, 12.0, 8.0],
         ),
-        // Row 5 — origin / HTTP errors
+        // Row 5 - origin / HTTP errors
         timeseries_panel(
             11,
             "Origin stalls",
@@ -115,7 +115,7 @@ pub fn grafana_dashboard_json() -> Value {
             "short",
             [12.0, 40.0, 12.0, 8.0],
         ),
-        // Row 6 — LL-HLS / ad / codec
+        // Row 6 - LL-HLS / ad / codec
         timeseries_panel(
             13,
             "LL-HLS enabled",
@@ -137,7 +137,7 @@ pub fn grafana_dashboard_json() -> Value {
             "short",
             [16.0, 48.0, 8.0, 6.0],
         ),
-        // Row 7 — DRM / LL-HLS parts
+        // Row 7 - DRM / LL-HLS parts
         timeseries_panel(
             16,
             "DRM license TTFB (avg)",
@@ -152,7 +152,7 @@ pub fn grafana_dashboard_json() -> Value {
             "s",
             [12.0, 54.0, 12.0, 6.0],
         ),
-        // Row 8 — channel drops (full width)
+        // Row 8 - channel drops (full width)
         timeseries_panel(
             18,
             "Channel dropped events",

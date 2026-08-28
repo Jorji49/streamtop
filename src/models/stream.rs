@@ -790,7 +790,7 @@ pub struct AdBreakInfo {
 pub struct VirtualBuffer {
     pub buffer_secs: f64,
     pub stall_risk_pct: u8,
-    /// Rebuffer probability from download-vs-duration simulation (0–100%).
+    /// Rebuffer probability from download-vs-duration simulation (0-100%).
     pub rebuffer_probability_pct: u8,
     /// Composite stall risk index (stall + rebuffer, capped at 100).
     pub stall_risk_index: u8,
@@ -1018,7 +1018,7 @@ impl LlHlsInfo {
         Some(format!("[LL-HLS] part {latency} | {seq} | {rate}"))
     }
 
-    /// LL-HLS poll sleep from part duration (clamped 200–330 ms).
+    /// LL-HLS poll sleep from part duration (clamped 200-330 ms).
     pub fn poll_interval_ms(&self) -> u64 {
         let secs = self
             .last_part_duration_secs
