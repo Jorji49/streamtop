@@ -8,6 +8,7 @@
 !/dist/winget/**
 
 /target/
+/fuzz/target/
 /stage/
 /release-assets/
 /verify-hashes/

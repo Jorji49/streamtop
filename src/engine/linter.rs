@@ -1077,6 +1077,38 @@ pub fn scan_drm_keys(raw: &str) -> crate::models::DrmInfo {
     info
 }
 
+/// Virtual player warnings: rebuffer risk and ABR ping-pong.
+pub fn lint_abr_player(vbuf: &crate::models::VirtualBuffer) -> Vec<String> {
+    let mut out = Vec::new();
+    if vbuf.rebuffer_probability_pct >= 50 {
+        out.push(format!(
+            "Rebuffer probability {}% (virtual buffer {:.1}s)",
+            vbuf.rebuffer_probability_pct, vbuf.buffer_secs
+        ));
+    }
+    if vbuf.ping_pong_detected {
+        out.push(format!(
+            "ABR ping-pong detected ({} ladder switches)",
+            vbuf.ladder_switches
+        ));
+    }
+    out
+}
+
+/// Subtitle PTS drift linter messages (±200ms threshold).
+pub fn lint_subtitle_drift(sync: &crate::models::SubtitleSyncInfo) -> Vec<String> {
+    let mut out = Vec::new();
+    if sync.desync_warning {
+        if let Some(drift) = sync.subtitle_drift_ms {
+            out.push(format!(
+                "Subtitle PTS drift {drift}ms exceeds ±{}ms",
+                crate::engine::subtitle_probe::SUBTITLE_DRIFT_WARN_MS
+            ));
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod drm_tests {
     use super::*;

@@ -12,26 +12,34 @@ use tokio::sync::mpsc::Sender;
 use tokio::time::sleep;
 use url::Url;
 
+use crate::engine::abr_model::{simulate_segment_fetch, AbrLadderState};
 use crate::engine::channel_stats::record_channel_drop;
 use crate::engine::container_probe::{
     deep_wire_probe, fill_abr_from_wire, manifest_wire_mismatches,
 };
-use crate::engine::dash::{looks_like_dash, parse_dash_mpd};
+use crate::engine::dash::{ll_dash_production_drift, looks_like_dash, parse_dash_mpd};
+use crate::engine::g2g::{compute_g2g, wall_now_unix_ms};
 use crate::engine::gop_tracker::GopCadenceTracker;
 use crate::engine::linter::{
     ad_log_key, analyze_abr_ladder, apply_abr_penalty, apply_hls_blocking_params,
-    extract_ad_signals_near_live_edge, inspect_container, ll_hls_probe_range,
-    next_blocking_targets, parse_cdn_headers, scan_drm_keys, scan_ll_hls, scan_media_renditions,
-    SpecLinter,
+    extract_ad_signals_near_live_edge, inspect_container, lint_abr_player, lint_subtitle_drift,
+    ll_hls_probe_range, next_blocking_targets, parse_cdn_headers, scan_drm_keys, scan_ll_hls,
+    scan_media_renditions, SpecLinter,
 };
 use crate::engine::metrics::{update_metrics, MetricsSnapshot};
-use crate::engine::network_trace::{parse_header_pairs, timing_from_ttfb, traced_get};
+use crate::engine::network_trace::{
+    parse_header_pairs, reqwest_headers_chunked, timing_from_ttfb, traced_get,
+};
+use crate::engine::otel::OtelExporter;
 use crate::engine::playlist_parser::{is_iptv_channel_list, local_path_from_url};
+use crate::engine::subtitle_probe::{compute_subtitle_drift, probe_subtitle_payload};
+use crate::engine::wire_timing::WireTimingTracker;
 use crate::models::{
     AbrVariant, CdnEdgeInfo, ContainerKind, DiagCategory, DiagSeverity, LatencyState, LogLevel,
     NetworkTiming, PlaylistMeta, SegmentMetrics, StreamEvent, StreamProtocol, StreamStatus,
     VirtualBuffer, WireProbeInfo, AD_SCAN_LIVE_EDGE_SEGMENTS, DEEP_WIRE_PROBE_BYTES,
-    HLS_LIVE_EDGE_SEGMENTS, MEDIA_SEQ_GAP_TOLERANCE,
+    HLS_LIVE_EDGE_SEGMENTS, MAX_MANIFEST_BYTES, MAX_PLAYLIST_DEPTH, MAX_SEGMENT_BYTES,
+    MEDIA_SEQ_GAP_TOLERANCE,
 };
 
 const DEFAULT_UA: &str = concat!("streamtop/", env!("CARGO_PKG_VERSION"));
@@ -56,6 +64,9 @@ pub struct ManifestPoller {
     hook_tx: Option<Sender<StreamEvent>>,
     metrics: Option<Arc<RwLock<MetricsSnapshot>>>,
     gop_tracker: Arc<Mutex<GopCadenceTracker>>,
+    wire_timing_tracker: Arc<Mutex<WireTimingTracker>>,
+    abr_ladder: Arc<Mutex<AbrLadderState>>,
+    otel: Option<Arc<OtelExporter>>,
 }
 
 struct SegmentFetch {
@@ -69,6 +80,8 @@ struct SegmentFetch {
     http_status: u16,
     network: NetworkTiming,
     wire: WireProbeInfo,
+    chunked_transfer: bool,
+    segment_url: String,
 }
 
 impl ManifestPoller {
@@ -97,7 +110,15 @@ impl ManifestPoller {
             hook_tx: None,
             metrics: None,
             gop_tracker: Arc::new(Mutex::new(GopCadenceTracker::default())),
+            wire_timing_tracker: Arc::new(Mutex::new(WireTimingTracker::default())),
+            abr_ladder: Arc::new(Mutex::new(AbrLadderState::default())),
+            otel: None,
         })
+    }
+
+    pub fn with_otel(mut self, otel: Arc<OtelExporter>) -> Self {
+        self.otel = Some(otel);
+        self
     }
 
     pub fn with_metrics(mut self, metrics: Arc<RwLock<MetricsSnapshot>>) -> Self {
@@ -127,10 +148,77 @@ impl ManifestPoller {
         }
     }
 
+    fn traceparent(&self) -> Option<String> {
+        self.otel.as_ref().map(|o| o.traceparent())
+    }
+
+    fn emit_g2g(
+        &self,
+        wire: &WireProbeInfo,
+        pdt: Option<chrono::DateTime<Utc>>,
+        dash_avail_ms: Option<i64>,
+        ttfb_ms: u64,
+    ) {
+        let g2g = compute_g2g(
+            wire.timing.prft_ntp_unix_ms,
+            pdt.as_ref(),
+            dash_avail_ms,
+            Some(ttfb_ms),
+            wall_now_unix_ms(),
+        );
+        if !g2g.is_empty() {
+            if let Some(otel) = &self.otel {
+                otel.record_g2g(&g2g);
+            }
+            self.send_event(StreamEvent::G2g(g2g));
+        }
+    }
+
+    fn merge_wire_pssh(&self, drm: &mut crate::models::DrmInfo, wire: &WireProbeInfo) {
+        if wire.pssh.is_empty() {
+            return;
+        }
+        if let Some(ref mut existing) = drm.pssh {
+            existing.merge(wire.pssh.clone());
+        } else {
+            drm.pssh = Some(wire.pssh.clone());
+        }
+    }
+
     fn finalize_wire(&self, wire: &mut WireProbeInfo) {
         if let Ok(mut tracker) = self.gop_tracker.lock() {
             tracker.observe_keyframe(wire.keyframe_pts_sec);
             tracker.apply(wire);
+        }
+        if let Ok(mut timing) = self.wire_timing_tracker.lock() {
+            timing.apply(&mut wire.timing, None);
+            timing.observe_segment(&wire.timing, wire.keyframe_pts_sec);
+        }
+    }
+
+    fn apply_wire_target_duration(&self, wire: &mut WireProbeInfo, target_secs: f32) {
+        if let Ok(mut timing) = self.wire_timing_tracker.lock() {
+            timing.apply_target(&mut wire.timing, Some(target_secs));
+        }
+        if let Some(label) = wire.timing.timing_label() {
+            self.emit_log(
+                LogLevel::Warn,
+                DiagCategory::Segment,
+                format!("Wire timing: {label}"),
+            );
+        }
+    }
+
+    fn record_segment_otel(&self, fetch: &SegmentFetch) {
+        if let Some(exporter) = &self.otel {
+            exporter.record_network("http.ttfb", &fetch.network, &fetch.segment_url);
+            exporter.record_segment_download(
+                &fetch.segment_url,
+                &fetch.network,
+                fetch.download_ms,
+                fetch.http_status,
+                fetch.chunked_transfer,
+            );
         }
     }
 
@@ -312,6 +400,10 @@ impl ManifestPoller {
         let xml = String::from_utf8_lossy(&body);
         let summary = parse_dash_mpd(&xml, &self.source_url)?;
 
+        for issue in crate::engine::dash::audit_multi_period_mpd(&xml, &summary) {
+            self.emit_log(LogLevel::Warn, DiagCategory::Rfc, issue);
+        }
+
         if summary.period_count > 1 {
             self.emit_log(
                 LogLevel::Info,
@@ -440,21 +532,12 @@ impl ManifestPoller {
             }
         }
 
-        self.send_event(StreamEvent::PlaylistMeta(PlaylistMeta {
-            media_sequence: *probe_seq,
-            target_duration: target.max(1),
-            url: self.source_url.to_string(),
-            window_segments,
-            window_secs,
-            has_pdt: summary.availability_start_time.is_some(),
-            has_master_playlist: variants.len() > 1,
-            refresh_interval_ms: summary
-                .minimum_update_period_secs
-                .map(|s| (s * 1000.0).round() as u64),
-            ll_hls: Default::default(),
-            drm: dash_drm,
-            renditions: Default::default(),
-        }));
+        let mut ll_dash = summary.ll_dash.clone();
+        if ll_dash.is_ll_dash && *probe_seq <= 1 {
+            if let Some(badge) = ll_dash.header_badge() {
+                self.emit_log(LogLevel::Info, DiagCategory::Info, badge);
+            }
+        }
 
         let probe_url = summary
             .probe_url
@@ -474,11 +557,6 @@ impl ManifestPoller {
 
             linter.on_cdn_headers(fetch.cdn.clone(), fetch.ttfb_ms, seq);
 
-            let wall = buffer_clock.elapsed().as_secs_f64();
-            *buffer_clock = Instant::now();
-            vbuf.on_new_segment(seg_hint, wall);
-            self.send_event(StreamEvent::Buffer(*vbuf));
-
             let kbps = if fetch.probed {
                 None
             } else if fetch.download_ms > 0 {
@@ -487,7 +565,61 @@ impl ManifestPoller {
                 None
             };
 
+            let wall = buffer_clock.elapsed().as_secs_f64();
+            *buffer_clock = Instant::now();
+            let declared_bw = variants
+                .iter()
+                .find(|v| v.selected)
+                .or_else(|| variants.first())
+                .map(|v| v.bandwidth);
+            if let Ok(mut ladder) = self.abr_ladder.lock() {
+                simulate_segment_fetch(
+                    vbuf,
+                    seg_hint,
+                    fetch.download_ms,
+                    wall,
+                    kbps,
+                    declared_bw,
+                    &mut ladder,
+                );
+            } else {
+                vbuf.on_new_segment(seg_hint, wall);
+            }
+            self.send_event(StreamEvent::Buffer(*vbuf));
+            for w in lint_abr_player(vbuf) {
+                self.emit_log(LogLevel::Warn, DiagCategory::Abr, w);
+            }
+
             self.apply_wire_to_variants(&mut variants, &fetch.wire);
+
+            if fetch.chunked_transfer {
+                ll_dash.chunked_transfer = true;
+            }
+            if let Some(target_ms) = ll_dash.latency_target_ms {
+                let drift = ll_dash_production_drift(target_ms, fetch.ttfb_ms);
+                ll_dash.production_drift_ms = Some(drift);
+                if drift > target_ms as i64 {
+                    self.emit_log(
+                        LogLevel::Warn,
+                        DiagCategory::Segment,
+                        format!(
+                            "LL-DASH production drift {drift}ms exceeds latency target {target_ms}ms"
+                        ),
+                    );
+                }
+            }
+
+            self.record_segment_otel(&fetch);
+            if let Some(otel) = &self.otel {
+                otel.record_wire_parse(&fetch.segment_url, &fetch.wire);
+            }
+            let dash_avail_ms = summary
+                .publish_time
+                .as_ref()
+                .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
+                .map(|dt| dt.timestamp_millis());
+            self.emit_g2g(&fetch.wire, None, dash_avail_ms, fetch.ttfb_ms);
+            self.merge_wire_pssh(&mut dash_drm, &fetch.wire);
 
             let metrics = SegmentMetrics {
                 media_sequence: seq,
@@ -537,7 +669,24 @@ impl ManifestPoller {
                 v.selected = v.uri == best_uri;
             }
         }
-        self.send_event(StreamEvent::Variants(variants));
+        self.send_event(StreamEvent::Variants(variants.clone()));
+
+        self.send_event(StreamEvent::PlaylistMeta(PlaylistMeta {
+            media_sequence: *probe_seq,
+            target_duration: target.max(1),
+            url: self.source_url.to_string(),
+            window_segments,
+            window_secs,
+            has_pdt: summary.availability_start_time.is_some(),
+            has_master_playlist: variants.len() > 1,
+            refresh_interval_ms: summary
+                .minimum_update_period_secs
+                .map(|s| (s * 1000.0).round() as u64),
+            ll_hls: Default::default(),
+            ll_dash: ll_dash.clone(),
+            drm: dash_drm,
+            renditions: Default::default(),
+        }));
 
         Ok((target.max(1), summary.minimum_update_period_secs))
     }
@@ -776,7 +925,7 @@ impl ManifestPoller {
                 *last_seen_seq = None;
                 *announced_estimate = false;
 
-                let media_body = self.fetch_bytes(media_url.as_str()).await?;
+                let media_body = self.fetch_bytes_with_depth(media_url.as_str(), 1).await?;
                 let media = m3u8_rs::parse_media_playlist_res(&media_body)
                     .map_err(|e| eyre!("media playlist parse error: {e}"))?;
                 let master_text = String::from_utf8_lossy(&body);
@@ -1106,6 +1255,7 @@ impl ManifestPoller {
             has_master_playlist: has_master,
             refresh_interval_ms,
             ll_hls: ll_meta,
+            ll_dash: Default::default(),
             drm,
             renditions,
         }));
@@ -1312,9 +1462,29 @@ impl ManifestPoller {
         let now = Instant::now();
         let elapsed = now.duration_since(*buffer_clock).as_secs_f64();
         *buffer_clock = now;
-        vbuf.on_new_segment(segment.duration, elapsed);
-        if vbuf.stall_risk_pct > 0 {
+        let declared_bw = variants
+            .iter()
+            .find(|v| v.selected)
+            .or_else(|| variants.first())
+            .map(|v| v.bandwidth);
+        if let Ok(mut ladder) = self.abr_ladder.lock() {
+            simulate_segment_fetch(
+                vbuf,
+                segment.duration,
+                fetch.download_ms,
+                elapsed,
+                download_kbps,
+                declared_bw,
+                &mut ladder,
+            );
+        } else {
+            vbuf.on_new_segment(segment.duration, elapsed);
+        }
+        if vbuf.stall_risk_pct > 0 || vbuf.rebuffer_probability_pct > 0 {
             self.emit_log(LogLevel::Warn, DiagCategory::Buffer, vbuf.display());
+        }
+        for w in lint_abr_player(vbuf) {
+            self.emit_log(LogLevel::Warn, DiagCategory::Abr, w);
         }
 
         let (latency, latency_ms) = match &segment.program_date_time {
@@ -1326,7 +1496,47 @@ impl ManifestPoller {
             None => (LatencyState::Estimated(estimated_ms), Some(estimated_ms)),
         };
 
-        self.apply_wire_to_variants(variants, &fetch.wire);
+        let mut wire = fetch.wire.clone();
+        if segment.duration > 0.0 {
+            self.apply_wire_target_duration(&mut wire, segment.duration);
+        }
+
+        self.apply_wire_to_variants(variants, &wire);
+        self.record_segment_otel(&fetch);
+        if let Some(otel) = &self.otel {
+            otel.record_wire_parse(&fetch.segment_url, &wire);
+        }
+        self.emit_g2g(
+            &wire,
+            segment
+                .program_date_time
+                .as_ref()
+                .map(|p| p.with_timezone(&Utc)),
+            None,
+            fetch.ttfb_ms,
+        );
+
+        let video_pts_ms = wire
+            .keyframe_pts_sec
+            .or(wire.timing.wire_duration_sec)
+            .map(|s| (s * 1000.0).round() as u64);
+        if let Some(sync) = self
+            .probe_subtitle_sync(&fetch.segment_url, video_pts_ms)
+            .await
+        {
+            if sync.desync_warning {
+                if let Some(drift) = sync.subtitle_drift_ms {
+                    self.emit_log(
+                        LogLevel::Warn,
+                        DiagCategory::AvSync,
+                        format!("Subtitle drift {drift}ms exceeds ±200ms threshold"),
+                    );
+                }
+            }
+            for msg in lint_subtitle_drift(&sync) {
+                self.emit_log(LogLevel::Warn, DiagCategory::AvSync, msg);
+            }
+        }
 
         let metrics = SegmentMetrics {
             media_sequence,
@@ -1343,12 +1553,12 @@ impl ManifestPoller {
             container: fetch.container,
             http_status: fetch.http_status,
             network: Some(fetch.network.clone()),
-            wire: Some(fetch.wire.clone()),
+            wire: Some(wire.clone()),
         };
 
         let rate_label = metrics.rate_label();
         let net_line = fetch.network.display_line();
-        self.send_event(StreamEvent::WireProbe(fetch.wire.clone()));
+        self.send_event(StreamEvent::WireProbe(wire));
         self.send_event(StreamEvent::Segment(metrics));
         self.send_event(StreamEvent::Latency(latency));
         self.send_event(StreamEvent::Buffer(*vbuf));
@@ -1433,11 +1643,9 @@ impl ManifestPoller {
             .get(reqwest::header::CONTENT_TYPE)
             .and_then(|v| v.to_str().ok())
             .map(|s| s.to_string());
-        let body = response
-            .bytes()
+        let body = read_response_bytes_limited(response, MAX_MANIFEST_BYTES)
             .await
-            .wrap_err("failed to read body")?
-            .to_vec();
+            .wrap_err("failed to read body")?;
         Ok((body, content_type))
     }
 
@@ -1445,11 +1653,47 @@ impl ManifestPoller {
         Ok(self.fetch_manifest(url).await?.0)
     }
 
+    async fn fetch_bytes_with_depth(&self, url: &str, depth: u32) -> Result<Vec<u8>> {
+        if depth > MAX_PLAYLIST_DEPTH {
+            return Err(eyre!(
+                "playlist nesting exceeds MAX_PLAYLIST_DEPTH ({MAX_PLAYLIST_DEPTH})"
+            ));
+        }
+        let _ = depth;
+        self.fetch_bytes(url).await
+    }
+
+    async fn probe_subtitle_sync(
+        &self,
+        url: &str,
+        video_pts_ms: Option<u64>,
+    ) -> Option<crate::models::SubtitleSyncInfo> {
+        let lower = url.to_ascii_lowercase();
+        if !lower.ends_with(".vtt")
+            && !lower.ends_with(".ttml")
+            && !lower.contains("webvtt")
+            && !lower.contains("ttml")
+        {
+            return None;
+        }
+        let bytes = self.fetch_bytes(url).await.ok()?;
+        let probe = probe_subtitle_payload(&bytes);
+        Some(compute_subtitle_drift(&probe, video_pts_ms))
+    }
+
     async fn download_segment(&self, url: &str) -> Result<SegmentFetch> {
         if let Some(path) = local_path_from_url(url) {
             return read_local_segment(&path, false).await;
         }
-        match traced_get(url, &self.extra_headers, None, None).await {
+        match traced_get(
+            url,
+            &self.extra_headers,
+            None,
+            Some(MAX_SEGMENT_BYTES),
+            self.traceparent().as_deref(),
+        )
+        .await
+        {
             Ok(resp) => {
                 let code = resp.status;
                 if !((200..300).contains(&code)) {
@@ -1477,6 +1721,8 @@ impl ManifestPoller {
                     http_status: code,
                     network: resp.timing,
                     wire,
+                    chunked_transfer: resp.chunked_transfer,
+                    segment_url: url.to_string(),
                 })
             }
             Err(_) => self.download_segment_reqwest(url).await,
@@ -1497,13 +1743,18 @@ impl ManifestPoller {
             return Err(eyre!("segment HTTP {status} - {url}"));
         }
         let cdn = parse_cdn_headers(response.headers());
+        let chunked = reqwest_headers_chunked(response.headers());
         let ttfb_ms = started.elapsed().as_millis() as u64;
         let mut stream = response.bytes_stream();
         let mut total: u64 = 0;
         let mut head: Vec<u8> = Vec::new();
+        let max = MAX_SEGMENT_BYTES;
 
         while let Some(chunk) = stream.next().await {
             let chunk = chunk.wrap_err("segment stream read error")?;
+            if total.saturating_add(chunk.len() as u64) > max as u64 {
+                return Err(eyre!("segment exceeds {max} byte limit"));
+            }
             if head.len() < DEEP_WIRE_PROBE_BYTES as usize + 1 {
                 let take = ((DEEP_WIRE_PROBE_BYTES as usize + 1) - head.len()).min(chunk.len());
                 head.extend_from_slice(&chunk[..take]);
@@ -1530,6 +1781,8 @@ impl ManifestPoller {
             http_status: code,
             network: timing_from_ttfb(ttfb_ms),
             wire,
+            chunked_transfer: chunked,
+            segment_url: url.to_string(),
         })
     }
 
@@ -1543,6 +1796,7 @@ impl ManifestPoller {
             &self.extra_headers,
             Some(&range),
             Some(DEEP_WIRE_PROBE_BYTES as usize + 1),
+            self.traceparent().as_deref(),
         )
         .await
         {
@@ -1579,6 +1833,8 @@ impl ManifestPoller {
                     http_status: code,
                     network: resp.timing,
                     wire,
+                    chunked_transfer: resp.chunked_transfer,
+                    segment_url: url.to_string(),
                 })
             }
             Err(_) => self.probe_segment_reqwest(url).await,
@@ -1603,6 +1859,7 @@ impl ManifestPoller {
         }
 
         let cdn = parse_cdn_headers(response.headers());
+        let chunked = reqwest_headers_chunked(response.headers());
         let ttfb_ms = started.elapsed().as_millis() as u64;
         let declared = response
             .headers()
@@ -1653,6 +1910,8 @@ impl ManifestPoller {
             http_status: code,
             network: timing_from_ttfb(ttfb_ms),
             wire,
+            chunked_transfer: chunked,
+            segment_url: url.to_string(),
         })
     }
 
@@ -1697,6 +1956,19 @@ pub fn build_http_client(headers: &[String], user_agent: Option<String>) -> Resu
     build_http_client_with_timeouts(headers, user_agent, 10, 30)
 }
 
+async fn read_response_bytes_limited(response: reqwest::Response, max: usize) -> Result<Vec<u8>> {
+    let mut stream = response.bytes_stream();
+    let mut buf = Vec::new();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.wrap_err("response stream read error")?;
+        if buf.len().saturating_add(chunk.len()) > max {
+            return Err(eyre!("response exceeds {max} byte limit"));
+        }
+        buf.extend_from_slice(&chunk);
+    }
+    Ok(buf)
+}
+
 /// Audit HTTP client with short connect/total timeouts.
 pub fn build_audit_http_client(headers: &[String], user_agent: Option<String>) -> Result<Client> {
     use crate::models::{AUDIT_CONNECT_TIMEOUT_SECS, AUDIT_REQUEST_TIMEOUT_SECS};
@@ -1718,6 +1990,7 @@ fn build_http_client_with_timeouts(
         .user_agent(user_agent.unwrap_or_else(|| DEFAULT_UA.to_string()))
         .gzip(true)
         .brotli(true)
+        .redirect(reqwest::redirect::Policy::none())
         .timeout(Duration::from_secs(timeout_secs))
         .connect_timeout(Duration::from_secs(connect_secs))
         .pool_idle_timeout(Duration::from_secs(90));
@@ -1832,6 +2105,8 @@ async fn read_local_segment(path: &std::path::Path, probe: bool) -> Result<Segme
         http_status: if probe { 206 } else { 200 },
         network: timing_from_ttfb(ttfb_ms),
         wire,
+        chunked_transfer: false,
+        segment_url: path.display().to_string(),
     })
 }
 

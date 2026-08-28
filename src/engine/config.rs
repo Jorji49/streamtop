@@ -120,6 +120,7 @@ mod tests {
             webhook_url: None,
             alert_on: "stall".into(),
             allow_insecure_webhooks: false,
+            otel_endpoint: None,
         };
         apply_section(
             &mut s,

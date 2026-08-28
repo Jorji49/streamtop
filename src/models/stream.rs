@@ -23,6 +23,14 @@ pub const AUDIT_CONCURRENCY: usize = 25;
 pub const AUDIT_CONNECT_TIMEOUT_SECS: u64 = 3;
 pub const AUDIT_REQUEST_TIMEOUT_SECS: u64 = 5;
 pub const STALL_TTFB_MS: u64 = 2500;
+/// Maximum manifest / metadata download size (decompression-bomb guard).
+pub const MAX_MANIFEST_BYTES: usize = 10 * 1024 * 1024;
+/// Maximum full segment download when not range-probing.
+pub const MAX_SEGMENT_BYTES: usize = 32 * 1024 * 1024;
+/// Nested HLS master → variant → sub-playlist depth cap.
+pub const MAX_PLAYLIST_DEPTH: u32 = 8;
+/// Maximum binary SCTE-35 section size accepted by the decoder.
+pub const MAX_SCTE35_BYTES: usize = 256 * 1024;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ChannelEntry {
@@ -183,8 +191,130 @@ pub struct WireProbeInfo {
     /// True when GOP interval is stable across at least three keyframe samples.
     #[serde(default)]
     pub is_fixed_cadence: bool,
+    /// ISO-BMFF / MPEG-TS timing diagnostics from the wire probe window.
+    #[serde(default, skip_serializing_if = "WireTimingInfo::is_empty")]
+    pub timing: WireTimingInfo,
+    #[serde(default)]
+    pub adts_sync_valid: bool,
+    #[serde(default)]
+    pub audio_silent_suspect: bool,
     #[serde(default)]
     pub container: ContainerKind,
+    /// PSSH boxes discovered in the wire probe window.
+    #[serde(default, skip_serializing_if = "PsshProbeInfo::is_empty")]
+    pub pssh: PsshProbeInfo,
+}
+
+/// fMP4 / MPEG-TS timing signals extracted from the probe buffer.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct WireTimingInfo {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sidx_reference_count: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sidx_timescale: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sidx_earliest_presentation_time: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sidx_first_subsegment_duration_ticks: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub moof_base_decode_time: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub moof_timescale: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub trun_sample_count: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub trun_total_duration_ticks: Option<u64>,
+    #[serde(default)]
+    pub pts_discontinuity: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pts_gap_ms: Option<f64>,
+    #[serde(default)]
+    pub pts_rollover_suspect: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ts_continuity_errors: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pcr_pts_drift_ms: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub wire_duration_sec: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_duration_deviation_pct: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prft_ntp_unix_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prft_media_time_ticks: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub glass_to_glass_ms: Option<i64>,
+}
+
+impl WireTimingInfo {
+    pub fn is_empty(&self) -> bool {
+        self.sidx_reference_count.is_none()
+            && self.sidx_timescale.is_none()
+            && self.sidx_earliest_presentation_time.is_none()
+            && self.sidx_first_subsegment_duration_ticks.is_none()
+            && self.moof_base_decode_time.is_none()
+            && self.moof_timescale.is_none()
+            && self.trun_sample_count.is_none()
+            && self.trun_total_duration_ticks.is_none()
+            && !self.pts_discontinuity
+            && self.pts_gap_ms.is_none()
+            && !self.pts_rollover_suspect
+            && self.ts_continuity_errors.is_none()
+            && self.pcr_pts_drift_ms.is_none()
+            && self.wire_duration_sec.is_none()
+            && self.target_duration_deviation_pct.is_none()
+            && self.prft_ntp_unix_ms.is_none()
+            && self.prft_media_time_ticks.is_none()
+            && self.glass_to_glass_ms.is_none()
+    }
+
+    pub fn timing_label(&self) -> Option<String> {
+        let mut parts = Vec::new();
+        if self.pts_discontinuity {
+            parts.push("PTS gap".into());
+        }
+        if self.pts_rollover_suspect {
+            parts.push("PTS rollover?".into());
+        }
+        if let Some(n) = self.ts_continuity_errors.filter(|&v| v > 0) {
+            parts.push(format!("CC err {n}"));
+        }
+        if let Some(ms) = self
+            .pcr_pts_drift_ms
+            .filter(|v| v.is_finite() && v.abs() > 50.0)
+        {
+            parts.push(format!("PCR drift {ms:.0}ms"));
+        }
+        if let Some(pct) = self
+            .target_duration_deviation_pct
+            .filter(|v| v.is_finite() && v.abs() > 15.0)
+        {
+            parts.push(format!("dur Δ {pct:.0}%"));
+        }
+        if let Some(ms) = self.glass_to_glass_ms.filter(|v| v.abs() > 500) {
+            parts.push(format!("G2G {ms}ms"));
+        }
+        if parts.is_empty() {
+            None
+        } else {
+            Some(parts.join(" · "))
+        }
+    }
+
+    pub fn timing_badge(&self) -> Option<&'static str> {
+        if self.pts_discontinuity || self.pts_rollover_suspect {
+            Some("PTS!")
+        } else if self.ts_continuity_errors.is_some_and(|n| n > 0) {
+            Some("CC!")
+        } else if self
+            .target_duration_deviation_pct
+            .is_some_and(|p| p.abs() > 15.0)
+        {
+            Some("DUR~")
+        } else {
+            None
+        }
+    }
 }
 
 impl WireProbeInfo {
@@ -660,6 +790,12 @@ pub struct AdBreakInfo {
 pub struct VirtualBuffer {
     pub buffer_secs: f64,
     pub stall_risk_pct: u8,
+    /// Rebuffer probability from download-vs-duration simulation (0–100%).
+    pub rebuffer_probability_pct: u8,
+    /// Composite stall risk index (stall + rebuffer, capped at 100).
+    pub stall_risk_index: u8,
+    pub ladder_switches: u32,
+    pub ping_pong_detected: bool,
 }
 
 impl VirtualBuffer {
@@ -669,6 +805,7 @@ impl VirtualBuffer {
             + f64::from(duration_secs))
         .clamp(0.0, 120.0);
         self.recompute_stall_risk();
+        self.stall_risk_index = self.stall_risk_pct;
     }
 
     /// Drain buffer by wall-clock time between polls.
@@ -680,7 +817,7 @@ impl VirtualBuffer {
         self.recompute_stall_risk();
     }
 
-    fn recompute_stall_risk(&mut self) {
+    pub fn recompute_stall_risk(&mut self) {
         self.stall_risk_pct = if self.buffer_secs >= BUFFER_STALL_THRESHOLD_SECS {
             0
         } else {
@@ -692,10 +829,77 @@ impl VirtualBuffer {
     }
 
     pub fn display(&self) -> String {
+        let abr = if self.ping_pong_detected {
+            " | ABR ping-pong".to_string()
+        } else if self.ladder_switches > 0 {
+            format!(" | switches={}", self.ladder_switches)
+        } else {
+            String::new()
+        };
         format!(
-            "Buffer: {:.1}s | Stall risk: {}%",
-            self.buffer_secs, self.stall_risk_pct
+            "Buffer: {:.1}s | Stall: {}% | Rebuf: {}%{abr}",
+            self.buffer_secs, self.stall_risk_pct, self.rebuffer_probability_pct
         )
+    }
+}
+
+/// Glass-to-glass pipeline latency breakdown.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq)]
+pub struct G2gMetrics {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ingestion_lag_ms: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub edge_propagation_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub g2g_total_ms: Option<i64>,
+}
+
+impl G2gMetrics {
+    pub fn is_empty(&self) -> bool {
+        self.ingestion_lag_ms.is_none()
+            && self.edge_propagation_ms.is_none()
+            && self.g2g_total_ms.is_none()
+    }
+
+    pub fn display(&self) -> String {
+        let ingest = self
+            .ingestion_lag_ms
+            .map(|v| format!("ingest {v}ms"))
+            .unwrap_or_else(|| "ingest -".into());
+        let edge = self
+            .edge_propagation_ms
+            .map(|v| format!("edge {v}ms"))
+            .unwrap_or_else(|| "edge -".into());
+        let total = self
+            .g2g_total_ms
+            .map(|v| format!("G2G {v}ms"))
+            .unwrap_or_else(|| "G2G -".into());
+        format!("{total} | {ingest} | {edge}")
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PsshEntry {
+    pub system_id: String,
+    pub drm_system: String,
+    pub version: u8,
+    pub key_ids: Vec<String>,
+    pub data_len: u32,
+    pub valid: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub encryption_scheme: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub issues: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct PsshProbeInfo {
+    pub entries: Vec<PsshEntry>,
+}
+
+impl PsshProbeInfo {
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
     }
 }
 
@@ -717,6 +921,20 @@ pub struct DrmInfo {
     pub license_http_status: Option<u16>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub license_error: Option<String>,
+    /// Parsed PSSH entries from manifest or fMP4 wire probe.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pssh: Option<PsshProbeInfo>,
+}
+
+/// Subtitle timing vs video PTS correlation.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct SubtitleSyncInfo {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subtitle_drift_ms: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub format: Option<String>,
+    pub cue_count: u32,
+    pub desync_warning: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -811,6 +1029,49 @@ impl LlHlsInfo {
     }
 }
 
+/// Low-latency DASH / CMAF chunking signals from MPD and segment fetches.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct LlDashInfo {
+    pub is_ll_dash: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub latency_target_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub min_latency_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_latency_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub availability_time_offset_secs: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub utc_timing_scheme: Option<String>,
+    pub chunked_transfer: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub production_drift_ms: Option<i64>,
+}
+
+impl LlDashInfo {
+    pub fn header_badge(&self) -> Option<String> {
+        if !self.is_ll_dash {
+            return None;
+        }
+        let target = self
+            .latency_target_ms
+            .map(|ms| format!("{ms}ms"))
+            .unwrap_or_else(|| "-".into());
+        let ato = self
+            .availability_time_offset_secs
+            .map(|s| format!("ato={s:.3}s"))
+            .unwrap_or_else(|| "-".into());
+        let cte = if self.chunked_transfer { "CTE" } else { "-" };
+        let drift = self
+            .production_drift_ms
+            .map(|d| format!("drift={d}ms"))
+            .unwrap_or_else(|| "-".into());
+        Some(format!(
+            "[LL-DASH] target {target} | {ato} | {cte} | {drift}"
+        ))
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlaylistMeta {
     pub media_sequence: u64,
@@ -823,6 +1084,8 @@ pub struct PlaylistMeta {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub refresh_interval_ms: Option<u64>,
     pub ll_hls: LlHlsInfo,
+    #[serde(default)]
+    pub ll_dash: LlDashInfo,
     #[serde(default)]
     pub drm: DrmInfo,
     #[serde(default)]
@@ -853,6 +1116,7 @@ pub struct AbrHealth {
 }
 
 #[derive(Debug, Clone)]
+#[allow(clippy::large_enum_variant)]
 pub enum StreamEvent {
     Status(StreamStatus),
     Variants(Vec<AbrVariant>),
@@ -864,6 +1128,7 @@ pub enum StreamEvent {
     AbrHealth(AbrHealth),
     AdBreak(AdBreakInfo),
     Buffer(VirtualBuffer),
+    G2g(G2gMetrics),
     ProbeMode(bool),
     Finding(DiagnosticFinding),
     WireProbe(WireProbeInfo),

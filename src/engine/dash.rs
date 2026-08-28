@@ -8,7 +8,8 @@ use dash_mpd::{
 };
 use url::Url;
 
-use crate::models::{parse_frame_rate, AbrVariant, DrmInfo};
+use crate::engine::pssh::parse_pssh_base64;
+use crate::models::{parse_frame_rate, AbrVariant, DrmInfo, LlDashInfo, PsshProbeInfo};
 
 #[derive(Debug, Clone, Default)]
 pub struct DashSummary {
@@ -30,6 +31,7 @@ pub struct DashSummary {
     /// Active period id (last period for dynamic live).
     pub active_period_id: Option<String>,
     pub drm: DrmInfo,
+    pub ll_dash: LlDashInfo,
 }
 
 pub fn looks_like_dash(url: &str, body: &[u8], content_type: Option<&str>) -> bool {
@@ -136,6 +138,16 @@ pub fn parse_dash_mpd(xml: &str, base: &Url) -> Result<DashSummary> {
         segment_duration_hint_secs = 2.0;
     }
 
+    let ll_dash = scan_ll_dash_xml(xml);
+    let mpd_pssh = extract_mpd_pssh(xml);
+    if !mpd_pssh.is_empty() {
+        if let Some(ref mut existing) = drm.pssh {
+            existing.merge(mpd_pssh);
+        } else {
+            drm.pssh = Some(mpd_pssh);
+        }
+    }
+
     Ok(DashSummary {
         availability_start_time,
         publish_time,
@@ -152,6 +164,7 @@ pub fn parse_dash_mpd(xml: &str, base: &Url) -> Result<DashSummary> {
         period_count,
         active_period_id,
         drm,
+        ll_dash,
     })
 }
 
@@ -266,6 +279,14 @@ fn merge_drm(into: &mut DrmInfo, protections: &[dash_mpd::ContentProtection]) {
             .and_then(|l| l.content.clone())
             .or_else(|| cp.clearkey_laurl.as_ref().and_then(|l| l.content.clone()))
             .filter(|s| !s.trim().is_empty());
+
+        if let Some(b64) = extract_cenc_pssh(cp) {
+            if let Some(entry) = parse_pssh_base64(&b64) {
+                let mut probe = into.pssh.take().unwrap_or_default();
+                probe.entries.push(entry);
+                into.pssh = Some(probe);
+            }
+        }
 
         if let Some(mut info) = classify_content_protection(&cp.schemeIdUri) {
             if info.key_uri.is_none() {
@@ -396,6 +417,170 @@ fn join_url(base: &Url, href: &str) -> Option<String> {
     base.join(href).ok().map(|u| u.to_string())
 }
 
+/// Scan raw MPD XML for LL-DASH / CMAF attributes not exposed by dash-mpd.
+pub fn scan_ll_dash_xml(xml: &str) -> LlDashInfo {
+    let lower = xml.to_ascii_lowercase();
+    let mut info = LlDashInfo::default();
+
+    if lower.contains("servicedescription") || lower.contains("<latency") {
+        info.is_ll_dash = true;
+        if let Some(idx) = lower.find("<latency") {
+            let slice = &xml[idx..idx.saturating_add(384).min(xml.len())];
+            info.latency_target_ms = parse_duration_attr_ms(slice, "target");
+            info.min_latency_ms = parse_duration_attr_ms(slice, "min");
+            info.max_latency_ms = parse_duration_attr_ms(slice, "max");
+        }
+    }
+
+    if let Some(ato) = parse_xml_attr_f64(xml, "availabilityTimeOffset") {
+        info.availability_time_offset_secs = Some(ato);
+        info.is_ll_dash = true;
+    }
+
+    if lower.contains("utctiming") {
+        info.is_ll_dash = true;
+        info.utc_timing_scheme = parse_utc_timing_scheme(xml);
+    }
+
+    if lower.contains("chunked") && lower.contains("transfer") {
+        info.is_ll_dash = true;
+    }
+
+    info
+}
+
+fn parse_utc_timing_scheme(xml: &str) -> Option<String> {
+    let lower = xml.to_ascii_lowercase();
+    let idx = lower.find("utctiming")?;
+    let slice = &xml[idx..idx.saturating_add(512).min(xml.len())];
+    parse_xml_attr_string(slice, "schemeIdUri")
+        .or_else(|| parse_xml_attr_string(slice, "schemeiduri"))
+}
+
+fn parse_xml_attr_f64(xml: &str, attr: &str) -> Option<f64> {
+    let needle = format!("{attr}=\"");
+    let idx = xml.find(&needle)?;
+    let rest = &xml[idx + needle.len()..];
+    let end = rest.find('"')?;
+    rest[..end].parse().ok()
+}
+
+fn parse_xml_attr_string(xml: &str, attr: &str) -> Option<String> {
+    let needle = format!("{attr}=\"");
+    let idx = xml.find(&needle)?;
+    let rest = &xml[idx + needle.len()..];
+    let end = rest.find('"')?;
+    let val = rest[..end].trim();
+    if val.is_empty() {
+        None
+    } else {
+        Some(val.to_string())
+    }
+}
+
+fn parse_duration_attr_ms(xml: &str, attr: &str) -> Option<u64> {
+    let raw = parse_xml_attr_string(xml, attr)?;
+    if let Ok(ms) = raw.parse::<u64>() {
+        return Some(ms);
+    }
+    iso8601_duration_to_ms(&raw)
+}
+
+fn iso8601_duration_to_ms(s: &str) -> Option<u64> {
+    let s = s.trim();
+    if !s.starts_with("PT") && !s.starts_with("pt") {
+        return None;
+    }
+    let body = &s[2..];
+    let mut secs = 0.0f64;
+    let mut num = String::new();
+    for ch in body.chars() {
+        if ch.is_ascii_digit() || ch == '.' {
+            num.push(ch);
+        } else if ch == 'H' || ch == 'h' {
+            secs += num.parse::<f64>().ok()? * 3600.0;
+            num.clear();
+        } else if ch == 'M' || ch == 'm' {
+            secs += num.parse::<f64>().ok()? * 60.0;
+            num.clear();
+        } else if ch == 'S' || ch == 's' {
+            secs += num.parse::<f64>().ok()?;
+            num.clear();
+        }
+    }
+    Some((secs * 1000.0).round() as u64)
+}
+
+/// Compare measured segment latency against ServiceDescription target.
+pub fn ll_dash_production_drift(target_ms: u64, measured_ms: u64) -> i64 {
+    measured_ms as i64 - target_ms as i64
+}
+
+fn extract_cenc_pssh(cp: &dash_mpd::ContentProtection) -> Option<String> {
+    cp.cenc_pssh
+        .iter()
+        .find_map(|p| p.content.clone().filter(|s| !s.trim().is_empty()))
+}
+
+/// Scan raw MPD XML for base64 `cenc:pssh` payloads.
+pub fn extract_mpd_pssh(xml: &str) -> PsshProbeInfo {
+    let mut info = PsshProbeInfo::default();
+    let lower = xml.to_ascii_lowercase();
+    for tag in ["cenc:pssh", "pssh"] {
+        let mut search = lower.as_str();
+        while let Some(rel) = search.find(&format!("<{tag}")) {
+            let start = lower.len() - search.len() + rel;
+            let rest = &xml[start..];
+            if let Some(gt) = rest.find('>') {
+                let inner_start = start + gt + 1;
+                if let Some(close) = rest[gt + 1..].find(&format!("</{tag}>")) {
+                    let b64 = xml[inner_start..inner_start + close].trim();
+                    if let Some(entry) = parse_pssh_base64(b64) {
+                        info.entries.push(entry);
+                    }
+                }
+            }
+            search = search[rel.saturating_add(tag.len())..].trim_start();
+        }
+    }
+    info
+}
+
+/// Multi-period / dynamic MPD consistency checks.
+pub fn audit_multi_period_mpd(xml: &str, summary: &DashSummary) -> Vec<String> {
+    let mut issues = Vec::new();
+    let lower = xml.to_ascii_lowercase();
+    if summary.type_live && summary.minimum_update_period_secs.is_none() {
+        issues.push("dynamic MPD missing minimumUpdatePeriod".into());
+    }
+    if summary.period_count > 1 {
+        let period_tags = lower.matches("<period").count();
+        if period_tags != summary.period_count as usize {
+            issues.push(format!(
+                "period count mismatch: parsed {} vs xml tags {period_tags}",
+                summary.period_count
+            ));
+        }
+        if summary.media_presentation_duration_secs.is_some()
+            && summary.time_shift_buffer_depth_secs.is_none()
+        {
+            issues.push("VOD multi-period MPD without timeShiftBufferDepth".into());
+        }
+    }
+    if summary.type_live {
+        if let Some(mpd) = lower
+            .find("type=\"dynamic\"")
+            .or_else(|| lower.find("type='dynamic'"))
+        {
+            let _ = mpd;
+            if !lower.contains("availabilitystarttime") {
+                issues.push("dynamic MPD missing availabilityStartTime".into());
+            }
+        }
+    }
+    issues
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -415,5 +600,26 @@ mod tests {
             classify_content_protection("urn:uuid:edef8ba9-79d6-4ace-a3c8-27dcd51d21ed").unwrap();
         assert!(d.present);
         assert_eq!(d.method.as_deref(), Some("Widevine"));
+    }
+
+    #[test]
+    fn scan_ll_dash_service_description() {
+        let xml = r#"<MPD><ServiceDescription><Latency target="PT2S" min="PT1S" max="PT4S"/></ServiceDescription>
+        <SegmentTemplate availabilityTimeOffset="3.5"/>
+        <UTCTiming schemeIdUri="urn:mpeg:dash:utc:direct:2014" value="2026-01-01T00:00:00Z"/>
+        </MPD>"#;
+        let info = scan_ll_dash_xml(xml);
+        assert!(info.is_ll_dash);
+        assert_eq!(info.latency_target_ms, Some(2000));
+        assert_eq!(info.min_latency_ms, Some(1000));
+        assert_eq!(info.max_latency_ms, Some(4000));
+        assert!((info.availability_time_offset_secs.unwrap() - 3.5).abs() < 0.001);
+        assert!(info.utc_timing_scheme.is_some());
+    }
+
+    #[test]
+    fn iso8601_duration_parses_seconds() {
+        assert_eq!(iso8601_duration_to_ms("PT2.5S"), Some(2500));
+        assert_eq!(iso8601_duration_to_ms("PT1M"), Some(60_000));
     }
 }

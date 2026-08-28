@@ -99,6 +99,9 @@ pub struct MetricsSnapshot {
     pub cdn_misses: u64,
     pub cdn_provider: String,
     pub virtual_buffer_secs: f64,
+    pub rebuffer_probability_pct: f64,
+    pub stall_risk_index: f64,
+    pub g2g_total_ms: f64,
     pub ad_active: f64,
     pub origin_stalls_total: u64,
     pub http_errors: HashMap<String, u64>,
@@ -122,6 +125,9 @@ impl Default for MetricsSnapshot {
             cdn_misses: 0,
             cdn_provider: String::new(),
             virtual_buffer_secs: 0.0,
+            rebuffer_probability_pct: 0.0,
+            stall_risk_index: 0.0,
+            g2g_total_ms: 0.0,
             ad_active: 0.0,
             origin_stalls_total: 0,
             http_errors: HashMap::new(),
@@ -177,7 +183,16 @@ pub fn update_metrics(snap: &mut MetricsSnapshot, event: &StreamEvent) {
             LatencyState::Unknown => {}
         },
         StreamEvent::CdnStats(c) => apply_cdn(snap, c),
-        StreamEvent::Buffer(b) => snap.virtual_buffer_secs = b.buffer_secs,
+        StreamEvent::Buffer(b) => {
+            snap.virtual_buffer_secs = b.buffer_secs;
+            snap.rebuffer_probability_pct = f64::from(b.rebuffer_probability_pct);
+            snap.stall_risk_index = f64::from(b.stall_risk_index);
+        }
+        StreamEvent::G2g(g) => {
+            if let Some(ms) = g.g2g_total_ms {
+                snap.g2g_total_ms = ms as f64;
+            }
+        }
         StreamEvent::AdBreak(ad) => snap.ad_active = if ad.active { 1.0 } else { 0.0 },
         StreamEvent::PlaylistMeta(m) => {
             snap.ll_hls_enabled = if m.ll_hls.is_ll_hls { 1.0 } else { 0.0 };
@@ -288,6 +303,15 @@ streamtop_cdn_cache_misses_total{{{labels},cdn="{cdn}"}} {misses}
 # HELP streamtop_virtual_buffer_seconds Simulated player buffer depth
 # TYPE streamtop_virtual_buffer_seconds gauge
 streamtop_virtual_buffer_seconds{{{labels}}} {vbuf:.3}
+# HELP streamtop_rebuffer_probability_pct Virtual player rebuffer probability
+# TYPE streamtop_rebuffer_probability_pct gauge
+streamtop_rebuffer_probability_pct{{{labels}}} {rebuf:.0}
+# HELP streamtop_stall_risk_index Composite stall + rebuffer risk index
+# TYPE streamtop_stall_risk_index gauge
+streamtop_stall_risk_index{{{labels}}} {stall_idx:.0}
+# HELP streamtop_g2g_total_ms Glass-to-glass latency milliseconds
+# TYPE streamtop_g2g_total_ms gauge
+streamtop_g2g_total_ms{{{labels}}} {g2g:.0}
 # HELP streamtop_ad_active DAI ad break active (1=yes, 0=no)
 # TYPE streamtop_ad_active gauge
 streamtop_ad_active{{{labels}}} {ad:.0}
@@ -312,6 +336,9 @@ streamtop_channel_dropped_total{{{labels}}} {drops}
         hits = snap.cdn_hits,
         misses = snap.cdn_misses,
         vbuf = snap.virtual_buffer_secs,
+        rebuf = snap.rebuffer_probability_pct,
+        stall_idx = snap.stall_risk_index,
+        g2g = snap.g2g_total_ms,
         ad = snap.ad_active,
         stalls = snap.origin_stalls_total,
         ll = snap.ll_hls_enabled,

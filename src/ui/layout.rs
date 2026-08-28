@@ -261,6 +261,18 @@ fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
         ]),
     ];
 
+    if !app.g2g.is_empty() {
+        lines.push(Line::from(vec![
+            Span::raw(" "),
+            Span::styled(
+                app.g2g.display(),
+                Style::default()
+                    .fg(Color::LightMagenta)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]));
+    }
+
     if let Some(ad) = &app.active_ad {
         lines.push(Line::from(vec![
             Span::raw(" "),

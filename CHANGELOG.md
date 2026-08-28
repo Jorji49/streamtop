@@ -1,5 +1,26 @@
 # Changelog
 
+## 1.0.0
+
+- Unified glass-to-glass latency engine: `prft` + HLS PDT + DASH publish time → `g2g_total_ms`, ingestion lag, edge propagation
+- Virtual ABR buffer model: rebuffer probability, stall risk index, ladder switch / ping-pong detection
+- Deep PSSH inspection from MPD and fMP4 wire probe (Widevine, PlayReady, FairPlay, ClearKey, KIDs)
+- Subtitle PTS drift detector for WebVTT/TTML vs video timeline (±200ms linter threshold)
+- Chaos mock server: TCP reset mid-download, truncated payloads, jittery chunked transfer, out-of-order LL-HLS parts, subtitle drift, corrupt PSSH
+- OpenTelemetry: W3C `traceparent` injection; spans for manifest, DNS, TCP, TLS, TTFB, wire parse, segment download, G2G
+- Summary JSON schema v2 fields; Prometheus: `g2g_total_ms`, `rebuffer_probability_pct`, `stall_risk_index`
+- Grafana dashboard v2: datasource variable, G2G / rebuffer / stall-risk panels, non-overlapping 24-column grid
+
+## 0.3.5
+
+- fMP4/MPEG-TS wire timing: sidx, trun, PTS gaps, TS CC/PCR drift, cross-segment tracker
+- LL-DASH: ServiceDescription latency, availabilityTimeOffset, UTCTiming, CTE detection, production drift
+- SCTE-35: UPID types, auto-return, sub-segment alignment, full segmentation descriptors
+- `--vod`: one-shot VOD playlist/MPD crawl with ladder validation and summary.v1 output
+- `--otel-endpoint`: OTLP/HTTP JSON trace export for DNS/TLS/TTFB/segment spans
+- Hermetic mock streaming server scenarios (stall, drift, 404, corrupt fMP4, SCTE-35)
+- cargo-fuzz targets: HLS, MPD, container_probe, SCTE-35
+
 ## 0.3.4
 
 - Require `--metrics-token` (or `STREAMTOP_METRICS_TOKEN`) when `--metrics-bind` is not loopback
