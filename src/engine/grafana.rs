@@ -358,6 +358,55 @@ mod tests {
         assert_eq!(doc["dashboard"]["title"], "streamtop");
     }
 
+    fn find_panel<'a>(doc: &'a Value, title: &str) -> &'a Value {
+        doc["dashboard"]["panels"]
+            .as_array()
+            .expect("panels array")
+            .iter()
+            .find(|p| p["title"].as_str() == Some(title))
+            .unwrap_or_else(|| panic!("panel not found: {title}"))
+    }
+
+    #[test]
+    fn dashboard_v1_panel_types_and_units() {
+        let doc = grafana_dashboard_json();
+
+        let g2g = find_panel(&doc, "Glass-to-Glass Latency (G2G)");
+        assert_eq!(g2g["type"], "timeseries");
+        assert_eq!(g2g["fieldConfig"]["defaults"]["unit"], "ms");
+        assert_eq!(
+            g2g["targets"][0]["expr"].as_str(),
+            Some("streamtop_g2g_total_ms")
+        );
+
+        let rebuf = find_panel(&doc, "Rebuffer Probability");
+        assert_eq!(rebuf["type"], "gauge");
+        assert_eq!(rebuf["fieldConfig"]["defaults"]["unit"], "percent");
+        assert_eq!(rebuf["fieldConfig"]["defaults"]["min"], 0.0);
+        assert_eq!(rebuf["fieldConfig"]["defaults"]["max"], 100.0);
+        assert_eq!(
+            rebuf["targets"][0]["expr"].as_str(),
+            Some("streamtop_rebuffer_probability_pct")
+        );
+        let steps = rebuf["fieldConfig"]["defaults"]["thresholds"]["steps"]
+            .as_array()
+            .expect("threshold steps");
+        assert!(steps.iter().any(|s| {
+            s["color"].as_str() == Some("yellow") && s["value"].as_f64() == Some(10.0)
+        }));
+        assert!(steps
+            .iter()
+            .any(|s| { s["color"].as_str() == Some("red") && s["value"].as_f64() == Some(30.0) }));
+
+        let stall = find_panel(&doc, "Stall Risk Index");
+        assert_eq!(stall["type"], "timeseries");
+        assert_eq!(stall["fieldConfig"]["defaults"]["unit"], "short");
+        assert_eq!(
+            stall["targets"][0]["expr"].as_str(),
+            Some("streamtop_stall_risk_index")
+        );
+    }
+
     #[test]
     fn dashboard_has_datasource_variable() {
         let doc = grafana_dashboard_json();
@@ -368,6 +417,11 @@ mod tests {
         assert_eq!(list[0]["name"], "datasource");
         assert_eq!(list[0]["type"], "datasource");
         assert_eq!(list[0]["query"], "prometheus");
+        assert_eq!(list[0]["label"], "Datasource");
+        assert_eq!(list[0]["hide"], 0);
+        assert_eq!(list[0]["includeAll"], false);
+        assert_eq!(list[0]["multi"], false);
+        assert_eq!(list[0]["refresh"], 1);
     }
 
     #[test]
