@@ -15,7 +15,7 @@ pub const BUFFER_STALL_THRESHOLD_SECS: f64 = 4.0;
 pub const RANGE_PROBE_BYTES: u64 = 2048;
 /// Bytes fetched for wire probe (SPS/PPS / moov / PAT-PMT).
 pub const DEEP_WIRE_PROBE_BYTES: u64 = 65535;
-/// Bounded poller→UI/webhook queue; full = drop (prefer latest via try_send).
+/// Bounded poller->UI/webhook queue; full = drop (prefer latest via try_send).
 pub const EVENT_CHANNEL_CAPACITY: usize = 512;
 pub const AUDIT_REPORT_JSON: &str = "audit_report.json";
 pub const AUDIT_REPORT_CSV: &str = "audit_report.csv";
@@ -27,7 +27,7 @@ pub const STALL_TTFB_MS: u64 = 2500;
 pub const MAX_MANIFEST_BYTES: usize = 10 * 1024 * 1024;
 /// Maximum full segment download when not range-probing.
 pub const MAX_SEGMENT_BYTES: usize = 32 * 1024 * 1024;
-/// Nested HLS master → variant → sub-playlist depth cap.
+/// Nested HLS master -> variant -> sub-playlist depth cap.
 pub const MAX_PLAYLIST_DEPTH: u32 = 8;
 /// Maximum binary SCTE-35 section size accepted by the decoder.
 pub const MAX_SCTE35_BYTES: usize = 256 * 1024;

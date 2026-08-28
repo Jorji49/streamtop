@@ -133,7 +133,7 @@ streamtop --compare <URL_1> <URL_2> --probe-headers
 streamtop <URL> --webhook https://hooks.example/x --alert-on stall,shi_below_70,http_5xx
 streamtop <URL> --webhook http://127.0.0.1:9999/hook --allow-insecure-webhooks
 
-# Channel list audit → audit_report.json / .csv
+# Channel list audit -> audit_report.json / .csv
 streamtop ./channels.m3u --audit
 
 # Headless PASS/FAIL (CI). Schema: schemas/summary.v1.json
@@ -156,7 +156,7 @@ streamtop <URL> --prometheus 9184 --metrics-bind 0.0.0.0 \
 # DRM key / LA_URL TTFB (SSRF-filtered; no redirects)
 streamtop <URL> --probe-drm --summary
 
-# Grafana dashboard JSON → streamtop-grafana.json
+# Grafana dashboard JSON -> streamtop-grafana.json
 streamtop --export-grafana
 ```
 
