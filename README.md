@@ -86,7 +86,7 @@ scoop install streamtop/streamtop
 
 ### Winget (Windows)
 
-In review: [microsoft/winget-pkgs#426121](https://github.com/microsoft/winget-pkgs/pull/426121).
+Validated, awaiting merge: [microsoft/winget-pkgs#426121](https://github.com/microsoft/winget-pkgs/pull/426121).
 
 ```powershell
 winget install Jorji49.streamtop
