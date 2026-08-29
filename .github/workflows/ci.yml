@@ -241,11 +241,12 @@ jobs:
       - name: Package (Unix)
         if: runner.os != 'Windows'
         run: |
+          VERSION=$(cargo metadata --format-version 1 --no-deps | jq -r '.packages[0].version')
           mkdir -p stage pkg
           cp "target/${{ matrix.target }}/release/streamtop" stage/streamtop
           cp README.md LICENSE CHANGELOG.md stage/
           # Friendly zip (docs + binary only - never pack packaging manifests)
-          (cd stage && zip -r "../${{ matrix.artifact }}.zip" streamtop README.md LICENSE CHANGELOG.md)
+          (cd stage && zip -r "../${{ matrix.artifact }}-${VERSION}.zip" streamtop README.md LICENSE CHANGELOG.md)
           # cargo-binstall: streamtop-<triple>.tar.gz with binary at archive root
           cp "target/${{ matrix.target }}/release/streamtop" "pkg/streamtop"
           tar --sort=name --mtime='@0' --owner=0 --group=0 --numeric-owner \
@@ -255,11 +256,12 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
+          $Version = (cargo metadata --format-version 1 --no-deps | ConvertFrom-Json).packages[0].version
           New-Item -ItemType Directory -Force -Path stage, pkg | Out-Null
           Copy-Item "target/${{ matrix.target }}/release/streamtop.exe" stage/
           Copy-Item README.md,LICENSE,CHANGELOG.md stage/
           Push-Location stage
-          7z a -tzip -mtc=off -mtm=off -mta=off "..\${{ matrix.artifact }}.zip" * | Out-Null
+          7z a -tzip -mtc=off -mtm=off -mta=off "..\${{ matrix.artifact }}-$Version.zip" * | Out-Null
           Pop-Location
           # cargo-binstall zip override: streamtop-<triple>.zip
           Copy-Item "target/${{ matrix.target }}/release/streamtop.exe" pkg/
@@ -271,7 +273,7 @@ jobs:
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
         with:
           name: ${{ matrix.artifact }}
-          path: ${{ matrix.artifact }}.zip
+          path: ${{ matrix.artifact }}-*.zip
           if-no-files-found: error
 
       - name: Upload binstall archive
