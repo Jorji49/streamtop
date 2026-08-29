@@ -249,8 +249,14 @@ jobs:
           (cd stage && zip -r "../${{ matrix.artifact }}-${VERSION}.zip" streamtop README.md LICENSE CHANGELOG.md)
           # cargo-binstall: streamtop-<triple>.tar.gz with binary at archive root
           cp "target/${{ matrix.target }}/release/streamtop" "pkg/streamtop"
-          tar --sort=name --mtime='@0' --owner=0 --group=0 --numeric-owner \
-            -C pkg -cf - streamtop | gzip -n > "streamtop-${{ matrix.target }}.tar.gz"
+          if [ "$RUNNER_OS" = macOS ]; then
+            COPYFILE_DISABLE=1 tar -C pkg -cf - streamtop \
+              | gzip -n > "streamtop-${{ matrix.target }}.tar.gz"
+          else
+            tar --sort=name --mtime='@0' --owner=0 --group=0 --numeric-owner \
+              -C pkg -cf - streamtop | gzip -n > "streamtop-${{ matrix.target }}.tar.gz"
+          fi
+          test "$(wc -c < "streamtop-${{ matrix.target }}.tar.gz")" -gt 100000
 
       - name: Package (Windows)
         if: runner.os == 'Windows'
