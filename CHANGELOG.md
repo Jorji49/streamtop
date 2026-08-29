@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.1.1
+
+- README: product overview, use cases, FAQ, 1.1.0 feature docs (TR 101 290, SEI, SRT/RTMP, QoE)
+- README: SEO-friendly headings and alt text; Winget PR link -> #426118
+- Cargo.toml: expanded crate description and keywords
+- GitHub repo description and topics sync
+- Packaging manifests bumped to 1.1.1
+
 ## 1.1.0
 
 - TR 101 290 P1/P2 MPEG-TS engine (`--tr101290`)
