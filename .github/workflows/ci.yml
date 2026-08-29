@@ -19,6 +19,12 @@ jobs:
       - uses: crate-ci/typos@v1
         with:
           config: _typos.toml
+          files: |
+            ./README.md
+            ./CHANGELOG.md
+            ./dist/winget/
+            ./Formula/streamtop.rb
+            ./bucket/streamtop.json
 
   check:
     name: check (${{ matrix.os }})
