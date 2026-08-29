@@ -1,8 +1,10 @@
 use std::io::{self, Stdout};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use color_eyre::eyre::{eyre, Result, WrapErr};
+use crossterm::cursor::Show;
 use crossterm::event::{Event, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use crossterm::execute;
 use crossterm::terminal::{
@@ -15,19 +17,37 @@ use tokio::sync::mpsc::{self, Receiver, Sender};
 use tokio::task::JoinHandle;
 use tokio::time::{interval, MissedTickBehavior};
 
+use crate::engine::poller::DiagnosticOpts;
 use crate::engine::quick_play::{launch_quick_play, QuickPlayResult};
 use crate::engine::ManifestPoller;
 use crate::models::{
     format_dvr_window, AbrHealth, AbrVariant, AdBreakInfo, CdnStats, ChannelEntry, DiagCategory,
-    DiagnosticFinding, DiagnosticSummary, G2gMetrics, HealthReport, LatencyState, LogEntry,
-    LogLevel, PlaylistMeta, RingBuffer, SegmentMetrics, StreamEvent, StreamSnapshot, StreamStatus,
-    VirtualBuffer, DIAGNOSTIC_DIR, EVENT_CHANNEL_CAPACITY, HISTORY_CAPACITY, LOG_CAPACITY,
+    DiagnosticFinding, DiagnosticSummary, G2gMetrics, HealthReport, IngestStats, LatencyState,
+    LogEntry, LogLevel, PlaylistMeta, RingBuffer, SegmentMetrics, SeiProbeResult, StreamEvent,
+    StreamSnapshot, StreamStatus, SyntheticQoeSnapshot, Tr101290Report, VirtualBuffer,
+    DIAGNOSTIC_DIR, EVENT_CHANNEL_CAPACITY, HISTORY_CAPACITY, LOG_CAPACITY,
 };
 use crate::ui::channel_picker::{ChannelPicker, PickerAction};
-use crate::ui::layout;
+use crate::ui::layout::{self, DiagnosticPanel};
 
 const FRAME_PERIOD: Duration = Duration::from_millis(33);
 const TOAST_SECS: u64 = 2;
+
+static TERMINAL_ACTIVE: AtomicBool = AtomicBool::new(false);
+
+/// Mark raw-mode / alternate-screen active (headless modes skip restore).
+pub fn mark_terminal_active() {
+    TERMINAL_ACTIVE.store(true, Ordering::SeqCst);
+}
+
+/// Restore terminal only when TUI was started.
+pub fn restore_terminal_global() {
+    if TERMINAL_ACTIVE.swap(false, Ordering::SeqCst) {
+        let _ = disable_raw_mode();
+        let mut stdout = io::stdout();
+        let _ = execute!(stdout, LeaveAlternateScreen, Show);
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UiMode {
@@ -49,6 +69,14 @@ pub struct SessionOpts {
     pub allow_insecure_webhooks: bool,
     /// OTLP trace export endpoint (e.g. http://127.0.0.1:4318).
     pub otel_endpoint: Option<String>,
+    /// ETSI TR 101 290 P1/P2 MPEG-TS compliance (`--tr101290`).
+    pub tr101290: bool,
+    /// SEI/HDR/caption wire probe (`--probe-sei`).
+    pub probe_sei: bool,
+    /// Synthetic player QoE simulator (`--simulate-player`).
+    pub simulate_player: bool,
+    pub throttle_kbps: Option<u64>,
+    pub simulated_rtt_ms: Option<u64>,
 }
 
 pub struct App {
@@ -77,6 +105,11 @@ pub struct App {
     pub should_quit: bool,
     pub mode: UiMode,
     pub overlay: bool,
+    pub diagnostic_panel: DiagnosticPanel,
+    pub tr101290: Tr101290Report,
+    pub sei_probe: SeiProbeResult,
+    pub synthetic_qoe: SyntheticQoeSnapshot,
+    pub ingest_stats: Option<IngestStats>,
     pub show_help: bool,
     /// Toast message (curl copied, export path, …).
     pub toast: Option<(String, Instant)>,
@@ -159,6 +192,11 @@ impl App {
                 UiMode::Picker
             },
             overlay: false,
+            diagnostic_panel: DiagnosticPanel::None,
+            tr101290: Tr101290Report::default(),
+            sei_probe: SeiProbeResult::default(),
+            synthetic_qoe: SyntheticQoeSnapshot::default(),
+            ingest_stats: None,
             show_help: false,
             toast: None,
             picker,
@@ -194,6 +232,14 @@ impl App {
         self.source_url = url.clone();
         self.active_url = url.clone();
 
+        if crate::engine::ingest_probe::is_ingest_url(&url) {
+            let allow_insecure = self.session.allow_insecure_webhooks;
+            self.poller = Some(tokio::spawn(async move {
+                crate::engine::ingest_probe::run_ingest_poller(url, allow_insecure, tx).await;
+            }));
+            return Ok(());
+        }
+
         let mut poller = ManifestPoller::new(
             url.clone(),
             self.session.headers.clone(),
@@ -203,7 +249,14 @@ impl App {
             self.session.probe_drm,
             tx,
         )
-        .wrap_err("failed to start poller")?;
+        .wrap_err("failed to start poller")?
+        .with_diagnostics(DiagnosticOpts {
+            tr101290: self.session.tr101290,
+            probe_sei: self.session.probe_sei,
+            simulate_player: self.session.simulate_player,
+            throttle_kbps: self.session.throttle_kbps,
+            simulated_rtt_ms: self.session.simulated_rtt_ms,
+        });
 
         if let Some(hook_url) = self.session.webhook_url.clone() {
             if let Ok(alerts) =
@@ -333,6 +386,9 @@ impl App {
             return;
         }
         layout::draw(frame, self);
+        if self.diagnostic_panel != DiagnosticPanel::None {
+            layout::draw_diagnostic_panel(frame, frame.area(), self);
+        }
         if self.overlay {
             if let Some(picker) = self.picker.as_mut() {
                 picker.draw(frame, frame.area(), true);
@@ -404,6 +460,27 @@ impl App {
             }
             KeyCode::Char(' ') => self.export_diagnostic()?,
             KeyCode::Char('r') | KeyCode::Char('R') => self.reset_metrics(),
+            KeyCode::Char('t') | KeyCode::Char('T') => {
+                self.diagnostic_panel = if self.diagnostic_panel == DiagnosticPanel::Tr101290 {
+                    DiagnosticPanel::None
+                } else {
+                    DiagnosticPanel::Tr101290
+                };
+            }
+            KeyCode::Char('s') | KeyCode::Char('S') => {
+                self.diagnostic_panel = if self.diagnostic_panel == DiagnosticPanel::Sei {
+                    DiagnosticPanel::None
+                } else {
+                    DiagnosticPanel::Sei
+                };
+            }
+            KeyCode::Char('y') | KeyCode::Char('Y') => {
+                self.diagnostic_panel = if self.diagnostic_panel == DiagnosticPanel::Qoe {
+                    DiagnosticPanel::None
+                } else {
+                    DiagnosticPanel::Qoe
+                };
+            }
             KeyCode::Up | KeyCode::Char('k') => {
                 self.log_scroll = self.log_scroll.saturating_add(1);
             }
@@ -607,6 +684,10 @@ impl App {
                 }
             }
             StreamEvent::WireProbe(_) => {}
+            StreamEvent::Tr101290(r) => self.tr101290 = r,
+            StreamEvent::SeiProbe(s) => self.sei_probe = s,
+            StreamEvent::SyntheticQoe(q) => self.synthetic_qoe = q,
+            StreamEvent::Ingest(s) => self.ingest_stats = Some(s),
             StreamEvent::Log {
                 level,
                 category,
@@ -787,6 +868,7 @@ fn setup_terminal() -> Result<Terminal<CrosstermBackend<Stdout>>> {
     enable_raw_mode().wrap_err("failed to enable raw mode")?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen).wrap_err("failed to enter alternate screen")?;
+    mark_terminal_active();
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend).wrap_err("failed to create terminal")?;
     terminal.hide_cursor().ok();

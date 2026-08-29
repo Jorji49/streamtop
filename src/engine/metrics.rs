@@ -107,6 +107,9 @@ pub struct MetricsSnapshot {
     pub http_errors: HashMap<String, u64>,
     pub ll_hls_enabled: f64,
     pub codec_mismatch_total: u64,
+    pub qoe_rebuffer_risk: f64,
+    pub tr101290_p1_total: u64,
+    pub tr101290_p2_total: u64,
     pub segment_ttfb_hist: Hist,
     pub llhls_part_hist: Hist,
     pub drm_license_hist: Hist,
@@ -133,6 +136,9 @@ impl Default for MetricsSnapshot {
             http_errors: HashMap::new(),
             ll_hls_enabled: 0.0,
             codec_mismatch_total: 0,
+            qoe_rebuffer_risk: 0.0,
+            tr101290_p1_total: 0,
+            tr101290_p2_total: 0,
             segment_ttfb_hist: Hist::with_bucket_count(TTFB_BUCKETS.len()),
             llhls_part_hist: Hist::with_bucket_count(PART_BUCKETS.len()),
             drm_license_hist: Hist::with_bucket_count(DRM_BUCKETS.len()),
@@ -220,6 +226,13 @@ pub fn update_metrics(snap: &mut MetricsSnapshot, event: &StreamEvent) {
         }
         StreamEvent::Log { message, .. } if message.contains("[MISMATCH]") => {
             snap.codec_mismatch_total = snap.codec_mismatch_total.saturating_add(1);
+        }
+        StreamEvent::SyntheticQoe(q) => {
+            snap.qoe_rebuffer_risk = f64::from(q.rebuffer_risk_score);
+        }
+        StreamEvent::Tr101290(r) => {
+            snap.tr101290_p1_total = u64::from(r.p1_violations);
+            snap.tr101290_p2_total = u64::from(r.p2_violations);
         }
         StreamEvent::Error(msg) => {
             if let Some(code) = parse_http_status(msg) {
@@ -324,6 +337,15 @@ streamtop_ll_hls_enabled{{{labels}}} {ll:.0}
 # HELP streamtop_codec_mismatch_total Manifest vs wire codec/resolution/FPS mismatches
 # TYPE streamtop_codec_mismatch_total counter
 streamtop_codec_mismatch_total{{{labels}}} {mismatch}
+# HELP streamtop_qoe_rebuffer_risk Synthetic player rebuffer risk score 0-100
+# TYPE streamtop_qoe_rebuffer_risk gauge
+streamtop_qoe_rebuffer_risk{{{labels}}} {qoe_risk:.0}
+# HELP streamtop_tr101290_p1_violations_total TR 101 290 Priority 1 violations
+# TYPE streamtop_tr101290_p1_violations_total counter
+streamtop_tr101290_p1_violations_total{{{labels}}} {tr101290_p1}
+# HELP streamtop_tr101290_p2_violations_total TR 101 290 Priority 2 violations
+# TYPE streamtop_tr101290_p2_violations_total counter
+streamtop_tr101290_p2_violations_total{{{labels}}} {tr101290_p2}
 # HELP streamtop_channel_dropped_total Events dropped from bounded poller channels
 # TYPE streamtop_channel_dropped_total counter
 streamtop_channel_dropped_total{{{labels}}} {drops}
@@ -343,6 +365,9 @@ streamtop_channel_dropped_total{{{labels}}} {drops}
         stalls = snap.origin_stalls_total,
         ll = snap.ll_hls_enabled,
         mismatch = snap.codec_mismatch_total,
+        qoe_risk = snap.qoe_rebuffer_risk,
+        tr101290_p1 = snap.tr101290_p1_total,
+        tr101290_p2 = snap.tr101290_p2_total,
         drops = channel_dropped_total(),
     );
 
@@ -482,7 +507,14 @@ pub async fn run_prometheus(
         session.probe_drm,
         tx,
     )?
-    .with_metrics(Arc::clone(&metrics));
+    .with_metrics(Arc::clone(&metrics))
+    .with_diagnostics(crate::engine::poller::DiagnosticOpts {
+        tr101290: session.tr101290,
+        probe_sei: session.probe_sei,
+        simulate_player: session.simulate_player,
+        throttle_kbps: session.throttle_kbps,
+        simulated_rtt_ms: session.simulated_rtt_ms,
+    });
     if let Some(hook_url) = session.webhook_url.clone() {
         if let Ok(alerts) = crate::engine::webhook::AlertKind::parse_list(&session.alert_on) {
             let (hook_tx, hook_rx) = mpsc::channel(EVENT_CHANNEL_CAPACITY);

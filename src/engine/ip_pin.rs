@@ -119,6 +119,40 @@ pub fn resolve_pinned_addrs(
     Ok(addrs)
 }
 
+fn is_local_ingest_host(host: &str) -> bool {
+    if host.eq_ignore_ascii_case("localhost") {
+        return true;
+    }
+    host.parse::<IpAddr>()
+        .map(|ip| ip.is_loopback())
+        .unwrap_or(false)
+}
+
+/// SSRF gate for SRT/RTMP ingest targets (loopback allowed for local encoders).
+pub fn validate_ingest_target(host: &str, port: u16, allow_insecure: bool) -> Result<()> {
+    if allow_insecure || is_local_ingest_host(host) {
+        return Ok(());
+    }
+    if is_blocked_hostname(host) {
+        return Err(eyre!(
+            "ingest host `{host}` blocked (internal); use --allow-insecure-webhooks to override"
+        ));
+    }
+    if let Ok(ip) = host.parse::<IpAddr>() {
+        if is_blocked_ip(ip) {
+            return Err(eyre!(
+                "ingest IP {ip} blocked (private/link-local/metadata); use --allow-insecure-webhooks to override"
+            ));
+        }
+        return Ok(());
+    }
+    let addrs = resolve_pinned_addrs(host, port, false)?;
+    if addrs.is_empty() {
+        return Err(eyre!("ingest host `{host}` resolved to no addresses"));
+    }
+    Ok(())
+}
+
 /// Prefer IPv4 for CDN compatibility; stable ordering for pinning.
 pub fn pick_connect_addr(addrs: &[SocketAddr]) -> SocketAddr {
     if addrs.is_empty() {
@@ -144,5 +178,11 @@ mod tests {
     fn validate_blocks_loopback_url() {
         assert!(validate_outbound_url("http://127.0.0.1/hook", false).is_err());
         assert!(validate_outbound_url("http://127.0.0.1:9/hook", true).is_ok());
+    }
+
+    #[test]
+    fn ingest_allows_loopback() {
+        assert!(validate_ingest_target("127.0.0.1", 9000, false).is_ok());
+        assert!(validate_ingest_target("169.254.169.254", 80, false).is_err());
     }
 }

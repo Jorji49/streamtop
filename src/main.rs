@@ -23,7 +23,7 @@ use streamtop::engine::poller::build_http_client;
 use streamtop::engine::summary::{run_summary, SummaryFormat};
 use streamtop::engine::vod::run_vod;
 use streamtop::models::ChannelEntry;
-use streamtop::ui::app::SessionOpts;
+use streamtop::ui::app::{restore_terminal_global, SessionOpts};
 use streamtop::ui::{App, CompareApp};
 
 #[derive(Debug, Clone, Copy, clap::ValueEnum, Default)]
@@ -154,6 +154,26 @@ struct Cli {
     /// Allow webhook targets on private/link-local/metadata hosts (tests only)
     #[arg(long = "allow-insecure-webhooks")]
     allow_insecure_webhooks: bool,
+
+    /// ETSI TR 101 290 P1/P2 MPEG-TS compliance probe
+    #[arg(long = "tr101290")]
+    tr101290: bool,
+
+    /// SEI NAL probe: captions (CEA-608/708) and HDR metadata
+    #[arg(long = "probe-sei")]
+    probe_sei: bool,
+
+    /// Synthetic player QoE simulator (TDR, rebuffer risk, ABR selection)
+    #[arg(long = "simulate-player")]
+    simulate_player: bool,
+
+    /// Virtual throughput cap for --simulate-player (kbps)
+    #[arg(long = "throttle-kbps", value_name = "KBPS")]
+    throttle_kbps: Option<u64>,
+
+    /// Simulated RTT added to segment fetch time (ms)
+    #[arg(long = "simulated-rtt-ms", value_name = "MS")]
+    simulated_rtt_ms: Option<u64>,
 }
 
 /// Path argument for clap.
@@ -194,6 +214,11 @@ async fn main() -> Result<ExitCode> {
             alert_on: "stall,shi_below_70,http_5xx".into(),
             allow_insecure_webhooks: false,
             otel_endpoint: None,
+            tr101290: false,
+            probe_sei: false,
+            simulate_player: false,
+            throttle_kbps: None,
+            simulated_rtt_ms: None,
         },
     )?;
 
@@ -231,10 +256,25 @@ async fn main() -> Result<ExitCode> {
     if cli.otel_endpoint.is_some() {
         session.otel_endpoint = cli.otel_endpoint.clone();
     }
+    if cli.tr101290 {
+        session.tr101290 = true;
+    }
+    if cli.probe_sei {
+        session.probe_sei = true;
+    }
+    if cli.simulate_player {
+        session.simulate_player = true;
+    }
+    if cli.throttle_kbps.is_some() {
+        session.throttle_kbps = cli.throttle_kbps;
+    }
+    if cli.simulated_rtt_ms.is_some() {
+        session.simulated_rtt_ms = cli.simulated_rtt_ms;
+    }
 
     if let Some(vod_url) = &cli.vod {
         let exit = run_vod(vod_url.clone(), session, cli.summary_format.into()).await?;
-        restore_terminal();
+        restore_terminal_global();
         return Ok(exit);
     }
     if let Some(hook) = &session.webhook_url {
@@ -263,7 +303,7 @@ async fn main() -> Result<ExitCode> {
             return Err(eyre!("--compare requires exactly two URLs"));
         }
         CompareApp::run(urls[0].clone(), urls[1].clone(), session).await?;
-        restore_terminal();
+        restore_terminal_global();
         return Ok(ExitCode::SUCCESS);
     }
 
@@ -271,6 +311,35 @@ async fn main() -> Result<ExitCode> {
         .url
         .as_deref()
         .ok_or_else(|| eyre!("missing stream URL (or use --compare)"))?;
+
+    if streamtop::engine::ingest_probe::is_ingest_url(input_url) {
+        if metrics_port.is_some() {
+            restore_terminal_global();
+            return Err(eyre!(
+                "Prometheus mode for ingest URLs is not supported; use the TUI or --summary"
+            ));
+        }
+        if cli.export_curl || cli.export_har.is_some() {
+            restore_terminal_global();
+            return Err(eyre!(
+                "--export-curl/--export-har are not supported for ingest URLs"
+            ));
+        }
+        let exit = if cli.summary {
+            streamtop::engine::summary::run_ingest_summary(
+                input_url.to_string(),
+                cli.timeout_secs,
+                cli.summary_format.into(),
+                session.allow_insecure_webhooks,
+            )
+            .await?
+        } else {
+            App::run_diagnostics(input_url.to_string(), input_url.to_string(), session).await?;
+            ExitCode::SUCCESS
+        };
+        restore_terminal_global();
+        return Ok(exit);
+    }
 
     let (origin, body, content_type) = load_input(&client, input_url).await?;
     let parsed = detect_and_parse(&origin, &body, content_type.as_deref())
@@ -363,14 +432,8 @@ async fn main() -> Result<ExitCode> {
         }
     };
 
-    restore_terminal();
+    restore_terminal_global();
     exit.wrap_err("streamtop ended with an error")
-}
-
-fn restore_terminal() {
-    let _ = disable_raw_mode();
-    let mut stdout = io::stdout();
-    let _ = execute!(stdout, LeaveAlternateScreen, Show);
 }
 
 async fn load_input(client: &Client, input: &str) -> Result<(String, Vec<u8>, Option<String>)> {

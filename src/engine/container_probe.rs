@@ -423,6 +423,7 @@ fn walk_boxes(
     end: usize,
     visit: &mut dyn FnMut(&[u8; 4], &[u8]) -> bool,
 ) {
+    const MAX_BOX_BYTES: usize = 16 * 1024 * 1024;
     let mut off = start;
     while off + 8 <= end && off + 8 <= data.len() {
         let size32 = u32::from_be_bytes([data[off], data[off + 1], data[off + 2], data[off + 3]]);
@@ -448,6 +449,9 @@ fn walk_boxes(
         } else {
             (8usize, size32 as usize)
         };
+        if box_size > MAX_BOX_BYTES {
+            break;
+        }
         if box_size < header || off + box_size > data.len() || off + box_size > end {
             break;
         }

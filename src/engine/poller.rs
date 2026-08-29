@@ -32,7 +32,10 @@ use crate::engine::network_trace::{
 };
 use crate::engine::otel::OtelExporter;
 use crate::engine::playlist_parser::{is_iptv_channel_list, local_path_from_url};
+use crate::engine::sei_probe::SeiProbeAccumulator;
 use crate::engine::subtitle_probe::{compute_subtitle_drift, probe_subtitle_payload};
+use crate::engine::synthetic_qoe::SyntheticQoeEngine;
+use crate::engine::tr101290::{probe_container_tr101290, Tr101290Engine};
 use crate::engine::wire_timing::WireTimingTracker;
 use crate::models::{
     AbrVariant, CdnEdgeInfo, ContainerKind, DiagCategory, DiagSeverity, LatencyState, LogLevel,
@@ -43,6 +46,16 @@ use crate::models::{
 };
 
 const DEFAULT_UA: &str = concat!("streamtop/", env!("CARGO_PKG_VERSION"));
+
+/// Optional next-gen diagnostic probes (TR 101 290, SEI, synthetic QoE).
+#[derive(Debug, Clone, Default)]
+pub struct DiagnosticOpts {
+    pub tr101290: bool,
+    pub probe_sei: bool,
+    pub simulate_player: bool,
+    pub throttle_kbps: Option<u64>,
+    pub simulated_rtt_ms: Option<u64>,
+}
 
 #[derive(Debug, Default)]
 struct LlHlsBlockingState {
@@ -67,6 +80,12 @@ pub struct ManifestPoller {
     wire_timing_tracker: Arc<Mutex<WireTimingTracker>>,
     abr_ladder: Arc<Mutex<AbrLadderState>>,
     otel: Option<Arc<OtelExporter>>,
+    diagnostics: DiagnosticOpts,
+    tr101290: Arc<Mutex<Tr101290Engine>>,
+    sei_acc: Arc<Mutex<SeiProbeAccumulator>>,
+    qoe: Arc<Mutex<SyntheticQoeEngine>>,
+    segment_wall_ms: Arc<Mutex<u64>>,
+    ladder_scratch: Arc<Mutex<Vec<u64>>>,
 }
 
 struct SegmentFetch {
@@ -82,6 +101,7 @@ struct SegmentFetch {
     wire: WireProbeInfo,
     chunked_transfer: bool,
     segment_url: String,
+    probe_bytes: Vec<u8>,
 }
 
 impl ManifestPoller {
@@ -113,7 +133,21 @@ impl ManifestPoller {
             wire_timing_tracker: Arc::new(Mutex::new(WireTimingTracker::default())),
             abr_ladder: Arc::new(Mutex::new(AbrLadderState::default())),
             otel: None,
+            diagnostics: DiagnosticOpts::default(),
+            tr101290: Arc::new(Mutex::new(Tr101290Engine::new())),
+            sei_acc: Arc::new(Mutex::new(SeiProbeAccumulator::new())),
+            qoe: Arc::new(Mutex::new(SyntheticQoeEngine::new(None, None))),
+            segment_wall_ms: Arc::new(Mutex::new(0)),
+            ladder_scratch: Arc::new(Mutex::new(Vec::with_capacity(16))),
         })
+    }
+
+    pub fn with_diagnostics(mut self, opts: DiagnosticOpts) -> Self {
+        self.diagnostics = opts.clone();
+        if let Ok(mut qoe) = self.qoe.lock() {
+            *qoe = SyntheticQoeEngine::new(opts.throttle_kbps, opts.simulated_rtt_ms);
+        }
+        self
     }
 
     pub fn with_otel(mut self, otel: Arc<OtelExporter>) -> Self {
@@ -182,6 +216,60 @@ impl ManifestPoller {
             existing.merge(wire.pssh.clone());
         } else {
             drm.pssh = Some(wire.pssh.clone());
+        }
+    }
+
+    fn post_segment_diagnostics(
+        &self,
+        fetch: &SegmentFetch,
+        duration_secs: f32,
+        download_kbps: Option<u64>,
+        ladder_bps: &[u64],
+    ) {
+        let d = &self.diagnostics;
+        if !d.tr101290 && !d.probe_sei && !d.simulate_player {
+            return;
+        }
+        if fetch.probe_bytes.is_empty() {
+            return;
+        }
+        let wall_ms = if let Ok(mut w) = self.segment_wall_ms.lock() {
+            *w = w.saturating_add((f64::from(duration_secs.max(0.001)) * 1000.0) as u64);
+            *w
+        } else {
+            0
+        };
+        if d.tr101290 {
+            if let Ok(mut eng) = self.tr101290.lock() {
+                if let Some(report) =
+                    probe_container_tr101290(&mut eng, &fetch.probe_bytes, fetch.container, wall_ms)
+                {
+                    self.send_event(StreamEvent::Tr101290(report));
+                }
+            }
+        }
+        if d.probe_sei {
+            if let Ok(mut acc) = self.sei_acc.lock() {
+                let sei = acc.ingest(&fetch.probe_bytes, fetch.container);
+                if sei.nal_units_scanned > 0
+                    || sei.cea608_present
+                    || sei.cea708_present
+                    || sei.hdr10_present
+                {
+                    self.send_event(StreamEvent::SeiProbe(sei));
+                }
+            }
+        }
+        if d.simulate_player {
+            if let Ok(mut qoe) = self.qoe.lock() {
+                let snap = qoe.observe_segment(
+                    duration_secs,
+                    fetch.download_ms,
+                    download_kbps,
+                    ladder_bps,
+                );
+                self.send_event(StreamEvent::SyntheticQoe(snap));
+            }
         }
     }
 
@@ -621,6 +709,12 @@ impl ManifestPoller {
             self.emit_g2g(&fetch.wire, None, dash_avail_ms, fetch.ttfb_ms);
             self.merge_wire_pssh(&mut dash_drm, &fetch.wire);
 
+            if let Ok(mut ladder) = self.ladder_scratch.lock() {
+                ladder.clear();
+                ladder.extend(variants.iter().map(|v| v.bandwidth));
+                self.post_segment_diagnostics(&fetch, seg_hint, kbps, ladder.as_slice());
+            }
+
             let metrics = SegmentMetrics {
                 media_sequence: seq,
                 duration_secs: seg_hint,
@@ -1058,31 +1152,24 @@ impl ManifestPoller {
             );
             return;
         }
-        let Ok(probe_client) = Client::builder()
-            .redirect(reqwest::redirect::Policy::none())
-            .timeout(Duration::from_secs(10))
-            .connect_timeout(Duration::from_secs(5))
-            .build()
-        else {
-            drm.license_error = Some("failed to build DRM probe client".into());
-            return;
-        };
         let started = Instant::now();
         // Re-validate immediately before request (DNS rebinding mitigation).
         if let Err(err) = crate::engine::webhook::validate_webhook_url(&key_url, false) {
             drm.license_error = Some(format!("DRM probe blocked: {err}"));
             return;
         }
-        match probe_client
-            .get(&key_url)
-            .header(RANGE, "bytes=0-0")
-            .send()
-            .await
+        match crate::engine::network_trace::pinned_get_range(
+            &key_url,
+            Some("bytes=0-0"),
+            false,
+            Duration::from_secs(10),
+            4096,
+        )
+        .await
         {
-            Ok(resp) => {
-                drm.license_ttfb_ms = Some(started.elapsed().as_millis() as u64);
-                drm.license_http_status = Some(resp.status().as_u16());
-                let _ = resp.bytes().await;
+            Ok((status, ttfb_ms)) => {
+                drm.license_ttfb_ms = Some(ttfb_ms.max(started.elapsed().as_millis() as u64));
+                drm.license_http_status = Some(status);
                 self.emit_log(
                     LogLevel::Info,
                     DiagCategory::Drm,
@@ -1538,6 +1625,17 @@ impl ManifestPoller {
             }
         }
 
+        if let Ok(mut ladder) = self.ladder_scratch.lock() {
+            ladder.clear();
+            ladder.extend(variants.iter().map(|v| v.bandwidth));
+            self.post_segment_diagnostics(
+                &fetch,
+                segment.duration,
+                download_kbps,
+                ladder.as_slice(),
+            );
+        }
+
         let metrics = SegmentMetrics {
             media_sequence,
             duration_secs: segment.duration,
@@ -1723,6 +1821,7 @@ impl ManifestPoller {
                     wire,
                     chunked_transfer: resp.chunked_transfer,
                     segment_url: url.to_string(),
+                    probe_bytes: probe_slice(&head),
                 })
             }
             Err(_) => self.download_segment_reqwest(url).await,
@@ -1783,6 +1882,7 @@ impl ManifestPoller {
             wire,
             chunked_transfer: chunked,
             segment_url: url.to_string(),
+            probe_bytes: probe_slice(&head),
         })
     }
 
@@ -1835,6 +1935,7 @@ impl ManifestPoller {
                     wire,
                     chunked_transfer: resp.chunked_transfer,
                     segment_url: url.to_string(),
+                    probe_bytes: probe_slice(&resp.body),
                 })
             }
             Err(_) => self.probe_segment_reqwest(url).await,
@@ -1912,6 +2013,7 @@ impl ManifestPoller {
             wire,
             chunked_transfer: chunked,
             segment_url: url.to_string(),
+            probe_bytes: probe_slice(&buf),
         })
     }
 
@@ -2107,7 +2209,12 @@ async fn read_local_segment(path: &std::path::Path, probe: bool) -> Result<Segme
         wire,
         chunked_transfer: false,
         segment_url: path.display().to_string(),
+        probe_bytes: probe_slice(slice),
     })
+}
+
+fn probe_slice(bytes: &[u8]) -> Vec<u8> {
+    bytes[..bytes.len().min(DEEP_WIRE_PROBE_BYTES as usize)].to_vec()
 }
 
 fn parse_cdn_headers_http(headers: &http::HeaderMap) -> CdnEdgeInfo {

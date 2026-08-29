@@ -1,16 +1,18 @@
 //! OTLP/HTTP JSON trace export with W3C `traceparent` propagation.
 
 use std::sync::{Arc, Mutex};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use color_eyre::eyre::{eyre, Result, WrapErr};
-use reqwest::Client;
 use serde_json::{json, Value};
 
+use crate::engine::ip_pin::validate_outbound_url;
+use crate::engine::network_trace::pinned_post_json;
 use crate::engine::redact::redact_url;
 use crate::models::{G2gMetrics, NetworkTiming, WireProbeInfo};
 
 const SERVICE_NAME: &str = "streamtop";
+const OTEL_PENDING_CAP: usize = 256;
 
 #[derive(Debug, Clone)]
 struct SpanRecord {
@@ -58,13 +60,13 @@ impl Default for TraceContext {
 /// Buffers spans and POSTs OTLP JSON batches to `{endpoint}/v1/traces`.
 pub struct OtelExporter {
     endpoint: String,
-    client: Client,
+    allow_insecure: bool,
     pending: Mutex<Vec<SpanRecord>>,
     trace: Mutex<TraceContext>,
 }
 
 impl OtelExporter {
-    pub fn new(endpoint: &str) -> Result<Arc<Self>> {
+    pub fn new(endpoint: &str, allow_insecure: bool) -> Result<Arc<Self>> {
         let endpoint = endpoint.trim().trim_end_matches('/').to_string();
         if endpoint.is_empty() {
             return Err(eyre!("otel endpoint is empty"));
@@ -72,12 +74,10 @@ impl OtelExporter {
         if !endpoint.starts_with("http://") && !endpoint.starts_with("https://") {
             return Err(eyre!("otel endpoint must be http(s) URL"));
         }
+        validate_outbound_url(&endpoint, allow_insecure)?;
         Ok(Arc::new(Self {
             endpoint,
-            client: Client::builder()
-                .timeout(std::time::Duration::from_secs(10))
-                .build()
-                .wrap_err("failed to build otel HTTP client")?,
+            allow_insecure,
             pending: Mutex::new(Vec::new()),
             trace: Mutex::new(TraceContext::new()),
         }))
@@ -98,6 +98,9 @@ impl OtelExporter {
             .unwrap_or_else(|_| (random_hex_id(16), None));
         let span_id = random_hex_id(8);
         if let Ok(mut pending) = self.pending.lock() {
+            if pending.len() >= OTEL_PENDING_CAP {
+                pending.remove(0);
+            }
             pending.push(SpanRecord {
                 name: name.into(),
                 start_ns,
@@ -225,17 +228,15 @@ impl OtelExporter {
         if spans.is_empty() {
             return Ok(());
         }
+        validate_outbound_url(&self.endpoint, self.allow_insecure)?;
         let payload = build_otlp_payload(&spans);
         let url = format!("{}/v1/traces", self.endpoint);
-        self.client
-            .post(&url)
-            .header("Content-Type", "application/json")
-            .json(&payload)
-            .send()
+        let status = pinned_post_json(&url, &payload, self.allow_insecure, Duration::from_secs(10))
             .await
-            .wrap_err("otel trace export failed")?
-            .error_for_status()
-            .wrap_err("otel trace export HTTP error")?;
+            .wrap_err("otel trace export failed")?;
+        if !(200..300).contains(&status) {
+            return Err(eyre!("otel trace export HTTP {status}"));
+        }
         Ok(())
     }
 }

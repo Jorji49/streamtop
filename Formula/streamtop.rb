@@ -3,8 +3,8 @@
 class Streamtop < Formula
   desc "HLS/DASH/IPTV stream diagnostics in the terminal"
   homepage "https://github.com/Jorji49/streamtop"
-  url "https://github.com/Jorji49/streamtop/archive/refs/tags/v1.0.1.tar.gz"
-  sha256 "48bfd03cec8c03acb7d7fb5d7456662d4e51abab2c690f85fc1cdc2d890b1399"
+  url "https://github.com/Jorji49/streamtop/archive/refs/tags/v1.1.0.tar.gz"
+  sha256 "177facf436a7be07b8b35cad04dd0bac137aad1991877462902ee2cf99c6abe3"
   license "MIT"
   head "https://github.com/Jorji49/streamtop.git", branch: "main"
 

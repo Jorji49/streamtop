@@ -202,6 +202,13 @@ impl CompareApp {
         let (l_tx, l_rx) = mpsc::channel(EVENT_CHANNEL_CAPACITY);
         let (r_tx, r_rx) = mpsc::channel(EVENT_CHANNEL_CAPACITY);
 
+        let diag = crate::engine::poller::DiagnosticOpts {
+            tr101290: session.tr101290,
+            probe_sei: session.probe_sei,
+            simulate_player: session.simulate_player,
+            throttle_kbps: session.throttle_kbps,
+            simulated_rtt_ms: session.simulated_rtt_ms,
+        };
         let left_poller = ManifestPoller::new(
             url1.clone(),
             session.headers.clone(),
@@ -211,7 +218,8 @@ impl CompareApp {
             session.probe_drm,
             l_tx,
         )
-        .wrap_err("failed to start primary poller")?;
+        .wrap_err("failed to start primary poller")?
+        .with_diagnostics(diag.clone());
         let right_poller = ManifestPoller::new(
             url2.clone(),
             session.headers.clone(),
@@ -221,7 +229,8 @@ impl CompareApp {
             session.probe_drm,
             r_tx,
         )
-        .wrap_err("failed to start backup poller")?;
+        .wrap_err("failed to start backup poller")?
+        .with_diagnostics(diag);
 
         let mut app = Self {
             left: PaneState::new("Primary / Origin", url1),
@@ -244,6 +253,7 @@ impl CompareApp {
         enable_raw_mode()?;
         let mut stdout = io::stdout();
         execute!(stdout, EnterAlternateScreen)?;
+        crate::ui::app::mark_terminal_active();
         let backend = CrosstermBackend::new(stdout);
         let mut terminal = Terminal::new(backend)?;
 

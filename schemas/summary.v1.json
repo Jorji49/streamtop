@@ -44,6 +44,67 @@
     "pssh_systems": {
       "type": ["array", "null"],
       "items": { "type": "string" }
+    },
+    "tr101290": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "properties": {
+        "p1_violations": { "type": "integer", "minimum": 0 },
+        "p2_violations": { "type": "integer", "minimum": 0 },
+        "sync_errors": { "type": "integer", "minimum": 0 },
+        "cc_errors": { "type": "integer", "minimum": 0 },
+        "pat_timeout": { "type": "boolean" },
+        "pmt_timeout": { "type": "boolean" },
+        "pcr_gap_ms": { "type": ["number", "null"] },
+        "pcr_jitter_ms": { "type": ["number", "null"] },
+        "pts_discontinuities": { "type": "integer", "minimum": 0 },
+        "unreferenced_pids": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "synthetic_qoe": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "properties": {
+        "tdr": { "type": "number" },
+        "rebuffer_risk_score": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "ttff_ms": { "type": ["integer", "null"], "minimum": 0 },
+        "selected_bitrate_bps": { "type": ["integer", "null"], "minimum": 0 },
+        "buffer_2s_rebuffer_pct": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "buffer_4s_rebuffer_pct": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "buffer_6s_rebuffer_pct": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "throttle_kbps": { "type": ["integer", "null"], "minimum": 0 },
+        "simulated_rtt_ms": { "type": ["integer", "null"], "minimum": 0 }
+      }
+    },
+    "sei_metadata": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "properties": {
+        "cea608_present": { "type": "boolean" },
+        "cea708_present": { "type": "boolean" },
+        "hdr10_present": { "type": "boolean" },
+        "hlg_present": { "type": "boolean" },
+        "max_cll": { "type": ["integer", "null"], "minimum": 0 },
+        "max_fall": { "type": ["integer", "null"], "minimum": 0 },
+        "caption_language": { "type": ["string", "null"] },
+        "nal_units_scanned": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "ingest_stats": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "properties": {
+        "protocol": { "type": "string" },
+        "rtt_ms": { "type": ["integer", "null"], "minimum": 0 },
+        "packet_loss_pct": { "type": ["number", "null"] },
+        "nak_count": { "type": ["integer", "null"], "minimum": 0 },
+        "flight_buffer_depth": { "type": ["integer", "null"], "minimum": 0 },
+        "bandwidth_mbps": { "type": ["number", "null"] },
+        "video_codec": { "type": ["string", "null"] },
+        "audio_codec": { "type": ["string", "null"] },
+        "keyframe_interval_ms": { "type": ["integer", "null"], "minimum": 0 },
+        "connected": { "type": ["boolean", "null"] }
+      }
     }
   },
   "additionalProperties": false
