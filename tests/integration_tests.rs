@@ -206,6 +206,8 @@ async fn vod_scans_mock_hls_playlist() {
         interval_ms: None,
         probe_headers: true,
         probe_drm: false,
+        clearkey: None,
+        export_incident: None,
         webhook_url: None,
         alert_on: String::new(),
         allow_insecure_webhooks: false,

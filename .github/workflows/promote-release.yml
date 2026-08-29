@@ -24,6 +24,23 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Verify candidate CI jobs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ inputs.candidate_run_id }}
+        run: |
+          set -euo pipefail
+          CONCLUSION=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}" --jq .conclusion)
+          test "$CONCLUSION" = success
+          JOBS=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}/jobs" --paginate --jq '.jobs[] | "\(.name)\t\(.conclusion)"')
+          echo "$JOBS"
+          for needle in "check (" "e2e hermetic" "e2e hermetic (Windows)" "cargo audit" "spellcheck"; do
+            echo "$JOBS" | grep -F "$needle" | grep -Fq success || {
+              echo "::error::required job missing or not success: $needle"
+              exit 1
+            }
+          done
+
       - name: Verify candidate run
         env:
           GH_TOKEN: ${{ github.token }}

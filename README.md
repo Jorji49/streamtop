@@ -52,7 +52,8 @@ Use it to debug CDN issues, validate encoder output, compare origin vs edge, run
 
 ### Live operations
 
-* **SCTE-35**: ad insertion cues, segmentation descriptors, stall and HTTP error logging
+* **SCTE-35 / DAI**: manifest cues, inband DASH `emsg`, cross-layer mismatch detection
+* **Staging ClearKey** (`--clearkey KID:KEY`): cenc CTR and FairPlay **cbcs** 1:9 pattern probe
 * **Glass-to-glass latency**: PRFT, HLS PDT, DASH publish time -> `g2g_total_ms`
 * **Virtual buffer model**: rebuffer probability, stall risk index, ABR ladder switch detection
 * **Synthetic QoE** (`--simulate-player`): player sim with throttle and simulated RTT
@@ -61,11 +62,13 @@ Use it to debug CDN issues, validate encoder output, compare origin vs edge, run
 
 ### Export and observability
 
-* **Incident export**: redacted curl, `.har`, diagnostic JSON (`Space` / `--export-har`)
-* **Headless CI**: stable `streamtop.summary.v1` JSON contract (field version 3), `--timeout`, PASS/FAIL rules
+* **Incident export**: redacted curl, `.har`, diagnostic JSON (`Space` / `--export-har` / `e`)
+* **Compliance report** (`--export-report`): single-file HTML or JSON dashboard
+* **Headless CI**: stable `streamtop.summary.v1` JSON contract (field version **4**), `--timeout`, PASS/FAIL rules
+* **Multi-stream agent** (`--agent agent.example.toml`): fleet polling with aggregated `/metrics`
 * **Prometheus** `/metrics` on `:9184` (Bearer token required on non-loopback bind)
-* **OpenTelemetry**: OTLP/HTTP trace export for DNS, TLS, TTFB, segment spans
-* **Grafana**: `--export-grafana` -> dashboard JSON with G2G and QoE panels
+* **OpenTelemetry**: OTLP traces + metric batches (`/v1/traces`, `/v1/metrics`)
+* **Grafana**: `--export-grafana` -> dashboard JSON v4 (DAI, ClearKey, agent panels)
 * **Webhooks**: Slack, Discord, generic HTTP on stall, SHI, 5xx, mismatch, ad start
 
 ## Install
@@ -114,7 +117,7 @@ Source: `dist/aur/PKGBUILD`.
 ### Docker
 
 ```bash
-docker run -it --rm ghcr.io/jorji49/streamtop:v1.1.2 <URL>
+docker run -it --rm ghcr.io/jorji49/streamtop:v1.3.0 <URL>
 docker run -it --rm ghcr.io/jorji49/streamtop:latest <URL>
 ```
 
@@ -123,7 +126,7 @@ Metrics on a non-loopback bind require a token:
 ```bash
 docker run --rm -p 9184:9184 \
   -e STREAMTOP_METRICS_TOKEN=change-me \
-  ghcr.io/jorji49/streamtop:v1.1.2 \
+  ghcr.io/jorji49/streamtop:v1.3.0 \
   <URL> --prometheus --metrics-bind 0.0.0.0 \
   --metrics-token "$STREAMTOP_METRICS_TOKEN"
 ```
@@ -194,8 +197,14 @@ streamtop <URL> --webhook http://127.0.0.1:9999/hook --allow-insecure-webhooks
 # Channel list audit -> audit_report.json / .csv
 streamtop ./channels.m3u --audit
 
-# Headless PASS/FAIL (CI). Stable contract: streamtop.summary.v1; field version: 3
+# Headless PASS/FAIL (CI). Stable contract: streamtop.summary.v1; field version: 4
 streamtop <URL> --summary --summary-format json --timeout 10
+
+# HTML / JSON compliance report
+streamtop <URL> --export-report report.html --timeout 10
+
+# Multi-stream headless agent (see agent.example.toml)
+streamtop --agent agent.example.toml
 
 # VOD playlist crawl
 streamtop --vod <URL> --summary
@@ -224,7 +233,7 @@ streamtop <URL> --probe-drm --summary
 streamtop --export-grafana
 ```
 
-`--alert-on` values: `stall`, `shi_below_70`, `http_5xx`, `mismatch`, `ad_start`.
+`--alert-on` values: `stall`, `shi_below_70`, `http_5xx`, `mismatch`, `ad_start`, `ad_mismatch`.
 
 Non-loopback `--metrics-bind` requires a non-empty `--metrics-token` or `STREAMTOP_METRICS_TOKEN`.
 
@@ -239,7 +248,8 @@ Non-loopback `--metrics-bind` requires a non-empty `--metrics-token` or `STREAMT
 | `r` | Reset metrics |
 | `Tab` | Channel overlay |
 | `?` | Help |
-| `/` | Search channel list |
+| `/` | Regex log filter modal (Enter lock, Esc clear) |
+| `f` / `F` | Cycle preset log filter / clear regex filter |
 | `j` / `k` | Scroll log or channel list |
 
 Compare mode: `Space` pause/resume, `d` detail, `l` log focus, `c` curl, `h` HAR, `Tab` switch pane.
@@ -247,7 +257,7 @@ Compare mode: `Space` pause/resume, `d` detail, `l` log focus, `c` curl, `h` HAR
 
 ## Headless verdict
 
-`--summary` returns PASS only when the stream is LIVE, SHI is at least 85, no critical RFC errors or origin stalls were observed, the last HTTP status is 200/206, and at least one segment was fetched. Any failed condition returns FAIL and a non-zero exit code. The schema file is `schemas/summary.v1.json`; `schema_version` is currently `3`.
+`--summary` returns PASS only when the stream is LIVE, SHI is at least 85, no critical RFC errors or origin stalls were observed, the last HTTP status is 200/206, and at least one segment was fetched. Any failed condition returns FAIL and a non-zero exit code. The schema file is `schemas/summary.v1.json`; `schema_version` is currently `4`.
 
 ## FAQ
 

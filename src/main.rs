@@ -20,6 +20,7 @@ use streamtop::engine::playlist_parser::{
     detect_and_parse, looks_like_remote_url, path_to_file_url, ParsedInput,
 };
 use streamtop::engine::poller::build_http_client;
+use streamtop::engine::report_export::run_report_export;
 use streamtop::engine::summary::{run_summary, SummaryFormat};
 use streamtop::engine::vod::run_vod;
 use streamtop::models::ChannelEntry;
@@ -50,8 +51,16 @@ impl From<SummaryFormatArg> for SummaryFormat {
 )]
 struct Cli {
     /// Stream URL, local playlist/MPD, or channel lineup (M3U / JSON / YAML)
-    #[arg(required_unless_present_any = ["compare", "export_grafana", "vod"])]
+    #[arg(required_unless_present_any = ["compare", "export_grafana", "vod", "agent"])]
     url: Option<String>,
+
+    /// Multi-stream headless agent (TOML config with [[streams]])
+    #[arg(long = "agent", value_name = "CONFIG.toml")]
+    agent: Option<PathBufArg>,
+
+    /// Export HTML or JSON compliance report and exit
+    #[arg(long = "export-report", value_name = "PATH")]
+    export_report: Option<PathBufArg>,
 
     /// Compare two live streams side by side
     #[arg(long = "compare", num_args = 2, value_names = ["URL_1", "URL_2"])]
@@ -85,9 +94,21 @@ struct Cli {
     #[arg(short = 'i', long = "interval", value_name = "MS")]
     interval_ms: Option<u64>,
 
-    /// Range-request the start of each segment only (wire/header probe)
+    /// Range-request the start of each segment only (wire/header probe). Default on; use --full-segment to disable.
     #[arg(long = "probe-headers", alias = "range-probe")]
     probe_headers: bool,
+
+    /// Download full segments instead of 64 KB range probe (more bandwidth, bitrate timing)
+    #[arg(long = "full-segment")]
+    full_segment: bool,
+
+    /// Staging ClearKey: KID_HEX:KEY_HEX for encrypted probe validation
+    #[arg(long = "clearkey", value_name = "KID:KEY")]
+    clearkey: Option<String>,
+
+    /// Export incident bundle to PATH (or diagnostics/incident_<time>.json) and exit after --timeout
+    #[arg(long = "export-incident", value_name = "PATH", num_args = 0..=1, default_missing_value = "")]
+    export_incident: Option<String>,
 
     /// Probe DRM license / EXT-X-KEY / DASH LA_URL ClearKey TTFB
     #[arg(long = "probe-drm")]
@@ -147,7 +168,7 @@ struct Cli {
     #[arg(long = "webhook", value_name = "URL")]
     webhook: Option<String>,
 
-    /// Alert kinds: stall,shi_below_70,http_5xx,mismatch,ad_start
+    /// Alert kinds: stall,shi_below_70,http_5xx,mismatch,ad_start,ad_mismatch
     #[arg(long = "alert-on", value_name = "EVENTS")]
     alert_on: Option<String>,
 
@@ -210,14 +231,23 @@ async fn main() -> Result<ExitCode> {
         return Ok(ExitCode::SUCCESS);
     }
 
+    if let Some(PathBufArg(config)) = &cli.agent {
+        let path = config
+            .to_str()
+            .ok_or_else(|| eyre!("agent config path is not valid UTF-8"))?;
+        return streamtop::engine::agent::run_agent(path).await;
+    }
+
     let mut session = session_from_profile(
         cli.profile.as_deref(),
         SessionOpts {
             headers: Vec::new(),
             user_agent: None,
             interval_ms: None,
-            probe_headers: false,
+            probe_headers: true,
             probe_drm: false,
+            clearkey: None,
+            export_incident: None,
             webhook_url: None,
             alert_on: "stall,shi_below_70,http_5xx".into(),
             allow_insecure_webhooks: false,
@@ -242,11 +272,19 @@ async fn main() -> Result<ExitCode> {
     if cli.interval_ms.is_some() {
         session.interval_ms = cli.interval_ms;
     }
-    if cli.probe_headers {
+    if cli.full_segment {
+        session.probe_headers = false;
+    } else if cli.probe_headers {
         session.probe_headers = true;
     }
     if cli.probe_drm {
         session.probe_drm = true;
+    }
+    if let Some(ck) = &cli.clearkey {
+        session.clearkey = Some(ck.clone());
+    }
+    if cli.export_incident.is_some() {
+        session.export_incident = cli.export_incident.clone();
     }
     if cli.webhook.is_some() {
         session.webhook_url = cli.webhook.clone();
@@ -449,6 +487,8 @@ async fn main() -> Result<ExitCode> {
                 })
             } else if cli.summary {
                 run_summary(url, session, cli.timeout_secs, cli.summary_format.into()).await
+            } else if let Some(PathBufArg(report_path)) = &cli.export_report {
+                run_report_export(url, session, report_path.as_path(), cli.timeout_secs).await
             } else {
                 App::run_diagnostics(origin, url, session).await?;
                 Ok(ExitCode::SUCCESS)

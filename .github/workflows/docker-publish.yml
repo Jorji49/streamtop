@@ -15,7 +15,6 @@ on:
       - "Cargo.lock"
       - "Dockerfile"
       - ".github/workflows/docker-publish.yml"
-    tags: ["v*"]
 
 concurrency:
   group: docker-publish-${{ github.ref }}

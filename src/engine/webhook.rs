@@ -33,6 +33,7 @@ pub enum AlertKind {
     Http5xx,
     Mismatch,
     AdStart,
+    AdMismatch,
 }
 
 impl AlertKind {
@@ -49,6 +50,7 @@ impl AlertKind {
                 "http_5xx" | "http5xx" | "5xx" => Self::Http5xx,
                 "mismatch" => Self::Mismatch,
                 "ad_start" | "ad" => Self::AdStart,
+                "ad_mismatch" | "dai_mismatch" => Self::AdMismatch,
                 other => return Err(eyre!("unknown alert kind: {other}")),
             };
             set.insert(kind);
@@ -66,6 +68,7 @@ impl AlertKind {
             Self::Http5xx => "http_5xx",
             Self::Mismatch => "mismatch",
             Self::AdStart => "ad_start",
+            Self::AdMismatch => "ad_mismatch",
         }
     }
 }
@@ -429,6 +432,17 @@ fn event_to_alert(
                 AlertKind::AdStart,
                 "info",
                 ad.summary.clone(),
+                stream_url,
+                None,
+                None,
+                None,
+            ))
+        }
+        StreamEvent::AdMarkerMismatch(m) if cfg.alerts.contains(&AlertKind::AdMismatch) => {
+            Some(alert(
+                AlertKind::AdMismatch,
+                "critical",
+                format!("{}: {}", m.rule, m.message),
                 stream_url,
                 None,
                 None,

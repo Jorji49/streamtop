@@ -7,6 +7,7 @@ use color_eyre::eyre::{eyre, Result, WrapErr};
 use serde_json::{json, Value};
 
 use crate::engine::ip_pin::validate_outbound_url;
+use crate::engine::metrics::MetricsSnapshot;
 use crate::engine::network_trace::pinned_post_json;
 use crate::engine::redact::redact_url;
 use crate::models::{G2gMetrics, NetworkTiming, WireProbeInfo};
@@ -23,6 +24,20 @@ struct SpanRecord {
     trace_id: String,
     span_id: String,
     parent_span_id: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct MetricPoint {
+    name: String,
+    kind: MetricKind,
+    value: f64,
+    attributes: Vec<(String, String)>,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum MetricKind {
+    Gauge,
+    Counter,
 }
 
 /// W3C trace context shared across outbound probe requests in one session.
@@ -62,6 +77,7 @@ pub struct OtelExporter {
     endpoint: String,
     allow_insecure: bool,
     pending: Mutex<Vec<SpanRecord>>,
+    metrics: Mutex<Vec<MetricPoint>>,
     trace: Mutex<TraceContext>,
 }
 
@@ -79,6 +95,7 @@ impl OtelExporter {
             endpoint,
             allow_insecure,
             pending: Mutex::new(Vec::new()),
+            metrics: Mutex::new(Vec::new()),
             trace: Mutex::new(TraceContext::new()),
         }))
     }
@@ -217,6 +234,63 @@ impl OtelExporter {
         }
     }
 
+    /// Snapshot Prometheus-style gauges/counters for OTLP `/v1/metrics`.
+    pub fn record_metrics_snapshot(&self, snap: &MetricsSnapshot) {
+        let url = redact_url(&snap.url);
+        let attrs = vec![("url".into(), url)];
+        let mut batch = vec![
+            metric_point(
+                "streamtop_stream_health_score",
+                MetricKind::Gauge,
+                f64::from(snap.health_score),
+                attrs.clone(),
+            ),
+            metric_point(
+                "streamtop_latency_seconds",
+                MetricKind::Gauge,
+                snap.latency_secs,
+                attrs.clone(),
+            ),
+            metric_point(
+                "streamtop_ad_mismatch_total",
+                MetricKind::Counter,
+                snap.ad_mismatch_total as f64,
+                attrs.clone(),
+            ),
+            metric_point(
+                "streamtop_inband_emsg_total",
+                MetricKind::Counter,
+                snap.inband_emsg_total as f64,
+                attrs.clone(),
+            ),
+            metric_point(
+                "streamtop_clearkey_decrypt_ok",
+                MetricKind::Gauge,
+                snap.clearkey_decrypt_ok,
+                attrs.clone(),
+            ),
+            metric_point(
+                "streamtop_tr101290_p1_violations_total",
+                MetricKind::Counter,
+                snap.tr101290_p1_total as f64,
+                attrs.clone(),
+            ),
+            metric_point(
+                "streamtop_tr101290_p2_violations_total",
+                MetricKind::Counter,
+                snap.tr101290_p2_total as f64,
+                attrs,
+            ),
+        ];
+        if let Ok(mut guard) = self.metrics.lock() {
+            if guard.len() + batch.len() > OTEL_PENDING_CAP {
+                let drain = guard.len() + batch.len() - OTEL_PENDING_CAP;
+                guard.drain(0..drain);
+            }
+            guard.append(&mut batch);
+        }
+    }
+
     pub async fn flush(&self) -> Result<()> {
         let spans = {
             let mut guard = self
@@ -237,6 +311,35 @@ impl OtelExporter {
         if !(200..300).contains(&status) {
             return Err(eyre!("otel trace export HTTP {status}"));
         }
+        Ok(())
+    }
+
+    pub async fn flush_metrics(&self) -> Result<()> {
+        let points = {
+            let mut guard = self
+                .metrics
+                .lock()
+                .map_err(|_| eyre!("otel metric buffer poisoned"))?;
+            std::mem::take(&mut *guard)
+        };
+        if points.is_empty() {
+            return Ok(());
+        }
+        validate_outbound_url(&self.endpoint, self.allow_insecure)?;
+        let payload = build_otlp_metrics_payload(&points);
+        let url = format!("{}/v1/metrics", self.endpoint);
+        let status = pinned_post_json(&url, &payload, self.allow_insecure, Duration::from_secs(10))
+            .await
+            .wrap_err("otel metric export failed")?;
+        if !(200..300).contains(&status) {
+            return Err(eyre!("otel metric export HTTP {status}"));
+        }
+        Ok(())
+    }
+
+    pub async fn flush_all(&self) -> Result<()> {
+        self.flush().await?;
+        self.flush_metrics().await?;
         Ok(())
     }
 }
@@ -301,6 +404,76 @@ fn build_otlp_payload(spans: &[SpanRecord]) -> Value {
     })
 }
 
+fn metric_point(
+    name: &str,
+    kind: MetricKind,
+    value: f64,
+    attributes: Vec<(String, String)>,
+) -> MetricPoint {
+    MetricPoint {
+        name: name.into(),
+        kind,
+        value,
+        attributes,
+    }
+}
+
+fn otlp_attributes(attrs: &[(String, String)]) -> Vec<Value> {
+    attrs
+        .iter()
+        .map(|(k, v)| {
+            json!({
+                "key": k,
+                "value": { "stringValue": v }
+            })
+        })
+        .collect()
+}
+
+fn build_otlp_metrics_payload(points: &[MetricPoint]) -> Value {
+    let ts = now_unix_nano().to_string();
+    let metrics: Vec<Value> = points
+        .iter()
+        .map(|p| {
+            let attrs = otlp_attributes(&p.attributes);
+            let data_point = json!({
+                "attributes": attrs,
+                "timeUnixNano": ts,
+                "asDouble": p.value,
+            });
+            match p.kind {
+                MetricKind::Gauge => json!({
+                    "name": p.name,
+                    "gauge": { "dataPoints": [data_point] }
+                }),
+                MetricKind::Counter => json!({
+                    "name": p.name,
+                    "sum": {
+                        "aggregationTemporality": 2,
+                        "isMonotonic": true,
+                        "dataPoints": [data_point]
+                    }
+                }),
+            }
+        })
+        .collect();
+
+    json!({
+        "resourceMetrics": [{
+            "resource": {
+                "attributes": [{
+                    "key": "service.name",
+                    "value": { "stringValue": SERVICE_NAME }
+                }]
+            },
+            "scopeMetrics": [{
+                "scope": { "name": SERVICE_NAME },
+                "metrics": metrics
+            }]
+        }]
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -326,6 +499,20 @@ mod tests {
         }];
         let payload = build_otlp_payload(&spans);
         assert!(payload["resourceSpans"][0]["scopeSpans"][0]["spans"]
+            .as_array()
+            .is_some_and(|a| !a.is_empty()));
+    }
+
+    #[test]
+    fn otlp_metrics_payload_has_points() {
+        let points = vec![metric_point(
+            "streamtop_inband_emsg_total",
+            MetricKind::Counter,
+            3.0,
+            vec![("url".into(), "https://example.com".into())],
+        )];
+        let payload = build_otlp_metrics_payload(&points);
+        assert!(payload["resourceMetrics"][0]["scopeMetrics"][0]["metrics"]
             .as_array()
             .is_some_and(|a| !a.is_empty()));
     }

@@ -203,6 +203,39 @@ pub struct WireProbeInfo {
     /// PSSH boxes discovered in the wire probe window.
     #[serde(default, skip_serializing_if = "PsshProbeInfo::is_empty")]
     pub pssh: PsshProbeInfo,
+    /// DASH inband `emsg` boxes seen in the probe window.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub inband_emsg: Vec<InbandEmsgInfo>,
+}
+
+/// ISO BMFF `emsg` inband event (DASH EventMessage).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct InbandEmsgInfo {
+    pub version: u8,
+    pub scheme_id_uri: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub value: Option<String>,
+    pub timescale: u32,
+    pub presentation_time_delta: u64,
+    pub event_duration: u64,
+    pub id: u32,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub message_data: Vec<u8>,
+}
+
+impl InbandEmsgInfo {
+    pub fn is_scte_related(&self) -> bool {
+        let s = self.scheme_id_uri.to_ascii_lowercase();
+        s.contains("scte") || s.contains("splice") || s.contains("ad")
+    }
+}
+
+/// Wire inband ad marker from `emsg` + optional decoded SCTE-35 summary.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct InbandAdEvent {
+    pub emsg: InbandEmsgInfo,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scte35_summary: Option<String>,
 }
 
 /// fMP4 / MPEG-TS timing signals extracted from the probe buffer.
@@ -654,6 +687,67 @@ pub struct DiagnosticFinding {
     pub message: String,
 }
 
+/// Summary schema spec violation row (`spec_violations` in summary v4).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SpecViolation {
+    pub severity: String,
+    pub rule: String,
+    pub message: String,
+    pub standard: String,
+}
+
+impl SpecViolation {
+    pub fn from_finding(f: &DiagnosticFinding) -> Self {
+        let severity = match f.severity {
+            DiagSeverity::Error => "ERROR",
+            DiagSeverity::Warn => "WARNING",
+            DiagSeverity::Info => "INFO",
+        };
+        let standard = if f.rule.starts_with("DASH_") {
+            "DASH"
+        } else {
+            match f.category {
+                DiagCategory::Rfc | DiagCategory::LlHls => "HLS",
+                DiagCategory::Cdn => "CDN",
+                DiagCategory::Ad => "DAI",
+                _ => "GENERAL",
+            }
+        };
+        Self {
+            severity: severity.into(),
+            rule: f.rule.clone(),
+            message: f.message.clone(),
+            standard: standard.into(),
+        }
+    }
+}
+
+/// Manifest vs wire SCTE-35 alignment failure.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AdMarkerMismatch {
+    pub rule: String,
+    pub message: String,
+    pub manifest_kind: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub planned_duration_secs: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub wire_pts_ms: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub drift_ms: Option<i64>,
+}
+
+/// Sanitized HTTP transaction for incident bundles.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct HttpTransaction {
+    pub method: String,
+    pub url: String,
+    pub status: u16,
+    pub ttfb_ms: u64,
+    pub bytes: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cdn_provider: Option<String>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum CacheVerdict {
     Hit,
@@ -704,6 +798,16 @@ pub struct CdnEdgeInfo {
     pub served_by: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub via: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cf_ray: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub akamai_cache_status: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub x_cache_hits: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub server_timing_edge_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub server_timing_origin_ms: Option<u64>,
 }
 
 impl CdnEdgeInfo {
@@ -736,6 +840,24 @@ impl CdnEdgeInfo {
         } else {
             "ORIGIN?"
         }
+    }
+
+    /// Compact POP / Age / Server-Timing for status line.
+    pub fn edge_detail(&self) -> String {
+        let mut parts = Vec::new();
+        if let Some(p) = &self.pop {
+            parts.push(format!("pop={p}"));
+        }
+        if let Some(a) = self.age {
+            parts.push(format!("age={a}s"));
+        }
+        if let Some(ms) = self.server_timing_edge_ms {
+            parts.push(format!("edge={ms}ms"));
+        }
+        if let Some(ms) = self.server_timing_origin_ms {
+            parts.push(format!("origin={ms}ms"));
+        }
+        parts.join(" ")
     }
 }
 
@@ -921,6 +1043,9 @@ pub struct DrmInfo {
     pub license_http_status: Option<u16>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub license_error: Option<String>,
+    /// `GET` range probe or `POST` ClearKey JSON license request.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub license_method: Option<String>,
     /// Parsed PSSH entries from manifest or fMP4 wire probe.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pssh: Option<PsshProbeInfo>,
@@ -1203,6 +1328,8 @@ pub enum StreamEvent {
     CdnStats(CdnStats),
     AbrHealth(AbrHealth),
     AdBreak(AdBreakInfo),
+    AdMarkerMismatch(AdMarkerMismatch),
+    InbandAdEvent(InbandAdEvent),
     Buffer(VirtualBuffer),
     G2g(G2gMetrics),
     ProbeMode(bool),
