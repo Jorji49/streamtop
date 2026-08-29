@@ -1,6 +1,12 @@
 name: Docker Publish
 
 on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Optional version tag for a manual release build
+        required: false
+        type: string
   push:
     branches: [main]
     paths:
@@ -51,6 +57,7 @@ jobs:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=${{ inputs.version }},enable=${{ github.event_name == 'workflow_dispatch' && inputs.version != '' }}
             type=ref,event=tag
             type=sha,prefix=sha-,format=short
 
