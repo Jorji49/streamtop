@@ -76,8 +76,14 @@ def main() -> int:
         failures.append("packaging manifests contain PLACEHOLDER")
 
     if args.assets_dir:
-        windows = args.assets_dir / f"streamtop-windows-x86_64-{cargo_version}.zip"
-        linux = args.assets_dir / "streamtop-x86_64-unknown-linux-gnu.tar.gz"
+        windows_matches = list(
+            args.assets_dir.rglob(f"streamtop-windows-x86_64-{cargo_version}.zip")
+        )
+        linux_matches = list(
+            args.assets_dir.rglob("streamtop-x86_64-unknown-linux-gnu.tar.gz")
+        )
+        windows = windows_matches[0] if windows_matches else args.assets_dir / "missing-windows"
+        linux = linux_matches[0] if linux_matches else args.assets_dir / "missing-linux"
         for path in [windows, linux]:
             if not path.is_file():
                 failures.append(f"missing artifact: {path}")

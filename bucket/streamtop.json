@@ -6,7 +6,7 @@
     "architecture":  {
                          "64bit":  {
                                        "url":  "https://github.com/Jorji49/streamtop/releases/download/v1.1.2/streamtop-windows-x86_64-1.1.2.zip",
-                                       "hash":  "155b9f1f18565b77907bcccd3ffe1011e36786bbbf1ba79bddf4ce3f8467eb54"
+                                       "hash":  "47be8cd903f9dad53c5d03e08a45c34d1404e861c82ea83de45b8d2e4ce976fe"
                                    }
                      },
     "bin":  "streamtop.exe",
