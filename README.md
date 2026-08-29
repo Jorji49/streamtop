@@ -11,8 +11,6 @@
 [![Downloads](https://img.shields.io/crates/d/streamtop?style=flat-square&color=2ea44f&labelColor=1c1c1c)](https://crates.io/crates/streamtop)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue?style=flat-square&labelColor=1c1c1c)](LICENSE)
 
-<br /><br />
-
 <img width="1200" alt="demo_loop" src="https://github.com/user-attachments/assets/f4fbb3e2-f572-4003-bb5d-b22cbba52a80" />
 
 </div>
