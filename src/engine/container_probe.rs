@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use crate::models::{ContainerKind, WireProbeInfo, WireTimingInfo};
+use crate::models::{ContainerKind, InbandEmsgInfo, WireProbeInfo, WireTimingInfo};
 
 /// Probe segment bytes for codec / resolution / FPS.
 pub fn deep_wire_probe(bytes: &[u8]) -> WireProbeInfo {
@@ -18,7 +18,116 @@ pub fn deep_wire_probe(bytes: &[u8]) -> WireProbeInfo {
     info.timing = probe_wire_timing(bytes, kind);
     probe_audio_wire(bytes, kind, &mut info);
     info.pssh = crate::engine::pssh::scan_pssh_boxes(bytes);
+    if kind == ContainerKind::Fmp4 {
+        info.inband_emsg = scan_inband_emsg(bytes);
+    }
     info
+}
+
+/// Scan fMP4 probe window for DASH `emsg` inband event boxes (SCTE schemes only).
+pub fn scan_inband_emsg(bytes: &[u8]) -> Vec<InbandEmsgInfo> {
+    let mut out = Vec::new();
+    walk_boxes(bytes, 0, bytes.len(), &mut |name, payload| {
+        if name == b"emsg" {
+            if let Some(ev) = parse_emsg_box(payload) {
+                if ev.is_scte_related() {
+                    out.push(ev);
+                }
+            }
+        }
+        true
+    });
+    out
+}
+
+/// Parse ISO BMFF `emsg` fullbox payload (v0 or v1).
+pub fn parse_emsg_box(payload: &[u8]) -> Option<InbandEmsgInfo> {
+    if payload.len() < 12 {
+        return None;
+    }
+    let version = payload[0];
+    match version {
+        0 => parse_emsg_v0(payload),
+        1 => parse_emsg_v1(payload),
+        _ => None,
+    }
+}
+
+fn parse_emsg_v0(payload: &[u8]) -> Option<InbandEmsgInfo> {
+    let mut off = 12usize;
+    let (scheme, next) = read_cstr(payload, off)?;
+    off = next;
+    let (value, next) = read_cstr(payload, off)?;
+    off = next;
+    if off + 16 > payload.len() {
+        return None;
+    }
+    let timescale = u32::from_be_bytes(payload[off..off + 4].try_into().ok()?);
+    off += 4;
+    let presentation_time_delta =
+        u64::from(u32::from_be_bytes(payload[off..off + 4].try_into().ok()?));
+    off += 4;
+    let event_duration = u64::from(u32::from_be_bytes(payload[off..off + 4].try_into().ok()?));
+    off += 4;
+    let id = u32::from_be_bytes(payload[off..off + 4].try_into().ok()?);
+    off += 4;
+    Some(InbandEmsgInfo {
+        version: 0,
+        scheme_id_uri: scheme,
+        value: if value.is_empty() { None } else { Some(value) },
+        timescale,
+        presentation_time_delta,
+        event_duration,
+        id,
+        message_data: copy_tail(payload, off),
+    })
+}
+
+fn copy_tail(data: &[u8], off: usize) -> Vec<u8> {
+    data.get(off..).unwrap_or(&[]).to_vec()
+}
+
+fn parse_emsg_v1(payload: &[u8]) -> Option<InbandEmsgInfo> {
+    let mut off = 12usize;
+    if off + 24 > payload.len() {
+        return None;
+    }
+    let timescale = u32::from_be_bytes(payload[off..off + 4].try_into().ok()?);
+    off += 4;
+    let presentation_time = u64::from_be_bytes(payload[off..off + 8].try_into().ok()?);
+    off += 8;
+    let event_duration = u64::from(u32::from_be_bytes(payload[off..off + 4].try_into().ok()?));
+    off += 4;
+    let id = u32::from_be_bytes(payload[off..off + 4].try_into().ok()?);
+    off += 4;
+    let (scheme, next) = read_cstr(payload, off)?;
+    off = next;
+    let (value, next) = read_cstr(payload, off)?;
+    off = next;
+    Some(InbandEmsgInfo {
+        version: 1,
+        scheme_id_uri: scheme,
+        value: if value.is_empty() { None } else { Some(value) },
+        timescale,
+        presentation_time_delta: presentation_time,
+        event_duration,
+        id,
+        message_data: copy_tail(payload, off),
+    })
+}
+
+fn read_cstr(data: &[u8], start: usize) -> Option<(String, usize)> {
+    if start >= data.len() {
+        return None;
+    }
+    let end = data[start..]
+        .iter()
+        .position(|&b| b == 0)
+        .map(|i| start + i)
+        .unwrap_or(data.len());
+    let s = String::from_utf8_lossy(&data[start..end]).into_owned();
+    let next = if end < data.len() { end + 1 } else { end };
+    Some((s, next))
 }
 
 fn probe_audio_wire(bytes: &[u8], kind: ContainerKind, info: &mut WireProbeInfo) {
@@ -1572,6 +1681,43 @@ fn parse_ts_pcr(pkt: &[u8]) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parse_emsg_v0_scte_scheme() {
+        let mut payload = vec![0u8; 12];
+        payload.extend_from_slice(b"urn:scte:scte35:2014:bin\0");
+        payload.extend_from_slice(b"1\0");
+        payload.extend_from_slice(&90000u32.to_be_bytes());
+        payload.extend_from_slice(&100u32.to_be_bytes());
+        payload.extend_from_slice(&30000u32.to_be_bytes());
+        payload.extend_from_slice(&7u32.to_be_bytes());
+        payload.extend_from_slice(&[0xde, 0xad]);
+        let ev = parse_emsg_box(&payload).expect("emsg v0");
+        assert_eq!(ev.version, 0);
+        assert!(ev.scheme_id_uri.contains("scte35"));
+        assert_eq!(ev.id, 7);
+        assert_eq!(ev.message_data, vec![0xde, 0xad]);
+        assert!(ev.is_scte_related());
+    }
+
+    #[test]
+    fn scan_inband_emsg_finds_box() {
+        let mut payload = vec![0u8; 12];
+        payload.extend_from_slice(b"urn:scte:scte35:2013:xml\0");
+        payload.extend_from_slice(b"\0");
+        payload.extend_from_slice(&1u32.to_be_bytes());
+        payload.extend_from_slice(&0u32.to_be_bytes());
+        payload.extend_from_slice(&0u32.to_be_bytes());
+        payload.extend_from_slice(&1u32.to_be_bytes());
+        let box_len = (8 + payload.len()) as u32;
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&box_len.to_be_bytes());
+        bytes.extend_from_slice(b"emsg");
+        bytes.extend_from_slice(&payload);
+        let found = scan_inband_emsg(&bytes);
+        assert_eq!(found.len(), 1);
+        assert!(found[0].scheme_id_uri.contains("2013:xml"));
+    }
 
     #[test]
     fn classify_ts_sync() {

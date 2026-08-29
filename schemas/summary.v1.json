@@ -24,7 +24,7 @@
   ],
   "properties": {
     "schema": { "const": "streamtop.summary.v1" },
-    "schema_version": { "const": 3 },
+    "schema_version": { "const": 4 },
     "verdict": { "enum": ["PASS", "FAIL"] },
     "ok": { "type": "boolean" },
     "health_score": { "type": "integer", "minimum": 0, "maximum": 100 },
@@ -150,6 +150,20 @@
         "audio_codec": { "type": ["string", "null"] },
         "keyframe_interval_ms": { "type": ["integer", "null"], "minimum": 0 },
         "connected": { "type": ["boolean", "null"] }
+      }
+    },
+    "spec_violations": {
+      "type": ["array", "null"],
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["severity", "rule", "message", "standard"],
+        "properties": {
+          "severity": { "enum": ["ERROR", "WARNING", "INFO"] },
+          "rule": { "type": "string" },
+          "message": { "type": "string" },
+          "standard": { "type": "string" }
+        }
       }
     }
   },

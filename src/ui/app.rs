@@ -32,6 +32,19 @@ use crate::ui::layout::{self, DiagnosticPanel};
 
 const FRAME_PERIOD: Duration = Duration::from_millis(33);
 const TOAST_SECS: u64 = 2;
+const MANIFEST_HISTORY_CAP: usize = 10;
+
+fn push_manifest_history(history: &mut Vec<PlaylistMeta>, meta: PlaylistMeta) {
+    if history.last().map(|p| (p.media_sequence, p.url.as_str()))
+        == Some((meta.media_sequence, meta.url.as_str()))
+    {
+        return;
+    }
+    if history.len() >= MANIFEST_HISTORY_CAP {
+        history.remove(0);
+    }
+    history.push(meta);
+}
 
 static TERMINAL_ACTIVE: AtomicBool = AtomicBool::new(false);
 
@@ -63,6 +76,10 @@ pub struct SessionOpts {
     pub probe_headers: bool,
     /// Optional DRM license / ClearKey / LA_URL TTFB probe (`--probe-drm`).
     pub probe_drm: bool,
+    /// Staging ClearKey KID:KEY (`--clearkey`).
+    pub clearkey: Option<String>,
+    /// Optional incident export path (`--export-incident`).
+    pub export_incident: Option<String>,
     pub webhook_url: Option<String>,
     pub alert_on: String,
     /// Bypass webhook SSRF checks (local tests only).
@@ -115,6 +132,13 @@ pub struct App {
     pub synthetic_qoe: SyntheticQoeSnapshot,
     pub ingest_stats: Option<IngestStats>,
     pub show_help: bool,
+    /// Active regex filter for event log (`/` modal).
+    pub log_filter: Option<String>,
+    pub log_filter_regex: Option<regex::Regex>,
+    pub log_filter_edit: bool,
+    pub log_filter_draft: String,
+    pub manifest_history: Vec<PlaylistMeta>,
+    pub http_log: Vec<crate::models::HttpTransaction>,
     /// Toast message (curl copied, export path, …).
     pub toast: Option<(String, Instant)>,
     pub picker: Option<ChannelPicker>,
@@ -202,6 +226,12 @@ impl App {
             synthetic_qoe: SyntheticQoeSnapshot::default(),
             ingest_stats: None,
             show_help: false,
+            log_filter: None,
+            log_filter_regex: None,
+            log_filter_edit: false,
+            log_filter_draft: String::new(),
+            manifest_history: Vec::new(),
+            http_log: Vec::new(),
             toast: None,
             picker,
             session,
@@ -261,6 +291,11 @@ impl App {
             throttle_kbps: self.session.throttle_kbps,
             simulated_rtt_ms: self.session.simulated_rtt_ms,
         });
+        if let Some(ref ck) = self.session.clearkey {
+            if let Ok(spec) = crate::engine::drm_probe::ClearKeySpec::parse(ck) {
+                poller = poller.with_clearkey(Some(spec));
+            }
+        }
 
         if let Some(hook_url) = self.session.webhook_url.clone() {
             let alerts = crate::engine::webhook::AlertKind::parse_list(&self.session.alert_on)?;
@@ -398,6 +433,9 @@ impl App {
         if self.show_help {
             layout::draw_help(frame, frame.area(), false);
         }
+        if self.log_filter_edit {
+            layout::draw_regex_modal(frame, frame.area(), self);
+        }
     }
 
     fn handle_key(&mut self, key: KeyEvent) -> Result<()> {
@@ -434,6 +472,49 @@ impl App {
             return Ok(());
         }
 
+        if self.log_filter_edit {
+            match key.code {
+                KeyCode::Esc => {
+                    self.log_filter_edit = false;
+                    self.log_filter_draft.clear();
+                    self.log_filter = None;
+                    self.log_filter_regex = None;
+                    self.log_scroll = 0;
+                }
+                KeyCode::Enter => {
+                    let draft = self.log_filter_draft.trim().to_string();
+                    if draft.is_empty() {
+                        self.log_filter = None;
+                        self.log_filter_regex = None;
+                    } else if let Ok(re) = regex::Regex::new(&draft) {
+                        self.log_filter = Some(draft);
+                        self.log_filter_regex = Some(re);
+                    } else {
+                        self.log_filter_edit = false;
+                        self.log_filter_draft.clear();
+                        self.push_log(
+                            LogLevel::Warn,
+                            DiagCategory::Info,
+                            "Invalid regex filter; cleared",
+                        );
+                        self.log_scroll = 0;
+                        return Ok(());
+                    }
+                    self.log_filter_edit = false;
+                    self.log_filter_draft.clear();
+                    self.log_scroll = 0;
+                }
+                KeyCode::Backspace => {
+                    self.log_filter_draft.pop();
+                }
+                KeyCode::Char(c) => {
+                    self.log_filter_draft.push(c);
+                }
+                _ => {}
+            }
+            return Ok(());
+        }
+
         match key.code {
             KeyCode::Char('q') | KeyCode::Char('Q') => {
                 self.should_quit = true;
@@ -460,6 +541,24 @@ impl App {
                 self.show_help = true;
             }
             KeyCode::Char(' ') => self.export_diagnostic()?,
+            KeyCode::Char('e') | KeyCode::Char('E') => self.export_incident()?,
+            KeyCode::Char('f') => {
+                self.log_filter = match self.log_filter.as_deref() {
+                    None => Some("404".into()),
+                    Some("404") => Some("SCTE".into()),
+                    Some("SCTE") => Some("DRIFT".into()),
+                    Some("DRIFT") => Some("CC_ERROR".into()),
+                    _ => None,
+                };
+            }
+            KeyCode::Char('F') => {
+                self.log_filter = None;
+                self.log_filter_regex = None;
+            }
+            KeyCode::Char('/') => {
+                self.log_filter_edit = true;
+                self.log_filter_draft = self.log_filter.clone().unwrap_or_default();
+            }
             KeyCode::Char('r') | KeyCode::Char('R') => self.reset_metrics(),
             KeyCode::Char('t') | KeyCode::Char('T') => {
                 self.diagnostic_panel = if self.diagnostic_panel == DiagnosticPanel::Tr101290 {
@@ -645,6 +744,7 @@ impl App {
             }
             StreamEvent::PlaylistMeta(meta) => {
                 self.active_url = meta.url.clone();
+                push_manifest_history(&mut self.manifest_history, meta.clone());
                 self.playlist = Some(meta);
             }
             StreamEvent::Segment(metrics) => {
@@ -655,6 +755,17 @@ impl App {
                 }
                 if metrics.probed {
                     self.probe_mode = true;
+                }
+                self.http_log.push(crate::models::HttpTransaction {
+                    method: "GET".into(),
+                    url: metrics.uri.clone(),
+                    status: metrics.http_status,
+                    ttfb_ms: metrics.ttfb_ms,
+                    bytes: metrics.transferred_bytes,
+                    cdn_provider: metrics.cdn.provider.clone(),
+                });
+                if self.http_log.len() > 100 {
+                    self.http_log.remove(0);
                 }
                 self.last_segment = Some(metrics);
             }
@@ -673,6 +784,25 @@ impl App {
                 } else {
                     self.active_ad = Some(ad);
                 }
+            }
+            StreamEvent::AdMarkerMismatch(m) => {
+                self.push_log(
+                    LogLevel::Warn,
+                    DiagCategory::Ad,
+                    format!("[MISMATCH] {}: {}", m.rule, m.message),
+                );
+                self.findings.push(crate::models::DiagnosticFinding {
+                    category: DiagCategory::Ad,
+                    severity: crate::models::DiagSeverity::Error,
+                    rule: m.rule.clone(),
+                    message: m.message.clone(),
+                });
+            }
+            StreamEvent::InbandAdEvent(ev) => {
+                let msg = ev.scte35_summary.clone().unwrap_or_else(|| {
+                    format!("emsg id={} scheme={}", ev.emsg.id, ev.emsg.scheme_id_uri)
+                });
+                self.push_log(LogLevel::Info, DiagCategory::Ad, format!("[INBAND] {msg}"));
             }
             StreamEvent::Buffer(b) => self.buffer = b,
             StreamEvent::G2g(g) => self.g2g = g,
@@ -807,6 +937,95 @@ impl App {
         Ok(())
     }
 
+    fn export_incident(&mut self) -> Result<()> {
+        let now = chrono::Utc::now();
+        let channel = self.channel_name.clone();
+        let status = match self.status.kind {
+            crate::models::StreamStatusKind::Live => "LIVE",
+            crate::models::StreamStatusKind::Error => "ERROR",
+            crate::models::StreamStatusKind::Degraded => "DEGRADED",
+        };
+        let health = self.health.clone();
+        let title = format!(
+            "streamtop incident @ {}",
+            now.format("%Y-%m-%d %H:%M:%S UTC")
+        );
+        let timeline: Vec<String> = self
+            .log
+            .iter()
+            .map(|e| crate::engine::redact::redact_text(&e.timeline_line()))
+            .collect();
+        let snapshot = StreamSnapshot {
+            title,
+            summary: DiagnosticSummary {
+                channel: channel.clone(),
+                captured_at: now,
+                source_url: crate::engine::redact::redact_url(&self.source_url),
+                active_url: crate::engine::redact::redact_url(&self.active_url),
+                status: status.into(),
+                health_score: health.score,
+                health_label: health.label.clone(),
+                latency: self.latency.display(),
+                cdn: self
+                    .cdn
+                    .last
+                    .as_ref()
+                    .map(|c| c.badge())
+                    .unwrap_or_else(|| "UNKNOWN".into()),
+                dvr_window: self
+                    .playlist
+                    .as_ref()
+                    .map(|p| format_dvr_window(p.window_segments, p.window_secs))
+                    .unwrap_or_else(|| "n/a".into()),
+                buffer: self.buffer.display(),
+                ll_hls: self
+                    .playlist
+                    .as_ref()
+                    .map(|p| p.ll_hls.is_ll_hls)
+                    .unwrap_or(false),
+                dropped_events: crate::engine::channel_stats::channel_dropped_total(),
+            },
+            timeline,
+            health,
+            cdn: self.cdn.clone(),
+            abr_health: self.abr_health.clone(),
+            active_ad: self.active_ad.clone(),
+            playlist: self.playlist.clone(),
+            abr_profiles: self.variants.clone(),
+            last_segment: self.last_segment.clone(),
+            findings: self.findings.clone(),
+            event_log: self.log.clone(),
+        };
+        let report = crate::engine::incident::build_incident_report(
+            snapshot,
+            &self.manifest_history,
+            &self.http_log,
+            &self.session.headers,
+            self.session.user_agent.as_deref(),
+        );
+        let path = if let Some(ref p) = self.session.export_incident {
+            if p.is_empty() {
+                crate::engine::incident::incident_export_path(None, now)
+            } else {
+                std::path::PathBuf::from(p)
+            }
+        } else {
+            crate::engine::incident::incident_export_path(None, now)
+        };
+        crate::engine::incident::write_incident_report(&path, &report)?;
+        let saved = path.display().to_string();
+        self.toast = Some((
+            format!("Incident {saved}"),
+            Instant::now() + Duration::from_secs(TOAST_SECS),
+        ));
+        self.push_log(
+            LogLevel::Info,
+            DiagCategory::Info,
+            format!("Incident report saved: {saved}"),
+        );
+        Ok(())
+    }
+
     pub fn uses_pdt(&self) -> bool {
         self.playlist.as_ref().map(|p| p.has_pdt).unwrap_or(false) || self.latency.is_measured()
     }
@@ -881,4 +1100,19 @@ pub fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Re
     let _ = execute!(terminal.backend_mut(), LeaveAlternateScreen);
     let _ = terminal.show_cursor();
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn regex_filter_compiles_valid_pattern() {
+        let re = regex::Regex::new(r"(?i)scte").unwrap();
+        assert!(re.is_match("SCTE-35 cue"));
+    }
+
+    #[test]
+    fn regex_filter_rejects_invalid_pattern() {
+        let bad = format!("({}", "unclosed");
+        assert!(regex::Regex::new(&bad).is_err());
+    }
 }

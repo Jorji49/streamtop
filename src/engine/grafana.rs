@@ -182,6 +182,42 @@ pub fn grafana_dashboard_json() -> Value {
             "short",
             [16.0, 66.0, 8.0, 6.0],
         ),
+        // Row 10 - DAI / DRM / agent
+        timeseries_panel(
+            22,
+            "DAI ad mismatch total",
+            "streamtop_ad_mismatch_total",
+            "short",
+            [0.0, 72.0, 8.0, 6.0],
+        ),
+        timeseries_panel(
+            23,
+            "Inband emsg SCTE events",
+            "streamtop_inband_emsg_total",
+            "short",
+            [8.0, 72.0, 8.0, 6.0],
+        ),
+        timeseries_panel(
+            24,
+            "ClearKey decrypt OK",
+            "streamtop_clearkey_decrypt_ok",
+            "short",
+            [16.0, 72.0, 8.0, 6.0],
+        ),
+        timeseries_panel(
+            25,
+            "Agent active streams",
+            "streamtop_agent_streams_active",
+            "short",
+            [0.0, 78.0, 12.0, 6.0],
+        ),
+        timeseries_panel(
+            26,
+            "Agent dropped events",
+            "streamtop_agent_events_dropped_total",
+            "short",
+            [12.0, 78.0, 12.0, 6.0],
+        ),
     ];
 
     json!({
@@ -192,7 +228,7 @@ pub fn grafana_dashboard_json() -> Value {
             "tags": ["streamtop", "hls", "dash", "prometheus"],
             "timezone": "browser",
             "schemaVersion": 39,
-            "version": 3,
+            "version": 4,
             "refresh": "5s",
             "time": { "from": "now-15m", "to": "now" },
             "templating": { "list": [datasource_variable()] },
@@ -377,6 +413,11 @@ mod tests {
             "streamtop_qoe_rebuffer_risk",
             "streamtop_tr101290_p1_violations_total",
             "streamtop_tr101290_p2_violations_total",
+            "streamtop_ad_mismatch_total",
+            "streamtop_inband_emsg_total",
+            "streamtop_clearkey_decrypt_ok",
+            "streamtop_agent_streams_active",
+            "streamtop_agent_events_dropped_total",
         ] {
             assert!(text.contains(needle), "missing {needle}");
         }
@@ -504,7 +545,7 @@ mod tests {
         export_grafana_dashboard(&path).expect("export");
         let raw = std::fs::read_to_string(&path).expect("read");
         let parsed: Value = serde_json::from_str(&raw).expect("valid json");
-        assert_eq!(parsed["dashboard"]["version"], 3);
+        assert_eq!(parsed["dashboard"]["version"], 4);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

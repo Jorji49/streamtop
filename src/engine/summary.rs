@@ -1,6 +1,7 @@
 //! Headless summary: poll briefly, print PASS/FAIL, set exit code.
 
 use std::process::ExitCode;
+use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use color_eyre::eyre::Result;
@@ -10,6 +11,7 @@ use tokio::sync::mpsc;
 use tokio::time::{timeout, Instant};
 
 use crate::engine::channel_stats::channel_dropped_total;
+use crate::engine::metrics::MetricsSnapshot;
 use crate::engine::poller::DiagnosticOpts;
 use crate::engine::redact::redact_url;
 use crate::engine::ManifestPoller;
@@ -22,7 +24,7 @@ use crate::ui::app::SessionOpts;
 
 /// Stable machine-readable schema id for `--summary --summary-format json`.
 pub const SUMMARY_SCHEMA: &str = "streamtop.summary.v1";
-pub const SUMMARY_SCHEMA_VERSION: u32 = 3;
+pub const SUMMARY_SCHEMA_VERSION: u32 = 4;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SummaryFormat {
@@ -68,6 +70,8 @@ pub struct SummaryJson {
     pub sei_metadata: Option<SeiProbeResult>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ingest_stats: Option<IngestStats>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub spec_violations: Option<Vec<crate::models::SpecViolation>>,
 }
 
 pub fn build_summary_json(
@@ -93,6 +97,7 @@ pub fn build_summary_json(
     synthetic_qoe: Option<SyntheticQoeSnapshot>,
     sei_metadata: Option<SeiProbeResult>,
     ingest_stats: Option<IngestStats>,
+    spec_violations: Option<Vec<crate::models::SpecViolation>>,
 ) -> SummaryJson {
     SummaryJson {
         schema: SUMMARY_SCHEMA,
@@ -121,6 +126,7 @@ pub fn build_summary_json(
         synthetic_qoe,
         sei_metadata,
         ingest_stats,
+        spec_violations,
     }
 }
 
@@ -138,6 +144,11 @@ pub async fn run_summary(
     } else {
         None
     };
+    let metrics = Arc::new(RwLock::new({
+        let mut snap = MetricsSnapshot::default();
+        snap.url = url.clone();
+        snap
+    }));
     let (tx, mut rx) = mpsc::channel(EVENT_CHANNEL_CAPACITY);
     let mut poller = ManifestPoller::new(
         url.clone(),
@@ -148,6 +159,7 @@ pub async fn run_summary(
         session.probe_drm,
         tx,
     )?
+    .with_metrics(Arc::clone(&metrics))
     .with_diagnostics(DiagnosticOpts {
         tr101290: session.tr101290,
         probe_sei: session.probe_sei,
@@ -195,6 +207,7 @@ pub async fn run_summary(
     let mut synthetic_qoe: Option<SyntheticQoeSnapshot> = None;
     let mut sei_metadata: Option<SeiProbeResult> = None;
     let mut ingest_stats: Option<IngestStats> = None;
+    let mut spec_findings: Vec<crate::models::DiagnosticFinding> = Vec::new();
 
     let deadline = Instant::now() + Duration::from_secs(timeout_secs.max(1));
     while Instant::now() < deadline {
@@ -231,6 +244,7 @@ pub async fn run_summary(
                 StreamEvent::SeiProbe(s) => sei_metadata = Some(s),
                 StreamEvent::Ingest(s) => ingest_stats = Some(s),
                 StreamEvent::Finding(f) => {
+                    spec_findings.push(f.clone());
                     if f.category == DiagCategory::Stalling {
                         origin_stalls = origin_stalls.saturating_add(1);
                     }
@@ -270,7 +284,7 @@ pub async fn run_summary(
     handle.abort();
 
     if let Some(exporter) = otel {
-        let _ = exporter.flush().await;
+        let _ = exporter.flush_all().await;
     }
 
     let cdn_badge = cdn
@@ -294,6 +308,17 @@ pub async fn run_summary(
         StreamStatusKind::Live => "LIVE",
         StreamStatusKind::Degraded => "DEGRADED",
         StreamStatusKind::Error => "ERROR",
+    };
+
+    let spec_violations = if spec_findings.is_empty() {
+        None
+    } else {
+        Some(
+            spec_findings
+                .iter()
+                .map(crate::models::SpecViolation::from_finding)
+                .collect(),
+        )
     };
 
     match format {
@@ -321,6 +346,7 @@ pub async fn run_summary(
                 synthetic_qoe,
                 sei_metadata,
                 ingest_stats,
+                spec_violations,
             );
             println!("{}", serde_json::to_string(&payload)?);
         }
@@ -422,6 +448,7 @@ pub async fn run_ingest_summary(
                 None,
                 None,
                 ingest_stats,
+                None,
             );
             println!("{}", serde_json::to_string(&payload)?);
         }
@@ -485,6 +512,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         let v = serde_json::to_value(&payload).unwrap();
         assert_eq!(v["schema"], SUMMARY_SCHEMA);
@@ -503,7 +531,7 @@ mod tests {
         let schema: serde_json::Value =
             serde_json::from_str(include_str!("../../schemas/summary.v1.json")).unwrap();
         assert_eq!(schema["title"], SUMMARY_SCHEMA);
-        assert_eq!(schema["properties"]["schema_version"]["const"], 3);
+        assert_eq!(schema["properties"]["schema_version"]["const"], 4);
 
         let health = HealthReport::perfect();
         let payload = build_summary_json(
@@ -520,6 +548,7 @@ mod tests {
             0,
             true,
             0,
+            None,
             None,
             None,
             None,

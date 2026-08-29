@@ -1,4 +1,4 @@
-# End-to-end verification for streamtop v1.1.x (hermetic, no paid services).
+# End-to-end verification for streamtop v1.3.x (hermetic, no paid services).
 # Native PowerShell harness mirroring tests/e2e_verify.sh (no WSL/Git Bash).
 $ErrorActionPreference = 'Stop'
 
@@ -12,6 +12,7 @@ New-Item -ItemType Directory -Force -Path $Tmp | Out-Null
 
 $MockProc = $null
 $PromProc = $null
+$AgentProc = $null
 $MockLog = $null
 
 function Log([string]$Msg) { Write-Host "[e2e] $Msg" }
@@ -209,7 +210,71 @@ try {
 
     Log 'DASH live MPD smoke'
     $Out = Run-Summary $DashUrl @('--probe-headers', '--probe-drm')
-    if ($Out) { Pass 'DASH summary schema valid' }
+    if ($Out) {
+        Pass 'DASH summary schema valid'
+        $Sv = Get-JsonField $Out 'schema_version'
+        if ($Sv -eq '4') { Pass 'summary schema v4' } else { Fail "expected schema_version 4, got $Sv" }
+    }
+
+    Log 'ClearKey cbcs staging smoke'
+    $Out = Run-Summary $DashUrl @(
+        '--probe-headers', '--probe-drm',
+        '--clearkey', '0123456789abcdef0123456789abcdef:fedcba9876543210fedcba9876543210'
+    )
+    if ($Out) { Pass 'ClearKey staging summary schema valid' }
+
+    Log 'HTML export-report'
+    $Report = Join-Path $Tmp 'test_report.html'
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    & $Streamtop $HlsUrl '--export-report' $Report '--timeout' '5' 1>$null 2>$null
+    $ErrorActionPreference = $prevEap
+    if ((Test-Path $Report) -and (Get-Content $Report -TotalCount 1) -match '<!DOCTYPE html>') {
+        Pass 'export-report HTML structure'
+    } else {
+        Fail 'export-report missing or invalid HTML'
+    }
+    $Side = Join-Path $Tmp 'test_report.incident.json'
+    if ((Test-Path $Side) -and (Get-Item $Side).Length -gt 0) {
+        Pass 'export-report incident sidecar'
+    } else {
+        Fail 'export-report incident sidecar missing'
+    }
+
+    Log 'Agent fleet metrics'
+    $AgentPort = 19184
+    $AgentCfg = Join-Path $Tmp 'agent.toml'
+    @"
+metrics_bind = "127.0.0.1"
+metrics_port = $AgentPort
+
+[[streams]]
+id = "hls"
+url = "$HlsUrl"
+interval_ms = 500
+
+[[streams]]
+id = "dash"
+url = "$DashUrl"
+interval_ms = 500
+"@ | Set-Content -Path $AgentCfg -Encoding utf8
+    $AgentProc = Start-Process -FilePath $Streamtop -ArgumentList @('--agent', $AgentCfg) -PassThru -WindowStyle Hidden
+    Start-Sleep -Seconds 5
+    try {
+        $AgentMetrics = (Invoke-WebRequest -Uri "http://127.0.0.1:$AgentPort/metrics" -UseBasicParsing -TimeoutSec 3).Content
+        if ($AgentMetrics -match 'streamtop_agent_streams_active') {
+            Pass 'agent aggregated metrics endpoint'
+        } else {
+            Fail 'agent metrics missing streamtop_agent_streams_active'
+        }
+        if ($AgentMetrics -match 'stream_id="hls"') {
+            Pass 'agent stream_id label hls'
+        } else {
+            Fail 'agent missing stream_id label'
+        }
+    } catch {
+        Fail "agent metrics probe failed: $_"
+    }
 
     Log 'Webhook SSRF protection'
     $prevEap = $ErrorActionPreference
@@ -288,11 +353,29 @@ try {
         } else {
             Fail 'missing tr101290 p1 metric'
         }
+        if ($Metrics -match 'streamtop_inband_emsg_total') {
+            Pass 'metric streamtop_inband_emsg_total present'
+        } else {
+            Fail 'missing inband emsg metric'
+        }
+        if ($Metrics -match 'streamtop_ad_mismatch_total') {
+            Pass 'metric streamtop_ad_mismatch_total present'
+        } else {
+            Fail 'missing ad mismatch metric'
+        }
+        if ($Metrics -match 'streamtop_clearkey_decrypt_ok') {
+            Pass 'metric streamtop_clearkey_decrypt_ok present'
+        } else {
+            Fail 'missing clearkey metric'
+        }
     } catch {
         Fail "Prometheus probe failed: $_"
     }
 }
 finally {
+    if ($AgentProc -and -not $AgentProc.HasExited) {
+        Stop-Process -Id $AgentProc.Id -Force -ErrorAction SilentlyContinue
+    }
     if ($PromProc -and -not $PromProc.HasExited) {
         Stop-Process -Id $PromProc.Id -Force -ErrorAction SilentlyContinue
     }

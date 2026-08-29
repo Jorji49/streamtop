@@ -153,6 +153,8 @@ mod tests {
             interval_ms: Some(1000),
             probe_headers: false,
             probe_drm: false,
+            clearkey: None,
+            export_incident: None,
             webhook_url: None,
             alert_on: "stall".into(),
             allow_insecure_webhooks: false,

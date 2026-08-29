@@ -9,7 +9,10 @@ use dash_mpd::{
 use url::Url;
 
 use crate::engine::pssh::parse_pssh_base64;
-use crate::models::{parse_frame_rate, AbrVariant, DrmInfo, LlDashInfo, PsshProbeInfo};
+use crate::models::{
+    parse_frame_rate, AbrVariant, AdBreakInfo, DiagCategory, DiagSeverity, DiagnosticFinding,
+    DrmInfo, LlDashInfo, PsshProbeInfo,
+};
 
 #[derive(Debug, Clone, Default)]
 pub struct DashSummary {
@@ -449,6 +452,88 @@ pub fn scan_ll_dash_xml(xml: &str) -> LlDashInfo {
     info
 }
 
+/// Parse MPD `<EventStream>` / `<Event>` for SCTE-35 / ad markers (manifest-only, zero-decode).
+pub fn extract_dash_ad_events(xml: &str) -> Vec<AdBreakInfo> {
+    let lower = xml.to_ascii_lowercase();
+    if !lower.contains("eventstream") {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    let mut search_from = 0usize;
+    while let Some(es_idx) = lower[search_from..].find("<eventstream") {
+        let base = search_from + es_idx;
+        let end_tag = lower[base..]
+            .find("</eventstream>")
+            .map(|i| base + i)
+            .unwrap_or_else(|| xml.len().min(base + 8192));
+        let block = &xml[base..end_tag];
+        let scheme = parse_xml_attr_string(block, "schemeIdUri")
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        let timescale = parse_xml_attr_u64(block, "timescale").unwrap_or(1).max(1);
+        let ad_related = scheme.contains("scte")
+            || scheme.contains("splice")
+            || scheme.contains("ad")
+            || scheme.contains("id3");
+        if !ad_related {
+            search_from = end_tag;
+            continue;
+        }
+        let block_lower = block.to_ascii_lowercase();
+        let mut ev_from = 0usize;
+        while let Some(ev_idx) = block_lower[ev_from..].find("<event") {
+            let ev_base = ev_from + ev_idx;
+            let after = ev_base + 6;
+            if after < block_lower.len() {
+                match block_lower.as_bytes().get(after) {
+                    Some(b's') | Some(b'S') => {
+                        ev_from = ev_base + 1;
+                        continue;
+                    }
+                    Some(b' ') | Some(b'/') | Some(b'>') | Some(b'\t') | Some(b'\n')
+                    | Some(b'\r') => {}
+                    _ => {
+                        ev_from = ev_base + 1;
+                        continue;
+                    }
+                }
+            }
+            let tag_end = block[ev_base..]
+                .find('>')
+                .map(|i| ev_base + i + 1)
+                .unwrap_or(ev_base + 1);
+            let tag = &block[ev_base..tag_end.min(block.len())];
+            let id = parse_xml_attr_string(tag, "id");
+            let duration_ticks = parse_xml_attr_u64(tag, "duration");
+            let dur_secs = duration_ticks.map(|d| d as f64 / timescale as f64);
+            let summary = format!(
+                "DASH EventStream {}{}",
+                scheme,
+                id.as_deref()
+                    .map(|i| format!(" id={i}"))
+                    .unwrap_or_default()
+            );
+            out.push(AdBreakInfo {
+                kind: "DASH-Event".into(),
+                id,
+                planned_duration_secs: dur_secs,
+                elapsed_secs: None,
+                remaining_secs: dur_secs,
+                summary: summary.clone(),
+                active: dur_secs.is_some_and(|d| d > 0.0),
+                scte35_binary: None,
+            });
+            ev_from = tag_end;
+        }
+        search_from = end_tag;
+    }
+    out
+}
+
+fn parse_xml_attr_u64(xml: &str, attr: &str) -> Option<u64> {
+    parse_xml_attr_string(xml, attr)?.parse().ok()
+}
+
 fn parse_utc_timing_scheme(xml: &str) -> Option<String> {
     let lower = xml.to_ascii_lowercase();
     let idx = lower.find("utctiming")?;
@@ -581,6 +666,64 @@ pub fn audit_multi_period_mpd(xml: &str, summary: &DashSummary) -> Vec<String> {
     issues
 }
 
+/// DASH-IF IOP operational lint (timescale, timeline, live clock sync).
+pub fn audit_dash_iop(xml: &str, summary: &DashSummary) -> Vec<DiagnosticFinding> {
+    let mut out = Vec::new();
+    let lower = xml.to_ascii_lowercase();
+
+    if lower.contains("<segmenttimeline")
+        && lower.contains("t=\"0\"")
+        && lower.matches("<s ").count() > 1
+    {
+        let gaps = lower.matches("r=\"0\"").count();
+        if gaps > 0 {
+            out.push(DiagnosticFinding {
+                category: DiagCategory::Rfc,
+                severity: DiagSeverity::Warn,
+                rule: "DASH_TIMELINE_GAP".into(),
+                message: "SegmentTimeline may contain zero-repeat gaps".into(),
+            });
+        }
+    }
+
+    if summary.type_live {
+        if summary.availability_start_time.is_none() {
+            out.push(DiagnosticFinding {
+                category: DiagCategory::Rfc,
+                severity: DiagSeverity::Error,
+                rule: "DASH_AVAIL_START".into(),
+                message: "Dynamic MPD missing availabilityStartTime".into(),
+            });
+        }
+        if let (Some(spd), Some(mup)) = (
+            summary.suggested_presentation_delay_secs,
+            summary.minimum_update_period_secs,
+        ) {
+            if spd < mup {
+                out.push(DiagnosticFinding {
+                    category: DiagCategory::Rfc,
+                    severity: DiagSeverity::Warn,
+                    rule: "DASH_SPD_MUP".into(),
+                    message: format!(
+                        "suggestedPresentationDelay ({spd}s) < minimumUpdatePeriod ({mup}s)"
+                    ),
+                });
+            }
+        }
+    }
+
+    if !lower.contains("timescale=") && summary.variants.is_empty() {
+        out.push(DiagnosticFinding {
+            category: DiagCategory::Rfc,
+            severity: DiagSeverity::Warn,
+            rule: "DASH_TIMESCALE".into(),
+            message: "No Representation timescale found in MPD".into(),
+        });
+    }
+
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -621,5 +764,16 @@ mod tests {
     fn iso8601_duration_parses_seconds() {
         assert_eq!(iso8601_duration_to_ms("PT2.5S"), Some(2500));
         assert_eq!(iso8601_duration_to_ms("PT1M"), Some(60_000));
+    }
+
+    #[test]
+    fn dash_eventstream_extracts_ad() {
+        let xml = r#"<MPD><EventStream schemeIdUri="urn:scte:scte35:2013:xml" timescale="90000">
+        <Event id="1" duration="900000"/>
+        </EventStream></MPD>"#;
+        let ads = extract_dash_ad_events(xml);
+        assert_eq!(ads.len(), 1);
+        assert_eq!(ads[0].kind, "DASH-Event");
+        assert!(ads[0].active);
     }
 }

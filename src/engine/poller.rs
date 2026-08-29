@@ -13,11 +13,20 @@ use tokio::time::sleep;
 use url::Url;
 
 use crate::engine::abr_model::{simulate_segment_fetch, AbrLadderState};
+use crate::engine::agent::AgentMetricsRegistry;
 use crate::engine::channel_stats::record_channel_drop;
 use crate::engine::container_probe::{
     deep_wire_probe, fill_abr_from_wire, manifest_wire_mismatches,
 };
-use crate::engine::dash::{ll_dash_production_drift, looks_like_dash, parse_dash_mpd};
+use crate::engine::dai_validator::{
+    inband_events_from_wire, validate_ad_alignment, validate_inband_vs_manifest,
+};
+use crate::engine::dash::{
+    extract_dash_ad_events, ll_dash_production_drift, looks_like_dash, parse_dash_mpd,
+};
+use crate::engine::drm_probe::{
+    apply_clearkey_to_wire, clearkey_license_body, probe_clearkey, ClearKeySpec,
+};
 use crate::engine::g2g::{compute_g2g, wall_now_unix_ms};
 use crate::engine::gop_tracker::GopCadenceTracker;
 use crate::engine::linter::{
@@ -76,11 +85,14 @@ pub struct ManifestPoller {
     tx: Sender<StreamEvent>,
     hook_tx: Option<Sender<StreamEvent>>,
     metrics: Option<Arc<RwLock<MetricsSnapshot>>>,
+    agent_metrics: Option<(Arc<RwLock<AgentMetricsRegistry>>, String)>,
     gop_tracker: Arc<Mutex<GopCadenceTracker>>,
     wire_timing_tracker: Arc<Mutex<WireTimingTracker>>,
     abr_ladder: Arc<Mutex<AbrLadderState>>,
     otel: Option<Arc<OtelExporter>>,
     diagnostics: DiagnosticOpts,
+    clearkey: Option<ClearKeySpec>,
+    last_active_ad: Arc<Mutex<Option<crate::models::AdBreakInfo>>>,
     tr101290: Arc<Mutex<Tr101290Engine>>,
     sei_acc: Arc<Mutex<SeiProbeAccumulator>>,
     qoe: Arc<Mutex<SyntheticQoeEngine>>,
@@ -129,17 +141,25 @@ impl ManifestPoller {
             tx,
             hook_tx: None,
             metrics: None,
+            agent_metrics: None,
             gop_tracker: Arc::new(Mutex::new(GopCadenceTracker::default())),
             wire_timing_tracker: Arc::new(Mutex::new(WireTimingTracker::default())),
             abr_ladder: Arc::new(Mutex::new(AbrLadderState::default())),
             otel: None,
             diagnostics: DiagnosticOpts::default(),
+            clearkey: None,
+            last_active_ad: Arc::new(Mutex::new(None)),
             tr101290: Arc::new(Mutex::new(Tr101290Engine::new())),
             sei_acc: Arc::new(Mutex::new(SeiProbeAccumulator::new())),
             qoe: Arc::new(Mutex::new(SyntheticQoeEngine::new(None, None))),
             segment_wall_ms: Arc::new(Mutex::new(0)),
             ladder_scratch: Arc::new(Mutex::new(Vec::with_capacity(16))),
         })
+    }
+
+    pub fn with_clearkey(mut self, spec: Option<ClearKeySpec>) -> Self {
+        self.clearkey = spec;
+        self
     }
 
     pub fn with_diagnostics(mut self, opts: DiagnosticOpts) -> Self {
@@ -160,6 +180,15 @@ impl ManifestPoller {
         self
     }
 
+    pub fn with_agent_metrics(
+        mut self,
+        registry: Arc<RwLock<AgentMetricsRegistry>>,
+        stream_id: String,
+    ) -> Self {
+        self.agent_metrics = Some((registry, stream_id));
+        self
+    }
+
     pub fn with_webhook_tx(mut self, hook_tx: Sender<StreamEvent>) -> Self {
         self.hook_tx = Some(hook_tx);
         self
@@ -169,15 +198,35 @@ impl ManifestPoller {
         if let Some(m) = &self.metrics {
             if let Ok(mut snap) = m.write() {
                 update_metrics(&mut snap, &event);
+                if let Some(otel) = &self.otel {
+                    otel.record_metrics_snapshot(&snap);
+                }
+            }
+        }
+        if let Some((reg, id)) = &self.agent_metrics {
+            if let Ok(mut guard) = reg.write() {
+                if let Some(snap) = guard.streams.get_mut(id) {
+                    update_metrics(snap, &event);
+                }
             }
         }
         // Bounded: drop when UI/webhook cannot keep up (prefer liveness over backlog).
+        let mut dropped = false;
         if self.tx.try_send(event.clone()).is_err() {
             record_channel_drop();
+            dropped = true;
         }
         if let Some(h) = &self.hook_tx {
             if h.try_send(event).is_err() {
                 record_channel_drop();
+                dropped = true;
+            }
+        }
+        if dropped {
+            if let Some((reg, _)) = &self.agent_metrics {
+                if let Ok(mut guard) = reg.write() {
+                    guard.dropped_events = guard.dropped_events.saturating_add(1);
+                }
             }
         }
     }
@@ -269,6 +318,49 @@ impl ManifestPoller {
                     ladder_bps,
                 );
                 self.send_event(StreamEvent::SyntheticQoe(snap));
+            }
+        }
+    }
+
+    fn post_wire_extras(&self, fetch: &SegmentFetch, wire: &mut WireProbeInfo) {
+        if let Some(spec) = &self.clearkey {
+            if !fetch.probe_bytes.is_empty() {
+                let result = probe_clearkey(&fetch.probe_bytes, spec);
+                apply_clearkey_to_wire(wire, &result);
+                if result.kid_matched || result.cenc_boxes_seen {
+                    self.emit_log(LogLevel::Info, DiagCategory::Drm, result.message);
+                }
+                if let Some(metrics) = &self.metrics {
+                    if let Ok(mut snap) = metrics.write() {
+                        snap.clearkey_decrypt_ok = if result.decrypt_ok { 1.0 } else { 0.0 };
+                    }
+                }
+            }
+        }
+        if let Ok(guard) = self.last_active_ad.lock() {
+            if let Some(ad) = guard.as_ref() {
+                if let Some(mismatch) = validate_ad_alignment(ad, wire, ad.scte35_binary.as_deref())
+                {
+                    self.send_event(StreamEvent::AdMarkerMismatch(mismatch));
+                }
+            }
+        }
+        for ev in inband_events_from_wire(wire) {
+            let summary = ev.scte35_summary.clone().unwrap_or_else(|| {
+                format!("emsg id={} scheme={}", ev.emsg.id, ev.emsg.scheme_id_uri)
+            });
+            self.emit_log(
+                LogLevel::Info,
+                DiagCategory::Ad,
+                format!("[EMSG] {summary}"),
+            );
+            self.send_event(StreamEvent::InbandAdEvent(ev.clone()));
+            if let Ok(guard) = self.last_active_ad.lock() {
+                if let Some(ad) = guard.as_ref() {
+                    if let Some(mismatch) = validate_inband_vs_manifest(ad, &ev) {
+                        self.send_event(StreamEvent::AdMarkerMismatch(mismatch));
+                    }
+                }
             }
         }
     }
@@ -491,6 +583,9 @@ impl ManifestPoller {
         for issue in crate::engine::dash::audit_multi_period_mpd(&xml, &summary) {
             self.emit_log(LogLevel::Warn, DiagCategory::Rfc, issue);
         }
+        for finding in crate::engine::dash::audit_dash_iop(&xml, &summary) {
+            linter.ingest_finding(finding);
+        }
 
         if summary.period_count > 1 {
             self.emit_log(
@@ -596,6 +691,16 @@ impl ManifestPoller {
         };
         if let Some(p) = &summary.publish_time {
             *last_publish = Some(p.clone());
+        }
+
+        for ad in extract_dash_ad_events(&xml) {
+            if ad.active {
+                if let Ok(mut slot) = self.last_active_ad.lock() {
+                    *slot = Some(ad.clone());
+                }
+            }
+            self.emit_log(LogLevel::Warn, DiagCategory::Ad, ad.summary.clone());
+            self.send_event(StreamEvent::AdBreak(ad));
         }
 
         let should_probe = publish_changed || *probe_seq == 0;
@@ -709,6 +814,9 @@ impl ManifestPoller {
             self.emit_g2g(&fetch.wire, None, dash_avail_ms, fetch.ttfb_ms);
             self.merge_wire_pssh(&mut dash_drm, &fetch.wire);
 
+            let mut wire = fetch.wire.clone();
+            self.post_wire_extras(&fetch, &mut wire);
+
             if let Ok(mut ladder) = self.ladder_scratch.lock() {
                 ladder.clear();
                 ladder.extend(variants.iter().map(|v| v.bandwidth));
@@ -733,7 +841,7 @@ impl ManifestPoller {
                 container: fetch.container,
                 http_status: fetch.http_status,
                 network: Some(fetch.network),
-                wire: Some(fetch.wire.clone()),
+                wire: Some(wire.clone()),
             };
 
             self.emit_log(
@@ -1158,6 +1266,64 @@ impl ManifestPoller {
             drm.license_error = Some(format!("DRM probe blocked: {err}"));
             return;
         }
+
+        let clearkey_post = self.clearkey.is_some()
+            || drm
+                .key_format
+                .as_deref()
+                .is_some_and(|k| k.to_ascii_lowercase().contains("clearkey"))
+            || drm
+                .method
+                .as_deref()
+                .is_some_and(|m| m.eq_ignore_ascii_case("clearkey"));
+
+        if clearkey_post {
+            let body = if let Some(spec) = &self.clearkey {
+                clearkey_license_body(spec)
+            } else {
+                serde_json::json!({ "kids": [], "type": "temporary" })
+            };
+            drm.license_method = Some("POST".into());
+            match crate::engine::network_trace::pinned_post_json(
+                &key_url,
+                &body,
+                false,
+                Duration::from_secs(10),
+            )
+            .await
+            {
+                Ok(status) => {
+                    drm.license_ttfb_ms = Some(started.elapsed().as_millis() as u64);
+                    drm.license_http_status = Some(status);
+                    self.emit_log(
+                        LogLevel::Info,
+                        DiagCategory::Drm,
+                        format!(
+                            "ClearKey license POST {} -> HTTP {} in {}ms",
+                            crate::engine::redact::redact_url(&key_url),
+                            status,
+                            drm.license_ttfb_ms.unwrap_or(0)
+                        ),
+                    );
+                }
+                Err(err) => {
+                    drm.license_ttfb_ms = Some(started.elapsed().as_millis() as u64);
+                    drm.license_error = Some(crate::engine::redact::redact_text(&err.to_string()));
+                    self.emit_log(
+                        LogLevel::Warn,
+                        DiagCategory::Drm,
+                        format!(
+                            "ClearKey license POST failed ({}): {}",
+                            crate::engine::redact::redact_url(&key_url),
+                            crate::engine::redact::redact_text(&err.to_string())
+                        ),
+                    );
+                }
+            }
+            return;
+        }
+
+        drm.license_method = Some("GET".into());
         match crate::engine::network_trace::pinned_get_range(
             &key_url,
             Some("bytes=0-0"),
@@ -1242,6 +1408,7 @@ impl ManifestPoller {
 
         let raw_text = String::from_utf8_lossy(raw_body);
         let ll = scan_ll_hls(&raw_text);
+        linter.lint_ll_hls(&ll);
         ll_hls_state.is_ll_hls = ll.is_ll_hls;
         if ll.can_block_reload {
             ll_hls_state.can_block_reload = true;
@@ -1355,6 +1522,9 @@ impl ManifestPoller {
             }
             if ad.kind == "CUE-IN" {
                 seen_ads.retain(|k| !k.starts_with("cont:") && !k.starts_with("out:"));
+                if let Ok(mut slot) = self.last_active_ad.lock() {
+                    *slot = None;
+                }
             }
             let key = ad_log_key(&ad);
             if seen_ads.insert(key) {
@@ -1363,6 +1533,11 @@ impl ManifestPoller {
                     .clone()
                     .unwrap_or_else(|| ad.summary.clone());
                 self.emit_log(LogLevel::Warn, DiagCategory::Ad, line);
+            }
+            if ad.active {
+                if let Ok(mut slot) = self.last_active_ad.lock() {
+                    *slot = Some(ad.clone());
+                }
             }
             self.send_event(StreamEvent::AdBreak(ad));
         }
@@ -1602,6 +1777,20 @@ impl ManifestPoller {
             None,
             fetch.ttfb_ms,
         );
+
+        if let Some(pdt) = &segment.program_date_time {
+            let pdt_ms = pdt.with_timezone(&Utc).timestamp_millis();
+            if let Some(wire_pts_ms) = wire.keyframe_pts_sec.map(|s| s * 1000.0).or_else(|| {
+                wire.timing
+                    .moof_base_decode_time
+                    .zip(wire.timing.moof_timescale)
+                    .map(|(b, ts)| b as f64 * 1000.0 / ts as f64)
+            }) {
+                linter.lint_pdt_wire_drift(pdt_ms, wire_pts_ms, media_sequence);
+            }
+        }
+
+        self.post_wire_extras(&fetch, &mut wire);
 
         let video_pts_ms = wire
             .keyframe_pts_sec
@@ -2173,6 +2362,11 @@ fn local_cdn() -> CdnEdgeInfo {
         pop: None,
         served_by: Some("filesystem".into()),
         via: None,
+        cf_ray: None,
+        akamai_cache_status: None,
+        x_cache_hits: None,
+        server_timing_edge_ms: None,
+        server_timing_origin_ms: None,
     }
 }
 

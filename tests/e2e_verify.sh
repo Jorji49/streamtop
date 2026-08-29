@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# End-to-end verification for streamtop v1.1.x (hermetic, no paid services).
+# End-to-end verification for streamtop v1.3.x (hermetic, no paid services).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -9,7 +9,7 @@ PASS=0
 FAIL=0
 TMP="${TMPDIR:-/tmp}/streamtop-e2e-$$"
 mkdir -p "$TMP"
-trap 'kill ${MOCK_PID:-} ${PROM_PID:-} 2>/dev/null || true; rm -rf "$TMP"' EXIT
+trap 'kill ${MOCK_PID:-} ${PROM_PID:-} ${AGENT_PID:-} 2>/dev/null || true; rm -rf "$TMP"' EXIT
 
 log() { printf '[e2e] %s\n' "$*"; }
 pass() { PASS=$((PASS + 1)); log "PASS: $*"; }
@@ -113,6 +113,8 @@ STREAMTOP="$ROOT/target/release/streamtop"
 log "Starting hermetic mock servers (HTTP/SRT/RTMP)"
 python3 "$ROOT/tests/e2e/mock_all.py" >"$TMP/mock.log" 2>&1 &
 MOCK_PID=$!
+PROM_PID=""
+AGENT_PID=""
 
 BASE="http://127.0.0.1:8765"
 wait_mock "$BASE" || exit 1
@@ -204,7 +206,73 @@ log "DASH live MPD smoke"
 OUT=$(run_summary "$DASH_URL" --probe-headers --probe-drm) || true
 if [[ -f "${OUT:-}" ]]; then
   pass "DASH summary schema valid"
+  SV=$(json_get ".schema_version" "$OUT")
+  if [[ "$SV" == "4" ]]; then
+    pass "summary schema v4"
+  else
+    fail "expected schema_version 4, got $SV"
+  fi
 fi
+
+# --- 5b. DAI / ClearKey staging (cbcs path smoke) ---
+log "ClearKey cbcs staging smoke"
+OUT=$(run_summary "$DASH_URL" --probe-headers --probe-drm \
+  --clearkey "0123456789abcdef0123456789abcdef:fedcba9876543210fedcba9876543210") || true
+if [[ -f "${OUT:-}" ]]; then
+  pass "ClearKey staging summary schema valid"
+fi
+
+# --- 5c. HTML compliance report ---
+log "HTML export-report"
+REPORT="$TMP/test_report.html"
+"$STREAMTOP" "$HLS_URL" --export-report "$REPORT" --timeout 5 >/dev/null 2>&1 || true
+if [[ -s "$REPORT" ]] && head -n 1 "$REPORT" | grep -q '<!DOCTYPE html>'; then
+  pass "export-report HTML structure"
+else
+  fail "export-report missing or invalid HTML"
+fi
+SIDE="$TMP/test_report.incident.json"
+if [[ -s "$SIDE" ]]; then
+  pass "export-report incident sidecar"
+else
+  fail "export-report incident sidecar missing"
+fi
+
+# --- 5d. Multi-stream agent metrics ---
+log "Agent fleet metrics"
+AGENT_PORT=19184
+AGENT_CFG="$TMP/agent.toml"
+cat >"$AGENT_CFG" <<EOF
+metrics_bind = "127.0.0.1"
+metrics_port = $AGENT_PORT
+
+[[streams]]
+id = "hls"
+url = "$HLS_URL"
+interval_ms = 500
+
+[[streams]]
+id = "dash"
+url = "$DASH_URL"
+interval_ms = 500
+EOF
+"$STREAMTOP" --agent "$AGENT_CFG" >/dev/null 2>&1 &
+AGENT_PID=$!
+sleep 5
+AGENT_METRICS=$(curl -s --max-time 3 "http://127.0.0.1:${AGENT_PORT}/metrics" || true)
+if echo "$AGENT_METRICS" | grep -q 'streamtop_agent_streams_active'; then
+  pass "agent aggregated metrics endpoint"
+else
+  fail "agent metrics missing streamtop_agent_streams_active"
+fi
+if echo "$AGENT_METRICS" | grep -q 'stream_id="hls"'; then
+  pass "agent stream_id label hls"
+else
+  fail "agent missing stream_id label"
+fi
+kill "$AGENT_PID" 2>/dev/null || true
+wait "$AGENT_PID" 2>/dev/null || true
+AGENT_PID=""
 
 # --- 6. Webhook SSRF gate ---
 log "Webhook SSRF protection"
@@ -264,6 +332,9 @@ fi
 
 echo "$METRICS" | grep -q "streamtop_qoe_rebuffer_risk" && pass "metric streamtop_qoe_rebuffer_risk present" || fail "missing streamtop_qoe_rebuffer_risk"
 echo "$METRICS" | grep -q "streamtop_tr101290_p1_violations_total" && pass "metric streamtop_tr101290_p1_violations_total present" || fail "missing tr101290 p1 metric"
+echo "$METRICS" | grep -q "streamtop_inband_emsg_total" && pass "metric streamtop_inband_emsg_total present" || fail "missing inband emsg metric"
+echo "$METRICS" | grep -q "streamtop_ad_mismatch_total" && pass "metric streamtop_ad_mismatch_total present" || fail "missing ad mismatch metric"
+echo "$METRICS" | grep -q "streamtop_clearkey_decrypt_ok" && pass "metric streamtop_clearkey_decrypt_ok present" || fail "missing clearkey metric"
 
 kill "$PROM_PID" 2>/dev/null || true
 wait "$PROM_PID" 2>/dev/null || true

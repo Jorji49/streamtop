@@ -90,6 +90,9 @@ struct PaneState {
     buffer: VirtualBuffer,
     log_tail: Vec<String>,
     log_scroll: u16,
+    ad_active: bool,
+    ad_mismatch_total: u32,
+    finding_count: u32,
 }
 
 impl PaneState {
@@ -107,6 +110,17 @@ impl PaneState {
             buffer: VirtualBuffer::default(),
             log_tail: Vec::new(),
             log_scroll: 0,
+            ad_active: false,
+            ad_mismatch_total: 0,
+            finding_count: 0,
+        }
+    }
+
+    fn push_log(&mut self, line: String) {
+        self.log_tail.push(line);
+        if self.log_tail.len() > 80 {
+            let n = self.log_tail.len() - 80;
+            self.log_tail.drain(0..n);
         }
     }
 
@@ -121,14 +135,22 @@ impl PaneState {
             StreamEvent::CdnStats(c) => self.cdn = c,
             StreamEvent::Buffer(b) => self.buffer = b,
             StreamEvent::Log { message, .. } => {
-                self.log_tail.push(message);
-                if self.log_tail.len() > 80 {
-                    let n = self.log_tail.len() - 80;
-                    self.log_tail.drain(0..n);
-                }
+                self.push_log(message);
+            }
+            StreamEvent::AdBreak(ad) => {
+                self.ad_active = ad.active && !ad.kind.contains("CUE-IN");
+                self.push_log(format!("[AD] {}", ad.summary));
+            }
+            StreamEvent::AdMarkerMismatch(m) => {
+                self.ad_mismatch_total = self.ad_mismatch_total.saturating_add(1);
+                self.push_log(format!("[MISMATCH] {}: {}", m.rule, m.message));
+            }
+            StreamEvent::Finding(f) => {
+                self.finding_count = self.finding_count.saturating_add(1);
+                self.push_log(format!("[{}] {}", f.category.tag(), f.message));
             }
             StreamEvent::Error(m) => {
-                self.log_tail.push(m);
+                self.push_log(m);
             }
             _ => {}
         }
@@ -195,6 +217,7 @@ pub struct CompareApp {
     focus: FocusPane,
     session: SessionOpts,
     toast: Option<(String, Instant)>,
+    log_filter: Option<String>,
 }
 
 impl CompareApp {
@@ -248,6 +271,7 @@ impl CompareApp {
             focus: FocusPane::Left,
             session,
             toast: None,
+            log_filter: None,
         };
 
         enable_raw_mode()?;
@@ -394,10 +418,20 @@ impl CompareApp {
             }
             KeyCode::Char('?') => {
                 self.toast = Some((
-                    "Space pause · d detail · l log · c curl · h HAR · Tab focus · q quit".into(),
+                    "Space pause · d detail · l log · f filter · c curl · h HAR · Tab focus · q quit".into(),
                     Instant::now() + Duration::from_secs(5),
                 ));
             }
+            KeyCode::Char('f') => {
+                self.log_filter = match self.log_filter.as_deref() {
+                    None => Some("404".into()),
+                    Some("404") => Some("SCTE".into()),
+                    Some("SCTE") => Some("MISMATCH".into()),
+                    Some("MISMATCH") => Some("DRIFT".into()),
+                    _ => None,
+                };
+            }
+            KeyCode::Char('F') => self.log_filter = None,
             _ => {}
         }
         Ok(())
@@ -438,6 +472,7 @@ fn draw_compare(frame: &mut Frame, app: &CompareApp) {
         app.show_detail,
         app.log_focus,
         app.paused,
+        app.log_filter.as_deref(),
     );
     draw_pane(
         frame,
@@ -448,6 +483,7 @@ fn draw_compare(frame: &mut Frame, app: &CompareApp) {
         app.show_detail,
         app.log_focus,
         app.paused,
+        app.log_filter.as_deref(),
     );
 
     let delta = diff_line(&app.left, &app.right, app.paused);
@@ -475,6 +511,15 @@ fn draw_compare(frame: &mut Frame, app: &CompareApp) {
 }
 
 fn diff_line(left: &PaneState, right: &PaneState, paused: bool) -> String {
+    if let (Some(l), Some(r)) = (&left.last_segment, &right.last_segment) {
+        let drift = crate::engine::cdn_telemetry::compare_cdn_drift(l, r);
+        let mut base =
+            crate::engine::cdn_telemetry::format_compare_drift(&left.cdn, &right.cdn, &drift);
+        if paused {
+            base.push_str(" PAUSED");
+        }
+        return base;
+    }
     let seq = match (left.seq(), right.seq()) {
         (Some(a), Some(b)) => {
             let d = b as i64 - a as i64;
@@ -509,7 +554,15 @@ fn diff_line(left: &PaneState, right: &PaneState, paused: bool) -> String {
             .unwrap_or_else(|| "-".into())
     );
     let pause = if paused { " PAUSED" } else { "" };
-    format!("{seq}  |  {lat}  |  {br}  |  {cache}{pause}")
+    let ad = if left.ad_mismatch_total != right.ad_mismatch_total {
+        format!(
+            "  |  Δ AdMismatch: {}",
+            right.ad_mismatch_total as i64 - left.ad_mismatch_total as i64
+        )
+    } else {
+        String::new()
+    };
+    format!("{seq}  |  {lat}  |  {br}  |  {cache}{ad}{pause}")
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -522,6 +575,7 @@ fn draw_pane(
     show_detail: bool,
     log_focus: bool,
     paused: bool,
+    log_filter: Option<&str>,
 ) {
     let title = format!(
         " {}{}{} ",
@@ -562,7 +616,15 @@ fn draw_pane(
     let cdn = pane
         .last_segment
         .as_ref()
-        .map(|s| s.cdn.badge())
+        .map(|s| {
+            let b = s.cdn.badge();
+            let d = s.cdn.edge_detail();
+            if d.is_empty() {
+                b
+            } else {
+                format!("{b} {d}")
+            }
+        })
         .unwrap_or_else(|| {
             pane.cdn
                 .hit_ratio_pct()
@@ -642,8 +704,21 @@ fn draw_pane(
 
     let visible = chunks[2].height as usize;
     let scroll = pane.log_scroll as usize;
-    let logs: Vec<Line> = pane
-        .log_tail
+    let filtered: Vec<&String> = if let Some(pat) = log_filter {
+        let needle = pat.to_ascii_lowercase();
+        pane.log_tail
+            .iter()
+            .filter(|m| m.to_ascii_lowercase().contains(&needle))
+            .collect()
+    } else {
+        pane.log_tail.iter().collect()
+    };
+    let log_title = if let Some(pat) = log_filter {
+        format!(" Log [filter: {pat}] (j/k) ")
+    } else {
+        " Log (j/k) ".into()
+    };
+    let logs: Vec<Line> = filtered
         .iter()
         .rev()
         .skip(scroll)
@@ -654,7 +729,7 @@ fn draw_pane(
         .map(|m| Line::from(truncate_url(m, (area.width as usize).saturating_sub(4))))
         .collect();
     frame.render_widget(
-        Paragraph::new(logs).block(Block::default().title(" Log (j/k) ")),
+        Paragraph::new(logs).block(Block::default().title(log_title)),
         chunks[2],
     );
 }

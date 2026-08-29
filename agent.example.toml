@@ -1,0 +1,30 @@
+# streamtop multi-stream agent example (headless fleet monitoring)
+# Usage: streamtop --agent agent.example.toml
+
+metrics_bind = "127.0.0.1"
+metrics_port = 9184
+# metrics_token = "change-me-on-non-loopback-bind"
+
+# otel_endpoint = "http://127.0.0.1:4318"
+# allow_insecure_webhooks = false
+# allow_insecure_otel = false
+
+[[streams]]
+id = "primary-hls"
+url = "https://example.com/live/master.m3u8"
+interval_ms = 2000
+probe_headers = true
+probe_drm = false
+# clearkey = "KID_HEX:KEY_HEX"
+# webhook = "https://hooks.example.com/streamtop"
+# alert_on = "stall,shi_below_70,http_5xx,ad_mismatch"
+# tr101290 = true
+# probe_sei = true
+
+[[streams]]
+id = "backup-dash"
+url = "https://example.com/live/manifest.mpd"
+interval_ms = 3000
+probe_headers = true
+probe_drm = true
+# compare_with = "primary-hls"

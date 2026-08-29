@@ -110,6 +110,9 @@ pub struct MetricsSnapshot {
     pub qoe_rebuffer_risk: f64,
     pub tr101290_p1_total: u64,
     pub tr101290_p2_total: u64,
+    pub ad_mismatch_total: u64,
+    pub inband_emsg_total: u64,
+    pub clearkey_decrypt_ok: f64,
     pub segment_ttfb_hist: Hist,
     pub llhls_part_hist: Hist,
     pub drm_license_hist: Hist,
@@ -139,6 +142,9 @@ impl Default for MetricsSnapshot {
             qoe_rebuffer_risk: 0.0,
             tr101290_p1_total: 0,
             tr101290_p2_total: 0,
+            ad_mismatch_total: 0,
+            inband_emsg_total: 0,
+            clearkey_decrypt_ok: 0.0,
             segment_ttfb_hist: Hist::with_bucket_count(TTFB_BUCKETS.len()),
             llhls_part_hist: Hist::with_bucket_count(PART_BUCKETS.len()),
             drm_license_hist: Hist::with_bucket_count(DRM_BUCKETS.len()),
@@ -200,6 +206,12 @@ pub fn update_metrics(snap: &mut MetricsSnapshot, event: &StreamEvent) {
             }
         }
         StreamEvent::AdBreak(ad) => snap.ad_active = if ad.active { 1.0 } else { 0.0 },
+        StreamEvent::AdMarkerMismatch(_) => {
+            snap.ad_mismatch_total = snap.ad_mismatch_total.saturating_add(1);
+        }
+        StreamEvent::InbandAdEvent(_) => {
+            snap.inband_emsg_total = snap.inband_emsg_total.saturating_add(1);
+        }
         StreamEvent::PlaylistMeta(m) => {
             snap.ll_hls_enabled = if m.ll_hls.is_ll_hls { 1.0 } else { 0.0 };
             if let Some(part) = m.ll_hls.last_part_duration_secs {
@@ -293,10 +305,36 @@ fn label_escape(s: &str) -> String {
     s.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
+pub fn sanitize_stream_id_label(id: &str) -> String {
+    let mut out = String::with_capacity(id.len());
+    for c in id.chars() {
+        if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+            out.push(c);
+        } else {
+            out.push('_');
+        }
+    }
+    if out.is_empty() {
+        "stream".into()
+    } else {
+        out
+    }
+}
+
 pub fn render_openmetrics(snap: &MetricsSnapshot) -> String {
+    render_openmetrics_for_stream(snap, None)
+}
+
+pub fn render_openmetrics_for_stream(snap: &MetricsSnapshot, stream_id: Option<&str>) -> String {
     let url = label_escape(&redact_url(&snap.url));
     let cdn = label_escape(&snap.cdn_provider);
-    let labels = format!("url=\"{url}\"");
+    let labels = match stream_id {
+        Some(id) => format!(
+            "url=\"{url}\",stream_id=\"{}\"",
+            label_escape(&sanitize_stream_id_label(id))
+        ),
+        None => format!("url=\"{url}\""),
+    };
     let mut out = format!(
         r#"# HELP streamtop_stream_health_score Stream Health Index (SHI) 0-100
 # TYPE streamtop_stream_health_score gauge
@@ -346,6 +384,15 @@ streamtop_tr101290_p1_violations_total{{{labels}}} {tr101290_p1}
 # HELP streamtop_tr101290_p2_violations_total TR 101 290 Priority 2 violations
 # TYPE streamtop_tr101290_p2_violations_total counter
 streamtop_tr101290_p2_violations_total{{{labels}}} {tr101290_p2}
+# HELP streamtop_ad_mismatch_total Manifest vs wire ad marker mismatches
+# TYPE streamtop_ad_mismatch_total counter
+streamtop_ad_mismatch_total{{{labels}}} {ad_mismatch}
+# HELP streamtop_inband_emsg_total Inband DASH emsg SCTE events
+# TYPE streamtop_inband_emsg_total counter
+streamtop_inband_emsg_total{{{labels}}} {inband_emsg}
+# HELP streamtop_clearkey_decrypt_ok Staging ClearKey cenc subsample decrypt (1=ok)
+# TYPE streamtop_clearkey_decrypt_ok gauge
+streamtop_clearkey_decrypt_ok{{{labels}}} {clearkey_ok:.0}
 # HELP streamtop_channel_dropped_total Events dropped from bounded poller channels
 # TYPE streamtop_channel_dropped_total counter
 streamtop_channel_dropped_total{{{labels}}} {drops}
@@ -368,6 +415,9 @@ streamtop_channel_dropped_total{{{labels}}} {drops}
         qoe_risk = snap.qoe_rebuffer_risk,
         tr101290_p1 = snap.tr101290_p1_total,
         tr101290_p2 = snap.tr101290_p2_total,
+        ad_mismatch = snap.ad_mismatch_total,
+        inband_emsg = snap.inband_emsg_total,
+        clearkey_ok = snap.clearkey_decrypt_ok,
         drops = channel_dropped_total(),
     );
 
@@ -408,8 +458,8 @@ streamtop_channel_dropped_total{{{labels}}} {drops}
 }
 
 #[derive(Debug, Clone)]
-struct MetricsAuth {
-    token: Option<String>,
+pub struct MetricsAuth {
+    pub token: Option<String>,
 }
 
 /// Validate `Authorization: Bearer <token>` using constant-time comparison.

@@ -70,6 +70,43 @@ pub fn draw(frame: &mut Frame, app: &App) {
     }
 }
 
+pub fn draw_regex_modal(frame: &mut Frame, area: Rect, app: &App) {
+    let w = area.width.clamp(24, 72);
+    let h = 5u16;
+    let x = area.x + area.width.saturating_sub(w) / 2;
+    let y = area.y + area.height.saturating_sub(h + 2) / 2;
+    let modal = Rect::new(x, y, w, h);
+    frame.render_widget(Clear, modal);
+    let draft = &app.log_filter_draft;
+    let (hint, hint_color) = if draft.is_empty() {
+        ("Enter regex; Esc clears", Color::DarkGray)
+    } else if regex::Regex::new(draft).is_ok() {
+        ("valid regex", Color::LightGreen)
+    } else {
+        ("invalid regex syntax", Color::Red)
+    };
+    frame.render_widget(
+        Paragraph::new(vec![
+            Line::from(Span::styled(
+                " Regex search ",
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            )),
+            Line::from(format!("/{draft}_")),
+            Line::from(Span::styled(hint, Style::default().fg(hint_color))),
+        ])
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
+                .border_style(Style::default().fg(Color::Cyan)),
+        ),
+        modal,
+    );
+}
+
 fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
     let (latency_text, latency_color) = latency_display(app.latency);
     let (badge_text, badge_fg, badge_bg) = status_badge(app);
@@ -93,14 +130,28 @@ fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
         .as_ref()
         .map(|c| c.badge())
         .unwrap_or_else(|| "UNKNOWN".into());
-    let cdn_line = match app.cdn.hit_ratio_pct() {
-        Some(pct) => format!(
-            "CDN: {cdn_badge}  hit {:.0}% ({}/{})",
-            pct,
-            app.cdn.hits,
-            app.cdn.hits + app.cdn.misses
-        ),
-        None => format!("CDN: {cdn_badge}"),
+    let cdn_line = {
+        let base = match app.cdn.hit_ratio_pct() {
+            Some(pct) => format!(
+                "CDN: {cdn_badge}  hit {:.0}% ({}/{})",
+                pct,
+                app.cdn.hits,
+                app.cdn.hits + app.cdn.misses
+            ),
+            None => format!("CDN: {cdn_badge}"),
+        };
+        if let Some(edge) = app.cdn.last.as_ref().and_then(|c| {
+            let d = c.edge_detail();
+            if d.is_empty() {
+                None
+            } else {
+                Some(d)
+            }
+        }) {
+            format!("{base}  {edge}")
+        } else {
+            base
+        }
     };
 
     let window = app
@@ -290,6 +341,18 @@ fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
                 Style::default()
                     .fg(Color::White)
                     .bg(Color::Magenta)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]));
+    }
+    if let Some(pat) = &app.log_filter {
+        lines.push(Line::from(vec![
+            Span::raw(" "),
+            Span::styled(
+                format!(" filter: /{pat}/ "),
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(Color::LightGreen)
                     .add_modifier(Modifier::BOLD),
             ),
         ]));
@@ -627,13 +690,32 @@ fn render_spark_or_placeholder(
 
 fn draw_log(frame: &mut Frame, app: &App, area: Rect) {
     let visible = area.height.saturating_sub(2) as usize;
-    let total = app.log.len();
+    let filtered: Vec<&crate::models::LogEntry> = if let Some(re) = &app.log_filter_regex {
+        app.log
+            .iter()
+            .filter(|e| {
+                re.is_match(&e.message) || re.is_match(e.category.tag()) || re.is_match(&e.time)
+            })
+            .collect()
+    } else if let Some(pat) = &app.log_filter {
+        let needle = pat.to_ascii_lowercase();
+        app.log
+            .iter()
+            .filter(|e| {
+                e.message.to_ascii_lowercase().contains(&needle)
+                    || e.category.tag().to_ascii_lowercase().contains(&needle)
+            })
+            .collect()
+    } else {
+        app.log.iter().collect()
+    };
+    let total = filtered.len();
     let max_scroll = total.saturating_sub(visible);
     let scroll = (app.log_scroll as usize).min(max_scroll);
     let end = total.saturating_sub(scroll);
     let start = end.saturating_sub(visible);
 
-    let lines: Vec<Line> = app.log[start..end]
+    let lines: Vec<Line> = filtered[start..end]
         .iter()
         .map(|entry| {
             let (tag, color) = category_style(entry.category, entry.level);
@@ -659,9 +741,20 @@ fn draw_log(frame: &mut Frame, app: &App, area: Rect) {
         .collect();
 
     frame.render_widget(
-        Paragraph::new(lines).block(rounded(" Diagnostics / Event Log ")),
+        Paragraph::new(lines).block(rounded(log_block_title(app))),
         area,
     );
+}
+
+fn log_block_title(app: &App) -> String {
+    if app.log_filter_edit {
+        return format!(" Log filter: /{}_ ", app.log_filter_draft);
+    }
+    if let Some(ref pat) = app.log_filter {
+        format!(" Diagnostics / Event Log [regex: /{pat}/] ")
+    } else {
+        " Diagnostics / Event Log ".into()
+    }
 }
 
 fn category_style(cat: DiagCategory, level: LogLevel) -> (&'static str, Color) {
@@ -771,6 +864,9 @@ pub fn draw_help(frame: &mut Frame, area: Rect, picker_context: bool) {
             Line::from("  c            Copy curl (headers + Range) to clipboard"),
             Line::from("  p            Quick Play (mpv / ffplay, non-blocking)"),
             Line::from("  Space        Save diagnostics/<channel>_<time>.json"),
+            Line::from("  e            Export incident bundle (HTTP tx + spec violations)"),
+            Line::from("  f / F        Cycle preset log filter / clear regex filter"),
+            Line::from("  /            Regex log filter modal (Enter lock, Esc clear)"),
             Line::from("  Tab          Channel switcher overlay"),
             Line::from("  Esc          Back to channel picker"),
             Line::from("  r            Reset metrics / ring buffers"),

@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.3.0
+
+- Inband DASH `emsg` SCTE-35 extraction and DAI cross-layer validation
+- FairPlay `cbcs` 1:9 staging ClearKey pattern decrypt (pure Rust AES-CBC)
+- Self-contained HTML/JSON compliance reports (`--export-report`)
+- TUI regex log filter modal (`/` overlay with live syntax validation)
+- Multi-stream headless agent (`--agent agent.toml`) with aggregated `/metrics`
+- OTLP metric batches on `/v1/metrics`; Grafana dashboard v4 (DAI, ClearKey, agent)
+- Summary schema v4; `streamtop_inband_emsg_total`, `streamtop_ad_mismatch_total` metrics
+- Agent stream cap (64), bounded 512-event channels, streaming HTML report writer
+- E2E harness covers export-report, agent fleet, schema v4, cbcs staging
+- CI release gates: promote-release verifies check/e2e/audit/typos jobs; Docker tag push removed
+
 ## 1.1.2
 
 - Webhook delivery is bounded and invalid `--alert-on` values fail fast
