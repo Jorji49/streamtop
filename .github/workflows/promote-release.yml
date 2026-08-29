@@ -1,0 +1,72 @@
+name: Promote verified release
+
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_run_id:
+        description: Successful main CI run containing candidate artifacts
+        required: true
+        type: string
+      version:
+        description: Release version without v prefix
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0
+
+      - name: Verify candidate run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ inputs.candidate_run_id }}
+        run: |
+          CONCLUSION=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}" --jq .conclusion)
+          CANDIDATE_SHA=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}" --jq .head_sha)
+          test "$CONCLUSION" = success
+          git merge-base --is-ancestor "$CANDIDATE_SHA" HEAD
+
+      - name: Download candidate artifacts
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          run-id: ${{ inputs.candidate_run_id }}
+          github-token: ${{ github.token }}
+          path: artifacts
+
+      - name: Prepare and verify assets
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          test "$VERSION" = "$(cargo metadata --format-version 1 --no-deps | jq -r '.packages[0].version')"
+          mkdir release
+          find artifacts -type f \( \
+            -name 'streamtop-*.zip' -o \
+            -name 'streamtop-*.tar.gz' \
+            \) -exec cp -t release {} +
+          python3 scripts/verify_release.py --assets-dir release
+          sha256sum release/* > release/SHA256SUMS
+
+      - name: Tag verified tree
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          git tag -a "v${VERSION}" -m "v${VERSION}"
+          git push origin "v${VERSION}"
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          gh release create "v${VERSION}" release/* \
+            --title "streamtop v${VERSION}" \
+            --generate-notes \
+            --verify-tag
