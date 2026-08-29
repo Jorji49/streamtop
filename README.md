@@ -1,4 +1,8 @@
+<div align="center">
+
 # streamtop
+
+**Real-time terminal diagnostics & health inspection for live HLS, DASH, and IPTV streams.**
 
 [![Awesome Ratatui](https://img.shields.io/badge/awesome-ratatui-e43716?style=for-the-badge&logo=rust&logoColor=white)](https://github.com/ratatui/awesome-ratatui)
 
@@ -7,11 +11,21 @@
 [![Downloads](https://img.shields.io/crates/d/streamtop?style=flat-square&color=2ea44f&labelColor=1c1c1c)](https://crates.io/crates/streamtop)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue?style=flat-square&labelColor=1c1c1c)](LICENSE)
 
-Terminal diagnostics for live **HLS**, **DASH**, and **IPTV** streams.
+<br /><br />
 
 <img width="1200" alt="demo_loop" src="https://github.com/user-attachments/assets/f4fbb3e2-f572-4003-bb5d-b22cbba52a80" />
 
-Latest release: **[v1.0.1](https://github.com/Jorji49/streamtop/releases/tag/v1.0.1)** (`streamtop --version`).
+</div>
+
+## Features
+
+* **Multi-Protocol Monitoring:** Deep inspection for HLS (`.m3u8`), MPEG-DASH (`.mpd`), and IPTV playlist (`.m3u`) feeds.
+* **Low-Overhead Probing:** `--probe-headers` mode inspects wire containers, codecs, and TTFB without downloading full segments.
+* **Manifest vs. Wire Validation:** Continuous tracking for PTS GOP intervals, frame rate drift, and bitstream discrepancies.
+* **Live SCTE-35 & Ad Markers:** Real-time capture and logging for ad insertion cues, stalls, and HTTP errors.
+* **Incident Export:** One-key export for sanitized `curl` commands, `.har` network archives, and diagnostic JSON reports.
+* **Split-Screen Comparison:** Concurrently monitor and compare two streams in a dual-pane TUI view.
+* **Production Observability:** Built-in Prometheus `/metrics` exporter and OpenTelemetry tracing without external wrappers.
 
 ## Install
 
