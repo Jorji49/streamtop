@@ -1,0 +1,69 @@
+[default]
+extend-ignore-re = [
+    "(?Rm)^.*\\.(lock|json|yaml|yml)$",
+]
+
+[default.extend-words]
+ADTS = "ADTS"
+AvSync = "AvSync"
+ClearKey = "ClearKey"
+FairPlay = "FairPlay"
+GOP = "GOP"
+Grafana = "Grafana"
+HLS = "HLS"
+IPTV = "IPTV"
+KIDs = "KIDs"
+LL = "LL"
+MPD = "MPD"
+OTEL = "OTEL"
+OTLP = "OTLP"
+OpenTelemetry = "OpenTelemetry"
+OTT = "OTT"
+PCR = "PCR"
+PMT = "PMT"
+PSSH = "PSSH"
+PTS = "PTS"
+PlayReady = "PlayReady"
+PRELOAD = "PRELOAD"
+Ratatui = "Ratatui"
+SCTE = "SCTE"
+SHI = "SHI"
+TTFB = "TTFB"
+TTML = "TTML"
+UPID = "UPID"
+WebVTT = "WebVTT"
+Widevine = "Widevine"
+binstall = "binstall"
+cea608 = "cea608"
+ffplay = "ffplay"
+ffprobe = "ffprobe"
+fmp4 = "fmp4"
+hdr10 = "hdr10"
+homebrew = "homebrew"
+ingest = "ingest"
+m3u = "m3u"
+m3u8 = "m3u8"
+mpeg = "mpeg"
+mpv = "mpv"
+mpegts = "mpegts"
+ping = "ping"
+qoe = "qoe"
+ratatui = "ratatui"
+rebuffer = "rebuffer"
+redact = "redact"
+redacted = "redacted"
+rustls = "rustls"
+scoop = "scoop"
+streamtop = "streamtop"
+tr101290 = "tr101290"
+webhook = "webhook"
+webhooks = "webhooks"
+winget = "winget"
+
+[files]
+extend-exclude = [
+    "ci-artifacts/**",
+    "target/**",
+    "Cargo.lock",
+    "tests/fixtures/**",
+]

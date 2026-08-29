@@ -3,10 +3,12 @@
 ## 1.1.1
 
 - README: product overview, use cases, FAQ, 1.1.0 feature docs (TR 101 290, SEI, SRT/RTMP, QoE)
-- README: SEO-friendly headings and alt text; Winget PR link -> #426118
+- README: SEO-friendly headings and alt text; Winget PR link -> #426121
 - Cargo.toml: expanded crate description and keywords
 - GitHub repo description and topics sync
 - Packaging manifests bumped to 1.1.1
+- E2E: mock `/health` wait loop (Windows CI race fix)
+- CI: typos spellcheck job; release build gated on e2e + e2e-windows
 
 ## 1.1.0
 

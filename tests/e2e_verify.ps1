@@ -12,6 +12,7 @@ New-Item -ItemType Directory -Force -Path $Tmp | Out-Null
 
 $MockProc = $null
 $PromProc = $null
+$MockLog = $null
 
 function Log([string]$Msg) { Write-Host "[e2e] $Msg" }
 function Pass([string]$Msg) { $script:Pass++; Log "PASS: $Msg" }
@@ -60,6 +61,25 @@ function Run-Summary([string]$Url, [string[]]$ExtraArgs) {
     return $Out
 }
 
+function Wait-ForMock([string]$HealthUrl, [int]$TimeoutSec = 60) {
+    $deadline = (Get-Date).AddSeconds($TimeoutSec)
+    while ((Get-Date) -lt $deadline) {
+        if ($MockProc.HasExited) {
+            Fail "mock server exited early (code $($MockProc.ExitCode))"
+            if ($MockLog -and (Test-Path $MockLog)) { Get-Content $MockLog | Write-Host }
+            return $false
+        }
+        try {
+            $r = Invoke-WebRequest -Uri $HealthUrl -UseBasicParsing -TimeoutSec 2
+            if ($r.StatusCode -eq 200) { return $true }
+        } catch {}
+        Start-Sleep -Milliseconds 500
+    }
+    Fail "mock server not ready after ${TimeoutSec}s"
+    if ($MockLog -and (Test-Path $MockLog)) { Get-Content $MockLog | Write-Host }
+    return $false
+}
+
 try {
     Need-Cmd python
     if (-not (Get-Command python3 -ErrorAction SilentlyContinue)) {
@@ -80,12 +100,15 @@ try {
     }
 
     Log 'Starting hermetic mock servers (HTTP/SRT/RTMP)'
+    $MockLog = Join-Path $Tmp 'mock.log'
     $MockProc = Start-Process -FilePath python `
         -ArgumentList @("$Root/tests/e2e/mock_all.py") `
-        -PassThru -WindowStyle Hidden
-    Start-Sleep -Seconds 2
+        -PassThru -WindowStyle Hidden `
+        -RedirectStandardOutput $MockLog
 
     $Base = 'http://127.0.0.1:8765'
+    if (-not (Wait-ForMock "$Base/health")) { exit 1 }
+
     $Tr101Url = "$Base/tr101290/live.m3u8"
     $SeiUrl = "$Base/sei/live.m3u8"
     $HlsUrl = "$Base/live.m3u8"

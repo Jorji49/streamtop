@@ -66,6 +66,25 @@ run_summary() {
   echo "$out"
 }
 
+wait_mock() {
+  local base="$1"
+  local deadline=$((SECONDS + 60))
+  while [[ $SECONDS -lt $deadline ]]; do
+    if ! kill -0 "$MOCK_PID" 2>/dev/null; then
+      fail "mock server died"
+      cat "$TMP/mock.log" >&2 || true
+      return 1
+    fi
+    if curl -sf --max-time 2 "${base}/health" >/dev/null; then
+      return 0
+    fi
+    sleep 0.5
+  done
+  fail "mock server not ready after 60s"
+  cat "$TMP/mock.log" >&2 || true
+  return 1
+}
+
 log "Building streamtop release binary"
 cargo build --release --quiet
 STREAMTOP="$ROOT/target/release/streamtop"
@@ -75,11 +94,12 @@ STREAMTOP="$ROOT/target/release/streamtop"
 }
 
 log "Starting hermetic mock servers (HTTP/SRT/RTMP)"
-python3 "$ROOT/tests/e2e/mock_all.py" &
+python3 "$ROOT/tests/e2e/mock_all.py" >"$TMP/mock.log" 2>&1 &
 MOCK_PID=$!
-sleep 1
 
 BASE="http://127.0.0.1:8765"
+wait_mock "$BASE" || exit 1
+
 TR101_URL="${BASE}/tr101290/live.m3u8"
 SEI_URL="${BASE}/sei/live.m3u8"
 HLS_URL="${BASE}/live.m3u8"
