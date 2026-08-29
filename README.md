@@ -1,5 +1,7 @@
 <div align="center">
 
+<img width="96" alt="streamtop logo" src="https://github.com/user-attachments/assets/95b0df39-8404-4229-a071-7876ba6f3fde" />
+
 # streamtop
 
 **Real-time terminal diagnostics & health inspection for live HLS, DASH, and IPTV streams.**
