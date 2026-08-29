@@ -160,6 +160,28 @@ pub fn grafana_dashboard_json() -> Value {
             "short",
             [0.0, 60.0, 24.0, 6.0],
         ),
+        // Row 9 - synthetic QoE / TR 101 290
+        timeseries_panel(
+            19,
+            "Synthetic QoE rebuffer risk",
+            "streamtop_qoe_rebuffer_risk",
+            "percent",
+            [0.0, 66.0, 8.0, 6.0],
+        ),
+        timeseries_panel(
+            20,
+            "TR 101 290 P1 violations",
+            "streamtop_tr101290_p1_violations_total",
+            "short",
+            [8.0, 66.0, 8.0, 6.0],
+        ),
+        timeseries_panel(
+            21,
+            "TR 101 290 P2 violations",
+            "streamtop_tr101290_p2_violations_total",
+            "short",
+            [16.0, 66.0, 8.0, 6.0],
+        ),
     ];
 
     json!({
@@ -170,7 +192,7 @@ pub fn grafana_dashboard_json() -> Value {
             "tags": ["streamtop", "hls", "dash", "prometheus"],
             "timezone": "browser",
             "schemaVersion": 39,
-            "version": 2,
+            "version": 3,
             "refresh": "5s",
             "time": { "from": "now-15m", "to": "now" },
             "templating": { "list": [datasource_variable()] },
@@ -352,6 +374,9 @@ mod tests {
             "streamtop_llhls_part_duration_seconds",
             "streamtop_codec_mismatch_total",
             "streamtop_channel_dropped_total",
+            "streamtop_qoe_rebuffer_risk",
+            "streamtop_tr101290_p1_violations_total",
+            "streamtop_tr101290_p2_violations_total",
         ] {
             assert!(text.contains(needle), "missing {needle}");
         }
@@ -479,7 +504,7 @@ mod tests {
         export_grafana_dashboard(&path).expect("export");
         let raw = std::fs::read_to_string(&path).expect("read");
         let parsed: Value = serde_json::from_str(&raw).expect("valid json");
-        assert_eq!(parsed["dashboard"]["version"], 2);
+        assert_eq!(parsed["dashboard"]["version"], 3);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

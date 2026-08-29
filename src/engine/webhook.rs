@@ -183,29 +183,24 @@ pub fn spawn_webhook_listener_with_log(
                         continue;
                     }
                 }
-                let url = cfg.url.clone();
-                let allow_insecure = cfg.allow_insecure;
-                let client = client.clone();
-                let delivery = Arc::clone(&delivery);
                 let body = build_platform_body(platform, &payload);
-                tokio::spawn(async move {
-                    let result = post_with_retry(&client, &url, &body, allow_insecure).await;
-                    let mut st = delivery.lock().unwrap_or_else(|e| e.into_inner());
-                    match result {
-                        Ok(status) => st.push(DeliveryRecord {
-                            at: Utc::now().to_rfc3339(),
-                            alert: payload.kind.as_str().into(),
-                            ok: true,
-                            detail: format!("HTTP {status}"),
-                        }),
-                        Err(err) => st.push(DeliveryRecord {
-                            at: Utc::now().to_rfc3339(),
-                            alert: payload.kind.as_str().into(),
-                            ok: false,
-                            detail: err,
-                        }),
-                    }
-                });
+                // Deliver sequentially so alert bursts cannot create unbounded tasks.
+                let result = post_with_retry(&client, &cfg.url, &body, cfg.allow_insecure).await;
+                let mut st = delivery.lock().unwrap_or_else(|e| e.into_inner());
+                match result {
+                    Ok(status) => st.push(DeliveryRecord {
+                        at: Utc::now().to_rfc3339(),
+                        alert: payload.kind.as_str().into(),
+                        ok: true,
+                        detail: format!("HTTP {status}"),
+                    }),
+                    Err(err) => st.push(DeliveryRecord {
+                        at: Utc::now().to_rfc3339(),
+                        alert: payload.kind.as_str().into(),
+                        ok: false,
+                        detail: err,
+                    }),
+                }
             }
         }
     });

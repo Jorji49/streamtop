@@ -80,6 +80,23 @@ function Wait-ForMock([string]$HealthUrl, [int]$TimeoutSec = 60) {
     return $false
 }
 
+function Wait-ForMetrics([string]$MetricsUrl, [int]$TimeoutSec = 30) {
+    $deadline = (Get-Date).AddSeconds($TimeoutSec)
+    while ((Get-Date) -lt $deadline) {
+        if ($PromProc.HasExited) { return $false }
+        try {
+            Invoke-WebRequest -Uri $MetricsUrl -UseBasicParsing -TimeoutSec 2 | Out-Null
+            return $true
+        } catch {
+            if ($_.Exception.Response -and [int]$_.Exception.Response.StatusCode -eq 401) {
+                return $true
+            }
+        }
+        Start-Sleep -Milliseconds 500
+    }
+    return $false
+}
+
 try {
     Need-Cmd python
     if (-not (Get-Command python3 -ErrorAction SilentlyContinue)) {
@@ -144,7 +161,7 @@ try {
     }
 
     Log 'Synthetic QoE summary'
-    $Out = Run-Summary $HlsUrl @('--simulate-player', '--throttle-kbps', '2000', '--simulated-rtt-ms', '120', '--probe-headers')
+    $Out = Run-Summary $HlsUrl @('--simulate-player', '--throttle-kbps', '1500', '--simulated-rtt-ms', '120', '--probe-headers')
     if ($Out) {
         $Risk = Get-JsonField $Out 'synthetic_qoe.rebuffer_risk_score'
         if (($Risk -match '^\d+$') -and [int]$Risk -ge 0 -and [int]$Risk -le 100) {
@@ -206,19 +223,42 @@ try {
         Fail 'metadata webhook should be blocked'
     }
 
+    Log 'Invalid alert list rejection'
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    & $Streamtop $HlsUrl --webhook "$Base/webhook" --allow-insecure-webhooks --alert-on typo --timeout 1 1>$null 2>$null
+    $Rc = $LASTEXITCODE
+    $ErrorActionPreference = $prevEap
+    if ($Rc -ne 0) { Pass 'invalid --alert-on rejected' } else { Fail 'invalid --alert-on accepted' }
+
+    Log 'VOD crawl and incident exports'
+    & $Streamtop --vod $HlsUrl --summary --summary-format json 1>$null 2>$null
+    if ($LASTEXITCODE -eq 0) { Pass 'VOD crawl command' } else { Fail 'VOD crawl command' }
+    $Har = Join-Path $Tmp 'incident.har'
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    & $Streamtop $HlsUrl --export-har $Har --timeout 2 1>$null 2>$null
+    $ErrorActionPreference = $prevEap
+    if ((Test-Path $Har) -and (Get-Item $Har).Length -gt 0) { Pass 'HAR export' } else { Fail 'HAR export' }
+
     Log 'Prometheus metrics auth'
+    $MetricsPort = Get-Random -Minimum 20000 -Maximum 45000
+    $MetricsUrl = "http://127.0.0.1:$MetricsPort/metrics"
     $PromProc = Start-Process -FilePath $Streamtop `
         -ArgumentList @(
             $HlsUrl, '--simulate-player', '--tr101290',
-            '--prometheus', '9184', '--metrics-token', 'test-token',
+            '--prometheus', $MetricsPort, '--metrics-token', 'test-token',
             '--probe-headers'
         ) `
         -PassThru -WindowStyle Hidden
-    Start-Sleep -Seconds 4
+    if (-not (Wait-ForMetrics $MetricsUrl)) {
+        Fail 'metrics endpoint not ready'
+        throw 'metrics endpoint not ready'
+    }
 
     try {
         try {
-            Invoke-WebRequest -Uri 'http://127.0.0.1:9184/metrics' -UseBasicParsing | Out-Null
+            Invoke-WebRequest -Uri $MetricsUrl -UseBasicParsing | Out-Null
             Fail 'expected metrics 401 without token, got 200'
         } catch {
             $code = [int]$_.Exception.Response.StatusCode
@@ -230,7 +270,7 @@ try {
         }
 
         $Headers = @{ Authorization = 'Bearer test-token' }
-        $Auth = Invoke-WebRequest -Uri 'http://127.0.0.1:9184/metrics' -Headers $Headers -UseBasicParsing
+        $Auth = Invoke-WebRequest -Uri $MetricsUrl -Headers $Headers -UseBasicParsing
         if ($Auth.StatusCode -eq 200) {
             Pass 'metrics 200 with bearer token'
         } else {

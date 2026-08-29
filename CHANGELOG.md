@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.1.2
+
+- Webhook delivery is bounded and invalid `--alert-on` values fail fast
+- Separate insecure destination flags for webhooks, OTLP, and ingest
+- Audit terminal output redacts signed URLs and error text
+- Summary schema v3 is fully validated in Linux and Windows E2E
+- QoE and TR 101 290 panels added to the Grafana dashboard
+- Deterministic release archives, SHA256SUMS, and package hash verification
+- CI supply-chain hardening: locked builds, pinned actions, audit/fuzz gates, SBOM and provenance
+- Expanded CLI E2E, profile options, security policy, CODEOWNERS, and dependency updates
+
 ## 1.1.1
 
 - README: product overview, use cases, FAQ, 1.1.0 feature docs (TR 101 290, SEI, SRT/RTMP, QoE)

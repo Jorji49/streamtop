@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import http.server
+import json
 import socket
 import struct
 import threading
@@ -16,6 +17,8 @@ SRT_PORT = 9000
 RTMP_PORT = 1935
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURES = ROOT / "fixtures"
+POST_COUNTS: dict[str, int] = {}
+POST_COUNTS_LOCK = threading.Lock()
 
 TS = 188
 SYNC = 0x47
@@ -156,6 +159,23 @@ class FeedHandler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(body)
             return
+        if path == "/events":
+            with POST_COUNTS_LOCK:
+                body = json.dumps(POST_COUNTS, sort_keys=True).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        if path == "/status500/seg.ts":
+            body = b"upstream error"
+            self.send_response(500)
+            self.send_header("Content-Type", "text/plain")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
         body, ctype = route_http(path)
         rng = self.headers.get("Range")
         if rng and body:
@@ -176,6 +196,17 @@ class FeedHandler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
         if body:
             self.wfile.write(body)
+
+    def do_POST(self) -> None:  # noqa: N802
+        path = self.path.split("?", 1)[0]
+        length = int(self.headers.get("Content-Length", "0"))
+        if length:
+            self.rfile.read(length)
+        with POST_COUNTS_LOCK:
+            POST_COUNTS[path] = POST_COUNTS.get(path, 0) + 1
+        self.send_response(200)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
 
 
 def route_http(path: str) -> Tuple[bytes, str]:
@@ -208,6 +239,9 @@ def route_http(path: str) -> Tuple[bytes, str]:
         return pl, "application/vnd.apple.mpegurl"
     if "/sei/" in path and path.endswith(".m3u8"):
         pl = b"#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:2\n#EXT-X-MEDIA-SEQUENCE:1\n#EXTINF:2.0,\nsei/sei.ts\n"
+        return pl, "application/vnd.apple.mpegurl"
+    if "/status500/" in path and path.endswith(".m3u8"):
+        pl = b"#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:2\n#EXT-X-MEDIA-SEQUENCE:1\n#EXTINF:2.0,\nseg.ts\n"
         return pl, "application/vnd.apple.mpegurl"
     if path.endswith("live.m3u8") or path.endswith("hls.m3u8"):
         pl = b"#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:2\n#EXT-X-MEDIA-SEQUENCE:1\n#EXTINF:2.0,\nseg.ts\n"

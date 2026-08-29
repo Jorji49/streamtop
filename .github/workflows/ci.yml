@@ -15,16 +15,10 @@ jobs:
     name: spellcheck
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: crate-ci/typos@v1
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: crate-ci/typos@7e42c54fbaa9738e072b11e93127845c36cef60d # v1
         with:
           config: _typos.toml
-          files: |
-            ./README.md
-            ./CHANGELOG.md
-            ./dist/winget/
-            ./Formula/streamtop.rb
-            ./bucket/streamtop.json
 
   check:
     name: check (${{ matrix.os }})
@@ -34,44 +28,58 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c
         with:
+          toolchain: 1.98.0
           components: rustfmt, clippy
 
       - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
 
       - name: cargo fmt --check
         run: cargo fmt --all -- --check
 
       - name: cargo clippy
-        run: cargo clippy --all-targets -- -D warnings
+        run: cargo clippy --locked --all-targets -- -D warnings
 
       - name: cargo test
-        run: cargo test --all-targets
+        run: cargo test --locked --all-targets
+
+      - name: cargo package
+        if: runner.os == 'Linux'
+        run: cargo package --locked --allow-dirty
+
+      - name: Verify release metadata versions
+        if: runner.os == 'Linux'
+        run: python3 scripts/verify_release.py
 
   e2e:
     name: e2e hermetic
     runs-on: ubuntu-latest
     needs: check
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c
+        with:
+          toolchain: 1.98.0
 
       - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
 
       - name: Install test deps
-        run: sudo apt-get update && sudo apt-get install -y jq python3
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq python3 python3-pip
+          python3 -m pip install --break-system-packages -r tests/e2e/requirements.txt
 
       - name: Run E2E verification
         run: |
-          chmod +x tests/e2e_verify.sh tests/e2e/gen_fixtures.sh
+          chmod +x tests/e2e_verify.sh
           bash tests/e2e_verify.sh
 
   e2e-windows:
@@ -79,18 +87,23 @@ jobs:
     runs-on: windows-latest
     needs: check
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c
+        with:
+          toolchain: 1.98.0
 
       - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
 
       - name: Install Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.12"
+
+      - name: Install schema validator
+        run: python -m pip install -r tests/e2e/requirements.txt
 
       - name: Run E2E verification (PowerShell)
         shell: pwsh
@@ -100,34 +113,54 @@ jobs:
     name: cargo audit
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c
+        with:
+          toolchain: 1.98.0
 
       - name: Install cargo-audit
-        uses: taiki-e/install-action@v2
+        uses: taiki-e/install-action@742a3317eac7bd62f91cd888b4eead5e784ba833 # v2
         with:
           tool: cargo-audit
 
       - name: cargo audit
         run: cargo audit
 
+  fuzz-check:
+    name: fuzz targets compile
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c
+        with:
+          toolchain: 1.98.0
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
+        with:
+          workspaces: fuzz
+      - name: Compile fuzz targets
+        run: cargo check --locked --manifest-path fuzz/Cargo.toml
+
   smoke-live:
     name: live HLS smoke
     runs-on: ubuntu-latest
     needs: check
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c
+        with:
+          toolchain: 1.98.0
 
       - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
 
       - name: Build binary
-        run: cargo build --release
+        run: cargo build --release --locked
 
       - name: Smoke test public HLS (10s summary JSON, 3 retries)
         id: smoke
@@ -155,7 +188,7 @@ jobs:
 
       - name: Upload HAR / summary on smoke failure
         if: steps.smoke.outcome == 'failure'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
         with:
           name: smoke-failure-har
           path: |
@@ -170,7 +203,7 @@ jobs:
 
   build:
     name: build (${{ matrix.target }})
-    needs: [check, e2e, e2e-windows]
+    needs: [check, e2e, e2e-windows, audit, typos, fuzz-check]
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -189,20 +222,21 @@ jobs:
             target: x86_64-pc-windows-msvc
             artifact: streamtop-windows-x86_64
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c
         with:
+          toolchain: 1.98.0
           targets: ${{ matrix.target }}
 
       - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
         with:
           key: ${{ matrix.target }}
 
       - name: Build release
-        run: cargo build --release --target ${{ matrix.target }}
+        run: cargo build --release --locked --target ${{ matrix.target }}
 
       - name: Package (Unix)
         if: runner.os != 'Windows'
@@ -214,7 +248,8 @@ jobs:
           (cd stage && zip -r "../${{ matrix.artifact }}.zip" streamtop README.md LICENSE CHANGELOG.md)
           # cargo-binstall: streamtop-<triple>.tar.gz with binary at archive root
           cp "target/${{ matrix.target }}/release/streamtop" "pkg/streamtop"
-          tar -C pkg -czf "streamtop-${{ matrix.target }}.tar.gz" streamtop
+          tar --sort=name --mtime='@0' --owner=0 --group=0 --numeric-owner \
+            -C pkg -cf - streamtop | gzip -n > "streamtop-${{ matrix.target }}.tar.gz"
 
       - name: Package (Windows)
         if: runner.os == 'Windows'
@@ -223,20 +258,24 @@ jobs:
           New-Item -ItemType Directory -Force -Path stage, pkg | Out-Null
           Copy-Item "target/${{ matrix.target }}/release/streamtop.exe" stage/
           Copy-Item README.md,LICENSE,CHANGELOG.md stage/
-          Compress-Archive -Path stage\* -DestinationPath "${{ matrix.artifact }}.zip" -Force
+          Push-Location stage
+          7z a -tzip -mtc=off -mtm=off -mta=off "..\${{ matrix.artifact }}.zip" * | Out-Null
+          Pop-Location
           # cargo-binstall zip override: streamtop-<triple>.zip
           Copy-Item "target/${{ matrix.target }}/release/streamtop.exe" pkg/
-          Compress-Archive -Path pkg\streamtop.exe -DestinationPath "streamtop-${{ matrix.target }}.zip" -Force
+          Push-Location pkg
+          7z a -tzip -mtc=off -mtm=off -mta=off "..\streamtop-${{ matrix.target }}.zip" streamtop.exe | Out-Null
+          Pop-Location
 
       - name: Upload friendly zip
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
         with:
           name: ${{ matrix.artifact }}
           path: ${{ matrix.artifact }}.zip
           if-no-files-found: error
 
       - name: Upload binstall archive
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
         with:
           name: binstall-${{ matrix.target }}
           path: |
@@ -252,10 +291,10 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
       - name: Download artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
         with:
           path: artifacts
 
@@ -279,10 +318,12 @@ jobs:
                 -name 'streamtop-*.tar.gz' -o -name 'streamtop-*.zip' \
               \) -exec cp -t release {} +
           fi
+          sha256sum release/* > release/SHA256SUMS
+          python3 scripts/verify_release.py --assets-dir release
           ls -la release/
 
       - name: Publish GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           draft: false
           prerelease: false
@@ -305,10 +346,12 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c
+        with:
+          toolchain: 1.98.0
 
       - name: Publish to crates.io
         env:
@@ -316,8 +359,8 @@ jobs:
         run: |
           set -euo pipefail
           if [ -z "${CARGO_REGISTRY_TOKEN:-}" ]; then
-            echo "::warning::CARGO_REGISTRY_TOKEN secret missing; skip crates.io publish"
-            exit 0
+            echo "::error::CARGO_REGISTRY_TOKEN secret missing"
+            exit 1
           fi
           set +e
           out=$(cargo publish --locked 2>&1)

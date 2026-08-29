@@ -1,7 +1,8 @@
 [package]
 name = "streamtop"
-version = "1.1.1"
+version = "1.1.2"
 edition = "2021"
+rust-version = "1.87"
 description = "Terminal HLS, DASH, and IPTV stream monitor with wire probes, TR 101 290, SCTE-35, and Prometheus metrics"
 license = "MIT"
 readme = "README.md"
@@ -9,6 +10,18 @@ repository = "https://github.com/Jorji49/streamtop"
 homepage = "https://github.com/Jorji49/streamtop"
 keywords = ["hls", "dash", "iptv", "streaming", "monitoring"]
 categories = ["command-line-utilities", "multimedia::video"]
+exclude = [
+    ".github/**",
+    ".dockerignore",
+    ".gitignore",
+    "Dockerfile",
+    "Formula/**",
+    "bucket/**",
+    "dist/**",
+    "fuzz/**",
+    "tests/**",
+    "_typos.toml",
+]
 
 [package.metadata.deb]
 maintainer = "Ahmet Kayra Kama <kayraak@pm.me>"

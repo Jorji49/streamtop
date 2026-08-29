@@ -17,11 +17,14 @@
     "critical_rfc_errors",
     "url",
     "errors",
-    "saw_segment"
+    "saw_segment",
+    "dropped_events",
+    "ttfb_ms",
+    "last_http_status"
   ],
   "properties": {
     "schema": { "const": "streamtop.summary.v1" },
-    "schema_version": { "type": "integer", "minimum": 1 },
+    "schema_version": { "const": 3 },
     "verdict": { "enum": ["PASS", "FAIL"] },
     "ok": { "type": "boolean" },
     "health_score": { "type": "integer", "minimum": 0, "maximum": 100 },
@@ -48,6 +51,19 @@
     "tr101290": {
       "type": ["object", "null"],
       "additionalProperties": false,
+      "required": [
+        "p1_violations",
+        "p2_violations",
+        "sync_errors",
+        "cc_errors",
+        "pat_timeout",
+        "pmt_timeout",
+        "pcr_gap_ms",
+        "pcr_jitter_ms",
+        "pts_discontinuities",
+        "unreferenced_pids",
+        "checks"
+      ],
       "properties": {
         "p1_violations": { "type": "integer", "minimum": 0 },
         "p2_violations": { "type": "integer", "minimum": 0 },
@@ -58,12 +74,34 @@
         "pcr_gap_ms": { "type": ["number", "null"] },
         "pcr_jitter_ms": { "type": ["number", "null"] },
         "pts_discontinuities": { "type": "integer", "minimum": 0 },
-        "unreferenced_pids": { "type": "integer", "minimum": 0 }
+        "unreferenced_pids": { "type": "integer", "minimum": 0 },
+        "checks": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["priority", "code", "message"],
+            "properties": {
+              "priority": { "type": "integer", "minimum": 1, "maximum": 3 },
+              "code": { "type": "string" },
+              "message": { "type": "string" }
+            }
+          }
+        }
       }
     },
     "synthetic_qoe": {
       "type": ["object", "null"],
       "additionalProperties": false,
+      "required": [
+        "tdr",
+        "rebuffer_risk_score",
+        "ttff_ms",
+        "selected_bitrate_bps",
+        "buffer_2s_rebuffer_pct",
+        "buffer_4s_rebuffer_pct",
+        "buffer_6s_rebuffer_pct"
+      ],
       "properties": {
         "tdr": { "type": "number" },
         "rebuffer_risk_score": { "type": "integer", "minimum": 0, "maximum": 100 },
@@ -79,6 +117,13 @@
     "sei_metadata": {
       "type": ["object", "null"],
       "additionalProperties": false,
+      "required": [
+        "cea608_present",
+        "cea708_present",
+        "hdr10_present",
+        "hlg_present",
+        "nal_units_scanned"
+      ],
       "properties": {
         "cea608_present": { "type": "boolean" },
         "cea708_present": { "type": "boolean" },
@@ -93,6 +138,7 @@
     "ingest_stats": {
       "type": ["object", "null"],
       "additionalProperties": false,
+      "required": ["protocol"],
       "properties": {
         "protocol": { "type": "string" },
         "rtt_ms": { "type": ["integer", "null"], "minimum": 0 },

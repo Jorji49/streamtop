@@ -7,8 +7,17 @@
 # user_agent = "MyPlayer/1.0"
 # probe_headers = true
 # probe_drm = false
+# tr101290 = false
+# probe_sei = false
+# simulate_player = false
+# throttle_kbps = 2500
+# simulated_rtt_ms = 80
 # webhook = "https://hooks.slack.com/services/..."
 # alert_on = "stall,shi_below_70,http_5xx"
+# otel_endpoint = "https://otel.example.com/v1/traces"
+# allow_insecure_webhooks = false
+# allow_insecure_otel = false
+# allow_insecure_ingest = false
 
 [profiles.cdn]
 headers = ["X-CDN-Bypass: 1"]
@@ -17,6 +26,11 @@ probe_headers = true
 [profiles.ci]
 probe_headers = true
 probe_drm = false
+tr101290 = true
+probe_sei = true
+simulate_player = true
+throttle_kbps = 2000
+simulated_rtt_ms = 120
 alert_on = "stall,http_5xx"
 
 [profiles.drm]
