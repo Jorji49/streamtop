@@ -188,7 +188,7 @@ jobs:
 
       - name: Upload HAR / summary on smoke failure
         if: steps.smoke.outcome == 'failure'
-        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: smoke-failure-har
           path: |
@@ -270,14 +270,14 @@ jobs:
           Pop-Location
 
       - name: Upload friendly zip
-        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: ${{ matrix.artifact }}
           path: ${{ matrix.artifact }}-*.zip
           if-no-files-found: error
 
       - name: Upload binstall archive
-        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: binstall-${{ matrix.target }}
           path: |
