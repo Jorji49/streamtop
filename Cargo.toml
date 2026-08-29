@@ -1,20 +1,20 @@
 [package]
 name = "streamtop"
-version = "1.1.0"
+version = "1.1.1"
 edition = "2021"
-description = "HLS/DASH/IPTV stream diagnostics TUI and CLI"
+description = "Terminal HLS, DASH, and IPTV stream monitor with wire probes, TR 101 290, SCTE-35, and Prometheus metrics"
 license = "MIT"
 readme = "README.md"
 repository = "https://github.com/Jorji49/streamtop"
 homepage = "https://github.com/Jorji49/streamtop"
-keywords = ["hls", "dash", "tui", "iptv", "diagnostics"]
+keywords = ["hls", "dash", "iptv", "streaming", "monitoring"]
 categories = ["command-line-utilities", "multimedia::video"]
 
 [package.metadata.deb]
 maintainer = "Ahmet Kayra Kama <kayraak@pm.me>"
 copyright = "2026, Ahmet Kayra Kama <kayraak@pm.me>"
 license-file = ["LICENSE", "4"]
-extended-description = "Diagnose live HLS, DASH, and IPTV streams from the terminal."
+extended-description = "Monitor live HLS, MPEG-DASH, and IPTV streams from the terminal. Wire probes, SCTE-35, TR 101 290, Prometheus metrics, and CI summary JSON."
 section = "utils"
 priority = "optional"
 assets = [
