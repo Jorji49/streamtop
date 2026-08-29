@@ -171,9 +171,37 @@ async fn vod_scans_mock_hls_playlist() {
         alert_on: String::new(),
         allow_insecure_webhooks: false,
         otel_endpoint: None,
+        tr101290: false,
+        probe_sei: false,
+        simulate_player: false,
+        throttle_kbps: None,
+        simulated_rtt_ms: None,
     };
     let exit = run_vod(url, session, SummaryFormat::Json)
         .await
         .expect("vod crawl");
     assert_eq!(exit, ExitCode::SUCCESS);
+}
+
+#[test]
+fn tr101290_engine_on_mock_fixture() {
+    use streamtop::engine::tr101290::Tr101290Engine;
+
+    let mut engine = Tr101290Engine::new();
+    let report = engine.ingest(&mock_server::tr101290_broken_ts(), 1_000);
+    assert!(
+        report.p1_violations > 0 || report.p2_violations > 0,
+        "expected TR 101 290 violations"
+    );
+}
+
+#[test]
+fn sei_fixture_captions_and_hdr() {
+    use streamtop::engine::sei_probe::probe_sei;
+    use streamtop::models::ContainerKind;
+
+    let bytes = mock_server::sei_caption_hdr_ts();
+    let r = probe_sei(&bytes, ContainerKind::Ts);
+    assert!(r.cea608_present, "cea608: {r:?}");
+    assert!(r.hdr10_present, "hdr10: {r:?}");
 }

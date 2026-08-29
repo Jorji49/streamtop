@@ -334,6 +334,69 @@ pub async fn pinned_post_json(
     Ok(status)
 }
 
+/// IP-pinned GET with optional Range header (DRM license probes).
+pub async fn pinned_get_range(
+    url: &str,
+    range: Option<&str>,
+    allow_insecure: bool,
+    timeout: Duration,
+    max_body: usize,
+) -> Result<(u16, u64)> {
+    validate_outbound_url(url, allow_insecure)?;
+    let parsed = Url::parse(url).wrap_err("invalid URL")?;
+    let host = parsed
+        .host_str()
+        .ok_or_else(|| eyre!("URL missing host"))?
+        .to_string();
+    let port = parsed
+        .port_or_known_default()
+        .ok_or_else(|| eyre!("URL missing port"))?;
+    let addrs = resolve_pinned_addrs(&host, port, allow_insecure)?;
+    let addr = pick_connect_addr(&addrs);
+    let path = if parsed.query().is_some() {
+        format!("{}?{}", parsed.path(), parsed.query().unwrap_or(""))
+    } else {
+        parsed.path().to_string()
+    };
+    let path = if path.is_empty() { "/".into() } else { path };
+    let mut request = format!(
+        "GET {path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\nAccept: */*\r\nUser-Agent: streamtop/{}\r\n",
+        env!("CARGO_PKG_VERSION")
+    );
+    if let Some(r) = range {
+        request.push_str(&format!("Range: {r}\r\n"));
+    }
+    request.push_str("\r\n");
+
+    let started = Instant::now();
+    let scheme = parsed.scheme();
+    let (status, _headers, _body, _) = if scheme == "https" {
+        let connector = build_tls_connector()?;
+        let server_name =
+            ServerName::try_from(host.clone()).map_err(|_| eyre!("invalid TLS server name"))?;
+        let tcp = tokio::time::timeout(timeout, TcpStream::connect(addr))
+            .await
+            .map_err(|_| eyre!("TCP connect timeout"))?
+            .wrap_err("TCP connect failed")?;
+        let mut tls = tokio::time::timeout(timeout, connector.connect(server_name, tcp))
+            .await
+            .map_err(|_| eyre!("TLS handshake timeout"))?
+            .wrap_err("TLS handshake failed")?;
+        tls.write_all(request.as_bytes()).await?;
+        tls.flush().await?;
+        read_http_response(&mut tls, Some(max_body)).await?
+    } else {
+        let mut tcp = tokio::time::timeout(timeout, TcpStream::connect(addr))
+            .await
+            .map_err(|_| eyre!("TCP connect timeout"))?
+            .wrap_err("TCP connect failed")?;
+        tcp.write_all(request.as_bytes()).await?;
+        tcp.flush().await?;
+        read_http_response(&mut tcp, Some(max_body)).await?
+    };
+    Ok((status, started.elapsed().as_millis() as u64))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

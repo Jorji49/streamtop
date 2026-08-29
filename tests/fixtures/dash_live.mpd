@@ -6,6 +6,7 @@
   <Period id="p0">
     <AdaptationSet contentType="video" mimeType="video/mp4">
       <ContentProtection schemeIdUri="urn:uuid:edef8ba9-79d6-4ace-a3c8-27dcd51d21ed"/>
+      <ContentProtection schemeIdUri="urn:uuid:9a04f079-9840-4286-ab92-e65be0885f95"/>
       <SegmentTemplate timescale="90000" duration="900000" startNumber="1"/>
       <Representation id="v1" bandwidth="2000000" width="1280" height="720" codecs="avc1.4d401f" frameRate="25">
         <SegmentTemplate duration="900000" media="video_$Number$.m4s" initialization="init.mp4" startNumber="1"/>

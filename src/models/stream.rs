@@ -1092,6 +1092,82 @@ pub struct PlaylistMeta {
     pub renditions: MediaRenditions,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct Tr101290Check {
+    pub priority: u8,
+    pub code: String,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct Tr101290Report {
+    pub p1_violations: u32,
+    pub p2_violations: u32,
+    pub sync_errors: u32,
+    pub cc_errors: u32,
+    pub pat_timeout: bool,
+    pub pmt_timeout: bool,
+    pub pcr_gap_ms: Option<f64>,
+    pub pcr_jitter_ms: Option<f64>,
+    pub pts_discontinuities: u32,
+    pub unreferenced_pids: u32,
+    #[serde(default)]
+    pub checks: Vec<Tr101290Check>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct SyntheticQoeSnapshot {
+    pub tdr: f64,
+    pub rebuffer_risk_score: u8,
+    pub ttff_ms: Option<u64>,
+    pub selected_bitrate_bps: Option<u64>,
+    pub buffer_2s_rebuffer_pct: u8,
+    pub buffer_4s_rebuffer_pct: u8,
+    pub buffer_6s_rebuffer_pct: u8,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub throttle_kbps: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub simulated_rtt_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct SeiProbeResult {
+    pub cea608_present: bool,
+    pub cea708_present: bool,
+    pub hdr10_present: bool,
+    pub hlg_present: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_cll: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_fall: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub caption_language: Option<String>,
+    pub nal_units_scanned: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct IngestStats {
+    pub protocol: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rtt_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub packet_loss_pct: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub nak_count: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub flight_buffer_depth: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bandwidth_mbps: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub video_codec: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub audio_codec: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub keyframe_interval_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub connected: Option<bool>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HealthReport {
     pub score: u8,
@@ -1132,6 +1208,10 @@ pub enum StreamEvent {
     ProbeMode(bool),
     Finding(DiagnosticFinding),
     WireProbe(WireProbeInfo),
+    Tr101290(Tr101290Report),
+    SyntheticQoe(SyntheticQoeSnapshot),
+    SeiProbe(SeiProbeResult),
+    Ingest(IngestStats),
     Log {
         level: LogLevel,
         category: DiagCategory,

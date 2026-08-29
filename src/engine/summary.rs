@@ -10,17 +10,19 @@ use tokio::sync::mpsc;
 use tokio::time::{timeout, Instant};
 
 use crate::engine::channel_stats::channel_dropped_total;
+use crate::engine::poller::DiagnosticOpts;
 use crate::engine::redact::redact_url;
 use crate::engine::ManifestPoller;
 use crate::models::{
-    CdnStats, DiagCategory, DiagSeverity, HealthReport, LatencyState, StreamEvent, StreamStatus,
-    StreamStatusKind, EVENT_CHANNEL_CAPACITY,
+    CdnStats, DiagCategory, DiagSeverity, HealthReport, IngestStats, LatencyState, SeiProbeResult,
+    StreamEvent, StreamStatus, StreamStatusKind, SyntheticQoeSnapshot, Tr101290Report,
+    EVENT_CHANNEL_CAPACITY,
 };
 use crate::ui::app::SessionOpts;
 
 /// Stable machine-readable schema id for `--summary --summary-format json`.
 pub const SUMMARY_SCHEMA: &str = "streamtop.summary.v1";
-pub const SUMMARY_SCHEMA_VERSION: u32 = 2;
+pub const SUMMARY_SCHEMA_VERSION: u32 = 3;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SummaryFormat {
@@ -58,6 +60,14 @@ pub struct SummaryJson {
     pub subtitle_drift_ms: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pssh_systems: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tr101290: Option<Tr101290Report>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub synthetic_qoe: Option<SyntheticQoeSnapshot>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sei_metadata: Option<SeiProbeResult>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ingest_stats: Option<IngestStats>,
 }
 
 pub fn build_summary_json(
@@ -79,6 +89,10 @@ pub fn build_summary_json(
     rebuffer_probability_pct: Option<u8>,
     subtitle_drift_ms: Option<i64>,
     pssh_systems: Option<Vec<String>>,
+    tr101290: Option<Tr101290Report>,
+    synthetic_qoe: Option<SyntheticQoeSnapshot>,
+    sei_metadata: Option<SeiProbeResult>,
+    ingest_stats: Option<IngestStats>,
 ) -> SummaryJson {
     SummaryJson {
         schema: SUMMARY_SCHEMA,
@@ -103,6 +117,10 @@ pub fn build_summary_json(
         rebuffer_probability_pct,
         subtitle_drift_ms,
         pssh_systems,
+        tr101290,
+        synthetic_qoe,
+        sei_metadata,
+        ingest_stats,
     }
 }
 
@@ -113,7 +131,10 @@ pub async fn run_summary(
     format: SummaryFormat,
 ) -> Result<ExitCode> {
     let otel = if let Some(ep) = &session.otel_endpoint {
-        Some(crate::engine::otel::OtelExporter::new(ep)?)
+        Some(crate::engine::otel::OtelExporter::new(
+            ep,
+            session.allow_insecure_webhooks,
+        )?)
     } else {
         None
     };
@@ -126,7 +147,14 @@ pub async fn run_summary(
         session.probe_headers,
         session.probe_drm,
         tx,
-    )?;
+    )?
+    .with_diagnostics(DiagnosticOpts {
+        tr101290: session.tr101290,
+        probe_sei: session.probe_sei,
+        simulate_player: session.simulate_player,
+        throttle_kbps: session.throttle_kbps,
+        simulated_rtt_ms: session.simulated_rtt_ms,
+    });
     if let Some(exporter) = otel.clone() {
         poller = poller.with_otel(exporter);
     }
@@ -164,6 +192,10 @@ pub async fn run_summary(
     let mut rebuffer_probability_pct: Option<u8> = None;
     let mut subtitle_drift_ms: Option<i64> = None;
     let mut pssh_systems: Option<Vec<String>> = None;
+    let mut tr101290: Option<Tr101290Report> = None;
+    let mut synthetic_qoe: Option<SyntheticQoeSnapshot> = None;
+    let mut sei_metadata: Option<SeiProbeResult> = None;
+    let mut ingest_stats: Option<IngestStats> = None;
 
     let deadline = Instant::now() + Duration::from_secs(timeout_secs.max(1));
     while Instant::now() < deadline {
@@ -195,6 +227,10 @@ pub async fn run_summary(
                         last_http_status = Some(s.http_status);
                     }
                 }
+                StreamEvent::Tr101290(r) => tr101290 = Some(r),
+                StreamEvent::SyntheticQoe(q) => synthetic_qoe = Some(q),
+                StreamEvent::SeiProbe(s) => sei_metadata = Some(s),
+                StreamEvent::Ingest(s) => ingest_stats = Some(s),
                 StreamEvent::Finding(f) => {
                     if f.category == DiagCategory::Stalling {
                         origin_stalls = origin_stalls.saturating_add(1);
@@ -282,6 +318,10 @@ pub async fn run_summary(
                 rebuffer_probability_pct,
                 subtitle_drift_ms,
                 pssh_systems,
+                tr101290,
+                synthetic_qoe,
+                sei_metadata,
+                ingest_stats,
             );
             println!("{}", serde_json::to_string(&payload)?);
         }
@@ -307,6 +347,94 @@ pub async fn run_summary(
                 critical_rfc_errors,
                 redact_url(&url)
             );
+        }
+    }
+
+    Ok(if ok {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::from(1)
+    })
+}
+
+pub async fn run_ingest_summary(
+    url: String,
+    timeout_secs: u64,
+    format: SummaryFormat,
+    allow_insecure: bool,
+) -> Result<ExitCode> {
+    let (tx, mut rx) = mpsc::channel(EVENT_CHANNEL_CAPACITY);
+    let url_clone = url.clone();
+    let handle = tokio::spawn(async move {
+        crate::engine::ingest_probe::run_ingest_poller(url_clone, allow_insecure, tx).await;
+    });
+
+    let mut ingest_stats: Option<IngestStats> = None;
+    let mut errors = 0u32;
+    let deadline = Instant::now() + Duration::from_secs(timeout_secs.max(1));
+    while Instant::now() < deadline {
+        let left = deadline.saturating_duration_since(Instant::now());
+        match timeout(left, rx.recv()).await {
+            Ok(Some(StreamEvent::Ingest(s))) => ingest_stats = Some(s),
+            Ok(Some(StreamEvent::Error(_))) => errors = errors.saturating_add(1),
+            Ok(Some(_)) => {}
+            Ok(None) | Err(_) => break,
+        }
+    }
+    handle.abort();
+
+    let ok = ingest_stats
+        .as_ref()
+        .and_then(|s| s.connected)
+        .unwrap_or(false)
+        && errors == 0;
+
+    match format {
+        SummaryFormat::Json => {
+            let health = if ok {
+                HealthReport::perfect()
+            } else {
+                HealthReport {
+                    score: 40,
+                    label: "Poor".into(),
+                    deductions: vec!["Ingest probe failed".into()],
+                }
+            };
+            let payload = build_summary_json(
+                url,
+                ok,
+                &health,
+                if ok { "LIVE" } else { "ERROR" },
+                &LatencyState::Unknown,
+                "INGEST".into(),
+                None,
+                None,
+                0,
+                0,
+                errors,
+                false,
+                channel_dropped_total(),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                ingest_stats,
+            );
+            println!("{}", serde_json::to_string(&payload)?);
+        }
+        SummaryFormat::Text => {
+            let verdict = if ok { "PASS" } else { "FAIL" };
+            println!("{verdict}  ingest  url={}", redact_url(&url));
+            if let Some(s) = &ingest_stats {
+                println!(
+                    "  protocol={} rtt={:?}ms loss={:?}% bw={:?}Mbps",
+                    s.protocol, s.rtt_ms, s.packet_loss_pct, s.bandwidth_mbps
+                );
+            }
         }
     }
 
@@ -354,6 +482,10 @@ mod tests {
             Some(12),
             None,
             Some(vec!["Widevine".into()]),
+            None,
+            None,
+            None,
+            None,
         );
         let v = serde_json::to_value(&payload).unwrap();
         assert_eq!(v["schema"], SUMMARY_SCHEMA);

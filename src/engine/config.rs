@@ -121,6 +121,11 @@ mod tests {
             alert_on: "stall".into(),
             allow_insecure_webhooks: false,
             otel_endpoint: None,
+            tr101290: false,
+            probe_sei: false,
+            simulate_player: false,
+            throttle_kbps: None,
+            simulated_rtt_ms: None,
         };
         apply_section(
             &mut s,

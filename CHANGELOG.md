@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.1.0
+
+- TR 101 290 P1/P2 MPEG-TS engine (`--tr101290`)
+- Synthetic QoE player sim (`--simulate-player`, `--throttle-kbps`, `--simulated-rtt-ms`)
+- SEI/HDR/CEA probe (`--probe-sei`)
+- SRT/RTMP ingest routing and `ingest_stats` in summary JSON
+- Summary schema v3: `tr101290`, `synthetic_qoe`, `sei_metadata`, `ingest_stats`
+- Hermetic E2E harness: `tests/e2e_verify.sh`, native `tests/e2e_verify.ps1`, Python mock (HTTP/SRT/RTMP)
+- SSRF: pinned OTLP/DRM GET, ingest target validation, fMP4 box size cap, OTEL span buffer bound
+- Prometheus: `streamtop_qoe_rebuffer_risk`, `streamtop_tr101290_p1/p2_violations_total`
+- TUI overlays: `t` TR101290, `s` SEI, `y` QoE
+
 ## 1.0.1
 
 - CI: skip crates.io publish when the version is already on the index

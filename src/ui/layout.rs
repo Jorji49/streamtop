@@ -11,6 +11,15 @@ use crate::models::{
 };
 use crate::ui::app::App;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DiagnosticPanel {
+    #[default]
+    None,
+    Tr101290,
+    Sei,
+    Qoe,
+}
+
 fn rounded(title: impl Into<String>) -> Block<'static> {
     Block::default()
         .borders(Borders::ALL)
@@ -396,6 +405,26 @@ fn draw_segment_panel(frame: &mut Frame, app: &App, area: Rect) {
                 lines.push(Line::from(format!(" Audio          : {audio}")));
             }
         }
+        let sei = &app.sei_probe;
+        if sei.cea608_present || sei.cea708_present || sei.hdr10_present || sei.hlg_present {
+            let mut badges = Vec::new();
+            if sei.cea608_present {
+                badges.push("CEA-608");
+            }
+            if sei.cea708_present {
+                badges.push("CEA-708");
+            }
+            if sei.hdr10_present {
+                badges.push("HDR10");
+            }
+            if sei.hlg_present {
+                badges.push("HLG");
+            }
+            lines.push(Line::from(format!(
+                " SEI/Captions   : {}",
+                badges.join(" · ")
+            )));
+        }
         lines
     } else {
         vec![Line::from(" No segment sample yet…")]
@@ -745,6 +774,9 @@ pub fn draw_help(frame: &mut Frame, area: Rect, picker_context: bool) {
             Line::from("  Tab          Channel switcher overlay"),
             Line::from("  Esc          Back to channel picker"),
             Line::from("  r            Reset metrics / ring buffers"),
+            Line::from("  t            TR 101 290 compliance table"),
+            Line::from("  s            SEI / HDR / caption probe"),
+            Line::from("  y            Synthetic QoE simulator"),
             Line::from("  ?            Help (any key closes)"),
             Line::from("  j/k ↑↓       Scroll event log"),
             Line::from("  q / Ctrl+C   Quit (restore terminal)"),
@@ -766,6 +798,139 @@ pub fn draw_help(frame: &mut Frame, area: Rect, picker_context: bool) {
             )
             .alignment(Alignment::Left),
         popup,
+    );
+}
+
+pub fn draw_diagnostic_panel(frame: &mut Frame, area: Rect, app: &App) {
+    let popup = centered_rect(area, 70, 60);
+    frame.render_widget(Clear, popup);
+    match app.diagnostic_panel {
+        DiagnosticPanel::Tr101290 => draw_tr101290_panel(frame, popup, app),
+        DiagnosticPanel::Sei => draw_sei_panel(frame, popup, app),
+        DiagnosticPanel::Qoe => draw_qoe_panel(frame, popup, app),
+        DiagnosticPanel::None => {}
+    }
+}
+
+fn draw_tr101290_panel(frame: &mut Frame, area: Rect, app: &App) {
+    let r = &app.tr101290;
+    let header = Row::new(vec!["Pri", "Code", "Message"]).style(
+        Style::default()
+            .fg(Color::LightYellow)
+            .add_modifier(Modifier::BOLD),
+    );
+    let mut rows: Vec<Row> = r
+        .checks
+        .iter()
+        .map(|c| {
+            Row::new(vec![
+                Cell::from(c.priority.to_string()),
+                Cell::from(c.code.clone()),
+                Cell::from(truncate(&c.message, 48)),
+            ])
+        })
+        .collect();
+    if rows.is_empty() {
+        rows.push(Row::new(vec![
+            Cell::from("-"),
+            Cell::from("OK"),
+            Cell::from("No P1/P2 violations in probe window"),
+        ]));
+    }
+    let summary = format!(
+        "P1={} P2={} sync={} cc={}",
+        r.p1_violations, r.p2_violations, r.sync_errors, r.cc_errors,
+    );
+    let table = Table::new(
+        rows,
+        [
+            Constraint::Length(4),
+            Constraint::Length(12),
+            Constraint::Min(20),
+        ],
+    )
+    .header(header)
+    .block(rounded(format!(" TR 101 290 Compliance ({summary}) ")));
+    frame.render_widget(table, area);
+}
+
+fn draw_sei_panel(frame: &mut Frame, area: Rect, app: &App) {
+    let s = &app.sei_probe;
+    let lines = vec![
+        Line::from(format!(
+            " CEA-608        : {}",
+            if s.cea608_present { "yes" } else { "no" }
+        )),
+        Line::from(format!(
+            " CEA-708        : {}",
+            if s.cea708_present { "yes" } else { "no" }
+        )),
+        Line::from(format!(
+            " HDR10 (ST2086) : {}",
+            if s.hdr10_present { "yes" } else { "no" }
+        )),
+        Line::from(format!(
+            " HLG (VUI)      : {}",
+            if s.hlg_present { "yes" } else { "no" }
+        )),
+        Line::from(format!(
+            " MaxCLL/MaxFALL : {}/{}",
+            s.max_cll
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "-".into()),
+            s.max_fall
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "-".into()),
+        )),
+        Line::from(format!(
+            " Caption lang   : {}",
+            s.caption_language.as_deref().unwrap_or("-")
+        )),
+        Line::from(format!(" NAL units      : {}", s.nal_units_scanned)),
+    ];
+    frame.render_widget(
+        Paragraph::new(lines).block(rounded(" SEI / HDR / Captions ")),
+        area,
+    );
+}
+
+fn draw_qoe_panel(frame: &mut Frame, area: Rect, app: &App) {
+    let q = &app.synthetic_qoe;
+    let lines = vec![
+        Line::from(format!(" TDR            : {:.3}", q.tdr)),
+        Line::from(format!(" Rebuffer risk  : {} / 100", q.rebuffer_risk_score)),
+        Line::from(format!(
+            " TTFF           : {} ms",
+            q.ttff_ms
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "-".into())
+        )),
+        Line::from(format!(
+            " Selected ABR   : {} bps",
+            q.selected_bitrate_bps
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "-".into())
+        )),
+        Line::from(format!(
+            " Buffer 2s/4s/6s: {}% / {}% / {}%",
+            q.buffer_2s_rebuffer_pct, q.buffer_4s_rebuffer_pct, q.buffer_6s_rebuffer_pct
+        )),
+        Line::from(format!(
+            " Throttle       : {} kbps",
+            q.throttle_kbps
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "-".into())
+        )),
+        Line::from(format!(
+            " Simulated RTT  : {} ms",
+            q.simulated_rtt_ms
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "-".into())
+        )),
+    ];
+    frame.render_widget(
+        Paragraph::new(lines).block(rounded(" Synthetic Player QoE ")),
+        area,
     );
 }
 
