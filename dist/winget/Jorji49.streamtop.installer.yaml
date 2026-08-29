@@ -13,6 +13,6 @@ ReleaseDate: 2026-08-29
 Installers:
   - Architecture: x64
     InstallerUrl: https://github.com/Jorji49/streamtop/releases/download/v1.3.0/streamtop-windows-x86_64-1.3.0.zip
-    InstallerSha256: 47BE8CD903F9DAD53C5D03E08A45C34D1404E861C82EA83DE45B8D2E4CE976FE
+    InstallerSha256: 932FF9DC796F29063711286E8E2317251D624261ACF8F620E61978D618E52CEA
 ManifestType: installer
 ManifestVersion: 1.6.0
