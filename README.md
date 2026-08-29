@@ -9,9 +9,7 @@
 
 Terminal diagnostics for live **HLS**, **DASH**, and **IPTV** streams.
 
-<p align="center">
-  <img width="700" alt="streamtop demo" src="https://github.com/user-attachments/assets/6b5428ae-a7ea-484b-8f4f-308953a142a7" />
-</p>
+<img width="1200" alt="demo" src="https://github.com/user-attachments/assets/a98017bd-429c-43fb-8a14-2c13fb4257cf" />
 
 Latest release: **[v1.0.1](https://github.com/Jorji49/streamtop/releases/tag/v1.0.1)** (`streamtop --version`).
 
