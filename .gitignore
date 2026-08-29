@@ -15,6 +15,7 @@
 /release-assets/
 /verify-hashes/
 /check-rel/
+/ci-artifacts/
 diagnostics/
 *.log
 audit_report.*

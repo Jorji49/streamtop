@@ -516,19 +516,18 @@ pub async fn run_prometheus(
         simulated_rtt_ms: session.simulated_rtt_ms,
     });
     if let Some(hook_url) = session.webhook_url.clone() {
-        if let Ok(alerts) = crate::engine::webhook::AlertKind::parse_list(&session.alert_on) {
-            let (hook_tx, hook_rx) = mpsc::channel(EVENT_CHANNEL_CAPACITY);
-            poller = poller.with_webhook_tx(hook_tx);
-            crate::engine::webhook::spawn_webhook_listener(
-                crate::engine::webhook::WebhookConfig {
-                    url: hook_url,
-                    alerts,
-                    allow_insecure: session.allow_insecure_webhooks,
-                },
-                hook_rx,
-                url,
-            );
-        }
+        let alerts = crate::engine::webhook::AlertKind::parse_list(&session.alert_on)?;
+        let (hook_tx, hook_rx) = mpsc::channel(EVENT_CHANNEL_CAPACITY);
+        poller = poller.with_webhook_tx(hook_tx);
+        crate::engine::webhook::spawn_webhook_listener(
+            crate::engine::webhook::WebhookConfig {
+                url: hook_url,
+                alerts,
+                allow_insecure: session.allow_insecure_webhooks,
+            },
+            hook_rx,
+            url,
+        );
     }
 
     tokio::spawn(async move {

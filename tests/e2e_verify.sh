@@ -85,6 +85,23 @@ wait_mock() {
   return 1
 }
 
+wait_metrics() {
+  local url="$1"
+  local deadline=$((SECONDS + 30))
+  while [[ $SECONDS -lt $deadline ]]; do
+    if ! kill -0 "$PROM_PID" 2>/dev/null; then
+      return 1
+    fi
+    local code
+    code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 2 "$url" || true)
+    if [[ "$code" == "200" || "$code" == "401" ]]; then
+      return 0
+    fi
+    sleep 0.5
+  done
+  return 1
+}
+
 log "Building streamtop release binary"
 cargo build --release --quiet
 STREAMTOP="$ROOT/target/release/streamtop"
@@ -201,24 +218,44 @@ else
   fail "metadata webhook should be blocked"
 fi
 
+log "Invalid alert list rejection"
+set +e
+"$STREAMTOP" "$HLS_URL" --webhook "${BASE}/webhook" --allow-insecure-webhooks \
+  --alert-on typo --timeout 1 >/dev/null 2>&1
+RC=$?
+set -e
+[[ "$RC" -ne 0 ]] && pass "invalid --alert-on rejected" || fail "invalid --alert-on accepted"
+
+log "VOD crawl and incident exports"
+"$STREAMTOP" --vod "$HLS_URL" --summary --summary-format json >/dev/null 2>&1 \
+  && pass "VOD crawl command" || fail "VOD crawl command"
+HAR="$TMP/incident.har"
+"$STREAMTOP" "$HLS_URL" --export-har "$HAR" --timeout 2 >/dev/null 2>&1 || true
+[[ -s "$HAR" ]] && pass "HAR export" || fail "HAR export"
+
 # --- 7. Prometheus auth + metrics ---
 log "Prometheus metrics auth"
+METRICS_PORT=$((20000 + RANDOM % 20000))
+METRICS_URL="http://127.0.0.1:${METRICS_PORT}/metrics"
 "$STREAMTOP" "$HLS_URL" \
   --simulate-player --tr101290 \
-  --prometheus 9184 --metrics-token "test-token" \
+  --prometheus "$METRICS_PORT" --metrics-token "test-token" \
   --probe-headers >/dev/null 2>&1 &
 PROM_PID=$!
-sleep 4
+wait_metrics "$METRICS_URL" || {
+  fail "metrics endpoint not ready"
+  exit 1
+}
 
-CODE=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:9184/metrics")
+CODE=$(curl -s -o /dev/null -w '%{http_code}' "$METRICS_URL")
 if [[ "$CODE" == "401" ]]; then
   pass "metrics 401 without token"
 else
   fail "expected metrics 401 without token, got $CODE"
 fi
 
-METRICS=$(curl -s -H "Authorization: Bearer test-token" "http://127.0.0.1:9184/metrics")
-CODE=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer test-token" "http://127.0.0.1:9184/metrics")
+METRICS=$(curl -s -H "Authorization: Bearer test-token" "$METRICS_URL")
+CODE=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer test-token" "$METRICS_URL")
 if [[ "$CODE" == "200" ]]; then
   pass "metrics 200 with bearer token"
 else

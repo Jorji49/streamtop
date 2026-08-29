@@ -133,7 +133,7 @@ pub async fn run_summary(
     let otel = if let Some(ep) = &session.otel_endpoint {
         Some(crate::engine::otel::OtelExporter::new(
             ep,
-            session.allow_insecure_webhooks,
+            session.allow_insecure_otel,
         )?)
     } else {
         None
@@ -159,19 +159,18 @@ pub async fn run_summary(
         poller = poller.with_otel(exporter);
     }
     if let Some(hook_url) = session.webhook_url.clone() {
-        if let Ok(alerts) = crate::engine::webhook::AlertKind::parse_list(&session.alert_on) {
-            let (hook_tx, hook_rx) = mpsc::channel(EVENT_CHANNEL_CAPACITY);
-            poller = poller.with_webhook_tx(hook_tx);
-            crate::engine::webhook::spawn_webhook_listener(
-                crate::engine::webhook::WebhookConfig {
-                    url: hook_url,
-                    alerts,
-                    allow_insecure: session.allow_insecure_webhooks,
-                },
-                hook_rx,
-                url.clone(),
-            );
-        }
+        let alerts = crate::engine::webhook::AlertKind::parse_list(&session.alert_on)?;
+        let (hook_tx, hook_rx) = mpsc::channel(EVENT_CHANNEL_CAPACITY);
+        poller = poller.with_webhook_tx(hook_tx);
+        crate::engine::webhook::spawn_webhook_listener(
+            crate::engine::webhook::WebhookConfig {
+                url: hook_url,
+                alerts,
+                allow_insecure: session.allow_insecure_webhooks,
+            },
+            hook_rx,
+            url.clone(),
+        );
     }
     let handle = tokio::spawn(async move {
         poller.run().await;
@@ -497,6 +496,55 @@ mod tests {
         assert!(v.get("health_score").is_some());
         assert!(!v["url"].as_str().unwrap().contains("secret"));
         assert!(v["url"].as_str().unwrap().contains("[REDACTED]"));
+    }
+
+    #[test]
+    fn summary_json_matches_checked_in_schema_contract() {
+        let schema: serde_json::Value =
+            serde_json::from_str(include_str!("../../schemas/summary.v1.json")).unwrap();
+        assert_eq!(schema["title"], SUMMARY_SCHEMA);
+        assert_eq!(schema["properties"]["schema_version"]["const"], 3);
+
+        let health = HealthReport::perfect();
+        let payload = build_summary_json(
+            "https://example.test/live.m3u8".into(),
+            true,
+            &health,
+            "LIVE",
+            &LatencyState::Measured(1200),
+            "MISS".into(),
+            Some(80),
+            Some(206),
+            0,
+            0,
+            0,
+            true,
+            0,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
+        let value = serde_json::to_value(payload).unwrap();
+        let required = schema["required"].as_array().unwrap();
+        for key in required {
+            let key = key.as_str().unwrap();
+            assert!(
+                value.get(key).is_some(),
+                "schema-required field missing: {key}"
+            );
+        }
+        for key in value.as_object().unwrap().keys() {
+            assert!(
+                schema["properties"].get(key).is_some(),
+                "serialized field missing from schema: {key}"
+            );
+        }
     }
 
     #[test]

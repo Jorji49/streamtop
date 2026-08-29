@@ -155,6 +155,14 @@ struct Cli {
     #[arg(long = "allow-insecure-webhooks")]
     allow_insecure_webhooks: bool,
 
+    /// Allow OTLP targets on private/link-local/metadata hosts (tests only)
+    #[arg(long = "allow-insecure-otel")]
+    allow_insecure_otel: bool,
+
+    /// Allow ingest targets on private/link-local/metadata hosts (tests only)
+    #[arg(long = "allow-insecure-ingest")]
+    allow_insecure_ingest: bool,
+
     /// ETSI TR 101 290 P1/P2 MPEG-TS compliance probe
     #[arg(long = "tr101290")]
     tr101290: bool,
@@ -213,6 +221,8 @@ async fn main() -> Result<ExitCode> {
             webhook_url: None,
             alert_on: "stall,shi_below_70,http_5xx".into(),
             allow_insecure_webhooks: false,
+            allow_insecure_otel: false,
+            allow_insecure_ingest: false,
             otel_endpoint: None,
             tr101290: false,
             probe_sei: false,
@@ -253,6 +263,18 @@ async fn main() -> Result<ExitCode> {
             "warning: --allow-insecure-webhooks enables private/link-local/metadata webhook targets"
         );
     }
+    if cli.allow_insecure_otel {
+        session.allow_insecure_otel = true;
+        eprintln!(
+            "warning: --allow-insecure-otel enables private/link-local/metadata OTLP targets"
+        );
+    }
+    if cli.allow_insecure_ingest {
+        session.allow_insecure_ingest = true;
+        eprintln!(
+            "warning: --allow-insecure-ingest enables private/link-local/metadata ingest targets"
+        );
+    }
     if cli.otel_endpoint.is_some() {
         session.otel_endpoint = cli.otel_endpoint.clone();
     }
@@ -278,6 +300,8 @@ async fn main() -> Result<ExitCode> {
         return Ok(exit);
     }
     if let Some(hook) = &session.webhook_url {
+        streamtop::engine::webhook::AlertKind::parse_list(&session.alert_on)
+            .wrap_err("invalid --alert-on")?;
         streamtop::engine::webhook::validate_webhook_url(hook, session.allow_insecure_webhooks)
             .wrap_err("webhook SSRF check failed")?;
     }
@@ -330,7 +354,7 @@ async fn main() -> Result<ExitCode> {
                 input_url.to_string(),
                 cli.timeout_secs,
                 cli.summary_format.into(),
-                session.allow_insecure_webhooks,
+                session.allow_insecure_ingest,
             )
             .await?
         } else {

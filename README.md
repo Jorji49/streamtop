@@ -38,7 +38,7 @@ Use it to debug CDN issues, validate encoder output, compare origin vs edge, run
 
 * **HLS** (`.m3u8`): live, LL-HLS parts, PRELOAD-HINT, `#EXT-X-PROGRAM-DATE-TIME`, media playlists
 * **MPEG-DASH** (`.mpd`): live and VOD, ServiceDescription latency, UTCTiming, ContentProtection / PSSH
-* **IPTV** (`.m3u`): channel picker, search, playlist audit to JSON/CSV
+* **IPTV / catalogs** (`.m3u`, `.json`, `.yaml`): channel picker, search, playlist audit to JSON/CSV
 * **Ingest**: SRT and RTMP URL routing with ingest stats in summary JSON
 
 ### Wire and container probes
@@ -62,7 +62,7 @@ Use it to debug CDN issues, validate encoder output, compare origin vs edge, run
 ### Export and observability
 
 * **Incident export**: redacted curl, `.har`, diagnostic JSON (`Space` / `--export-har`)
-* **Headless CI**: `--summary` JSON schema v3, `--timeout`, PASS/FAIL rules
+* **Headless CI**: stable `streamtop.summary.v1` JSON contract (field version 3), `--timeout`, PASS/FAIL rules
 * **Prometheus** `/metrics` on `:9184` (Bearer token required on non-loopback bind)
 * **OpenTelemetry**: OTLP/HTTP trace export for DNS, TLS, TTFB, segment spans
 * **Grafana**: `--export-grafana` -> dashboard JSON with G2G and QoE panels
@@ -99,12 +99,6 @@ brew tap Jorji49/tap
 brew install streamtop
 ```
 
-Formula in this repo:
-
-```bash
-brew install --formula https://raw.githubusercontent.com/Jorji49/streamtop/main/Formula/streamtop.rb
-```
-
 ### Arch (binary package)
 
 AUR submission is not listed yet. Use the packaging mirror:
@@ -120,7 +114,7 @@ Source: `dist/aur/PKGBUILD`.
 ### Docker
 
 ```bash
-docker run -it --rm ghcr.io/jorji49/streamtop:v1.1.1 <URL>
+docker run -it --rm ghcr.io/jorji49/streamtop:v1.1.2 <URL>
 docker run -it --rm ghcr.io/jorji49/streamtop:latest <URL>
 ```
 
@@ -129,7 +123,7 @@ Metrics on a non-loopback bind require a token:
 ```bash
 docker run --rm -p 9184:9184 \
   -e STREAMTOP_METRICS_TOKEN=change-me \
-  ghcr.io/jorji49/streamtop:v1.1.1 \
+  ghcr.io/jorji49/streamtop:v1.1.2 \
   <URL> --prometheus --metrics-bind 0.0.0.0 \
   --metrics-token "$STREAMTOP_METRICS_TOKEN"
 ```
@@ -200,11 +194,11 @@ streamtop <URL> --webhook http://127.0.0.1:9999/hook --allow-insecure-webhooks
 # Channel list audit -> audit_report.json / .csv
 streamtop ./channels.m3u --audit
 
-# Headless PASS/FAIL (CI). Schema: schemas/summary.v1.json
+# Headless PASS/FAIL (CI). Stable contract: streamtop.summary.v1; field version: 3
 streamtop <URL> --summary --summary-format json --timeout 10
 
 # VOD playlist crawl
-streamtop <URL> --vod --summary
+streamtop --vod <URL> --summary
 
 # OTEL trace export
 streamtop <URL> --otel-endpoint http://127.0.0.1:4318
@@ -249,6 +243,11 @@ Non-loopback `--metrics-bind` requires a non-empty `--metrics-token` or `STREAMT
 | `j` / `k` | Scroll log or channel list |
 
 Compare mode: `Space` pause/resume, `d` detail, `l` log focus, `c` curl, `h` HAR, `Tab` switch pane.
+`e` also exports HAR in compare mode. Prometheus mode is not available for SRT/RTMP ingest URLs; use the TUI or `--summary`.
+
+## Headless verdict
+
+`--summary` returns PASS only when the stream is LIVE, SHI is at least 85, no critical RFC errors or origin stalls were observed, the last HTTP status is 200/206, and at least one segment was fetched. Any failed condition returns FAIL and a non-zero exit code. The schema file is `schemas/summary.v1.json`; `schema_version` is currently `3`.
 
 ## FAQ
 

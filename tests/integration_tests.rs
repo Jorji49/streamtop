@@ -26,6 +26,45 @@ fn load(name: &str) -> Vec<u8> {
 }
 
 #[test]
+fn cli_help_lists_supported_operational_flags() {
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_streamtop"))
+        .arg("--help")
+        .output()
+        .expect("run --help");
+    assert!(output.status.success());
+    let help = String::from_utf8(output.stdout).expect("utf8 help");
+    for flag in [
+        "--summary",
+        "--vod",
+        "--tr101290",
+        "--probe-sei",
+        "--simulate-player",
+        "--allow-insecure-otel",
+        "--allow-insecure-ingest",
+    ] {
+        assert!(help.contains(flag), "missing help flag: {flag}");
+    }
+}
+
+#[test]
+fn cli_rejects_unknown_alert_kind() {
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_streamtop"))
+        .args([
+            "https://example.com/live.m3u8",
+            "--webhook",
+            "https://hooks.example.test/streamtop",
+            "--alert-on",
+            "typo",
+            "--summary",
+        ])
+        .output()
+        .expect("run invalid alert");
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("invalid --alert-on"), "{stderr}");
+}
+
+#[test]
 fn router_hls_master_is_single_stream() {
     let body = load("hls_master.m3u8");
     let parsed = detect_and_parse("https://cdn.example/master.m3u8", &body, None).unwrap();
@@ -170,6 +209,8 @@ async fn vod_scans_mock_hls_playlist() {
         webhook_url: None,
         alert_on: String::new(),
         allow_insecure_webhooks: false,
+        allow_insecure_otel: false,
+        allow_insecure_ingest: false,
         otel_endpoint: None,
         tr101290: false,
         probe_sei: false,

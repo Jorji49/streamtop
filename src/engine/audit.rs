@@ -2,6 +2,7 @@
 
 use std::fs::File;
 use std::io::Write;
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -29,6 +30,16 @@ pub async fn run_audit(
     channels: Vec<ChannelEntry>,
     headers: Vec<String>,
     user_agent: Option<String>,
+) -> Result<AuditReport> {
+    run_audit_to(source_label, channels, headers, user_agent, Path::new(".")).await
+}
+
+async fn run_audit_to(
+    source_label: &str,
+    channels: Vec<ChannelEntry>,
+    headers: Vec<String>,
+    user_agent: Option<String>,
+    output_dir: &Path,
 ) -> Result<AuditReport> {
     let client = Arc::new(build_audit_http_client(&headers, user_agent)?);
     let sem = Arc::new(Semaphore::new(AUDIT_CONCURRENCY));
@@ -97,8 +108,8 @@ pub async fn run_audit(
     };
 
     print_matrix(&report)?;
-    write_json(&report)?;
-    write_csv(&report)?;
+    write_json(&report, &output_dir.join(AUDIT_REPORT_JSON))?;
+    write_csv(&report, &output_dir.join(AUDIT_REPORT_CSV))?;
     Ok(report)
 }
 
@@ -354,7 +365,7 @@ fn print_matrix(report: &AuditReport) -> Result<()> {
         Color::Cyan,
         &format!(
             "Audit  |  {}  |  {}",
-            report.source,
+            crate::engine::redact::redact_url(&report.source),
             report.captured_at.to_rfc3339()
         ),
     )?;
@@ -395,7 +406,7 @@ fn print_matrix(report: &AuditReport) -> Result<()> {
         color_line(color, row.verdict.as_str())?;
         if let Some(err) = &row.error {
             if row.verdict != AuditVerdict::Live {
-                println!("     {err}");
+                println!("     {}", crate::engine::redact::redact_text(err));
             }
         }
     }
@@ -447,7 +458,7 @@ fn truncate(s: &str, max: usize) -> String {
     }
 }
 
-fn write_json(report: &AuditReport) -> Result<()> {
+fn write_json(report: &AuditReport, path: &Path) -> Result<()> {
     let mut report = report.clone();
     report.source = crate::engine::redact::redact_url(&report.source);
     for ch in &mut report.channels {
@@ -458,13 +469,12 @@ fn write_json(report: &AuditReport) -> Result<()> {
     }
     let json = serde_json::to_string_pretty(&report).wrap_err("audit json")?;
     let json = crate::engine::redact::redact_text(&json);
-    std::fs::write(AUDIT_REPORT_JSON, json)
-        .wrap_err_with(|| format!("write {AUDIT_REPORT_JSON}"))?;
+    std::fs::write(path, json).wrap_err_with(|| format!("write {}", path.display()))?;
     Ok(())
 }
 
-fn write_csv(report: &AuditReport) -> Result<()> {
-    let mut f = File::create(AUDIT_REPORT_CSV).wrap_err("audit csv")?;
+fn write_csv(report: &AuditReport, path: &Path) -> Result<()> {
+    let mut f = File::create(path).wrap_err("audit csv")?;
     writeln!(
         f,
         "name,group,url,verdict,http_status,protocol,cdn,ttfb_ms,bitrate_profiles,has_pdt,error"
@@ -566,12 +576,9 @@ seg.ts
         }];
 
         let dir = unique_tmpdir();
-        let prev = std::env::current_dir().unwrap();
-        std::env::set_current_dir(&dir).unwrap();
-        let report = run_audit("local-mock", channels, vec![], None)
+        let report = run_audit_to("local-mock", channels, vec![], None, &dir)
             .await
             .expect("audit");
-        std::env::set_current_dir(prev).unwrap();
         let _ = std::fs::remove_dir_all(&dir);
         handle.abort();
 
@@ -611,11 +618,9 @@ seg.ts
             }],
         };
         let dir = unique_tmpdir();
-        let prev = std::env::current_dir().unwrap();
-        std::env::set_current_dir(&dir).unwrap();
-        write_json(&report).unwrap();
-        let raw = std::fs::read_to_string(AUDIT_REPORT_JSON).unwrap();
-        std::env::set_current_dir(prev).unwrap();
+        let path = dir.join(AUDIT_REPORT_JSON);
+        write_json(&report, &path).unwrap();
+        let raw = std::fs::read_to_string(path).unwrap();
         let _ = std::fs::remove_dir_all(&dir);
         assert!(!raw.contains("sekrit"));
         assert!(!raw.contains("Bearer xyz"));

@@ -7,45 +7,13 @@ import json
 import sys
 from pathlib import Path
 
-
-def basic_validate(doc: dict) -> list[str]:
-    errs: list[str] = []
-    required = [
-        "schema",
-        "schema_version",
-        "verdict",
-        "ok",
-        "health_score",
-        "health_label",
-        "status",
-        "latency",
-        "cdn",
-        "origin_stalls",
-        "critical_rfc_errors",
-        "url",
-        "errors",
-        "saw_segment",
-    ]
-    for key in required:
-        if key not in doc:
-            errs.append(f"missing required field: {key}")
-    if doc.get("schema") != "streamtop.summary.v1":
-        errs.append("schema must be streamtop.summary.v1")
-    if doc.get("verdict") not in ("PASS", "FAIL"):
-        errs.append("invalid verdict")
-    if doc.get("status") not in ("LIVE", "DEGRADED", "ERROR"):
-        errs.append("invalid status")
-    score = doc.get("health_score")
-    if not isinstance(score, int) or not (0 <= score <= 100):
-        errs.append("health_score out of range")
-    return errs
-
-
 def jsonschema_validate(doc: dict, schema_path: Path) -> list[str]:
     try:
         import jsonschema  # type: ignore
-    except ImportError:
-        return basic_validate(doc)
+    except ImportError as exc:
+        raise RuntimeError(
+            "jsonschema is required; install tests/e2e/requirements.txt"
+        ) from exc
     schema = json.loads(schema_path.read_text(encoding="utf-8"))
     validator = jsonschema.Draft202012Validator(schema)
     return [e.message for e in validator.iter_errors(doc)]

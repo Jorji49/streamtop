@@ -67,6 +67,10 @@ pub struct SessionOpts {
     pub alert_on: String,
     /// Bypass webhook SSRF checks (local tests only).
     pub allow_insecure_webhooks: bool,
+    /// Bypass OTLP destination checks (local tests only).
+    pub allow_insecure_otel: bool,
+    /// Bypass ingest destination checks (local tests only).
+    pub allow_insecure_ingest: bool,
     /// OTLP trace export endpoint (e.g. http://127.0.0.1:4318).
     pub otel_endpoint: Option<String>,
     /// ETSI TR 101 290 P1/P2 MPEG-TS compliance (`--tr101290`).
@@ -233,7 +237,7 @@ impl App {
         self.active_url = url.clone();
 
         if crate::engine::ingest_probe::is_ingest_url(&url) {
-            let allow_insecure = self.session.allow_insecure_webhooks;
+            let allow_insecure = self.session.allow_insecure_ingest;
             self.poller = Some(tokio::spawn(async move {
                 crate::engine::ingest_probe::run_ingest_poller(url, allow_insecure, tx).await;
             }));
@@ -259,21 +263,18 @@ impl App {
         });
 
         if let Some(hook_url) = self.session.webhook_url.clone() {
-            if let Ok(alerts) =
-                crate::engine::webhook::AlertKind::parse_list(&self.session.alert_on)
-            {
-                let (hook_tx, hook_rx) = mpsc::channel(EVENT_CHANNEL_CAPACITY);
-                poller = poller.with_webhook_tx(hook_tx);
-                crate::engine::webhook::spawn_webhook_listener(
-                    crate::engine::webhook::WebhookConfig {
-                        url: hook_url,
-                        alerts,
-                        allow_insecure: self.session.allow_insecure_webhooks,
-                    },
-                    hook_rx,
-                    url,
-                );
-            }
+            let alerts = crate::engine::webhook::AlertKind::parse_list(&self.session.alert_on)?;
+            let (hook_tx, hook_rx) = mpsc::channel(EVENT_CHANNEL_CAPACITY);
+            poller = poller.with_webhook_tx(hook_tx);
+            crate::engine::webhook::spawn_webhook_listener(
+                crate::engine::webhook::WebhookConfig {
+                    url: hook_url,
+                    alerts,
+                    allow_insecure: self.session.allow_insecure_webhooks,
+                },
+                hook_rx,
+                url,
+            );
         }
 
         self.poller = Some(tokio::spawn(async move {
