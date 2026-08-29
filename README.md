@@ -1,10 +1,10 @@
 # streamtop
 
-[![Awesome Ratatui](https://img.shields.io/badge/awesome-ratatui-ff4400?logo=rust&logoColor=white)](https://github.com/ratatui/awesome-ratatui)
-[![Crates.io](https://img.shields.io/crates/v/streamtop.svg)](https://crates.io/crates/streamtop)
-[![Release](https://img.shields.io/github/v/release/Jorji49/streamtop?label=release)](https://github.com/Jorji49/streamtop/releases/latest)
-[![Downloads](https://img.shields.io/crates/d/streamtop.svg)](https://crates.io/crates/streamtop)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Awesome Ratatui](https://img.shields.io/badge/awesome-ratatui-e43716?style=flat-square&logo=rust&logoColor=white&labelColor=1c1c1c)](https://github.com/ratatui/awesome-ratatui)
+[![Crates.io](https://img.shields.io/crates/v/streamtop?style=flat-square&color=007ec6&labelColor=1c1c1c)](https://crates.io/crates/streamtop)
+[![Release](https://img.shields.io/github/v/release/Jorji49/streamtop?label=release&style=flat-square&color=007ec6&labelColor=1c1c1c)](https://github.com/Jorji49/streamtop/releases/latest)
+[![Downloads](https://img.shields.io/crates/d/streamtop?style=flat-square&color=2ea44f&labelColor=1c1c1c)](https://crates.io/crates/streamtop)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue?style=flat-square&labelColor=1c1c1c)](LICENSE)
 
 Terminal diagnostics for live **HLS**, **DASH**, and **IPTV** streams.
 
