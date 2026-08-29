@@ -28,6 +28,8 @@ streamtop-*.tar.gz
 !.env.example
 .DS_Store
 Thumbs.db
+__pycache__/
+*.py[cod]
 *.pdb
 *.exe
 !**/src/**/*.exe
