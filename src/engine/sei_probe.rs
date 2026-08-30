@@ -20,7 +20,7 @@ impl SeiProbeAccumulator {
             ContainerKind::Ts => self.scan_ts_pes(slice),
             ContainerKind::Fmp4 => self.scan_length_prefixed(slice, 4),
             ContainerKind::Unknown if looks_like_ts(slice) => self.scan_ts_pes(slice),
-            _ => self.scan_annex_b(slice),
+            ContainerKind::Unknown => self.scan_annex_b(slice),
         }
         self.result.clone()
     }
@@ -64,9 +64,7 @@ impl SeiProbeAccumulator {
                 i += 1;
                 continue;
             };
-            let next = find_next_start_code(&bytes[start..])
-                .map(|o| start + o)
-                .unwrap_or(bytes.len());
+            let next = find_next_start_code(&bytes[start..]).map_or(bytes.len(), |o| start + o);
             if start < next {
                 self.parse_nal(&bytes[start..next]);
             }

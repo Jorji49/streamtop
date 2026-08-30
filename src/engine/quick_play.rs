@@ -16,7 +16,7 @@ pub fn launch_quick_play(
     headers: &[String],
     user_agent: Option<&str>,
 ) -> QuickPlayResult {
-    if let Some(player) = find_player() {
+    find_player().map_or(QuickPlayResult::NotFound, |player| {
         match spawn_player(player, url, headers, user_agent) {
             Ok(()) => QuickPlayResult::Started {
                 player: player.to_string(),
@@ -26,9 +26,7 @@ pub fn launch_quick_play(
                 error,
             },
         }
-    } else {
-        QuickPlayResult::NotFound
-    }
+    })
 }
 
 fn find_player() -> Option<&'static str> {

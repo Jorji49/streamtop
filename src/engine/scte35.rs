@@ -126,17 +126,14 @@ impl SpliceInfoSection {
                     .first()
                     .and_then(|d| d.segmentation_duration_secs)
             })
-            .map(|s| format!("Duration: {s:.1}s"))
-            .unwrap_or_else(|| "Duration: -".into());
+            .map_or_else(|| "Duration: -".into(), |s| format!("Duration: {s:.1}s"));
         let event = self
             .splice_event_id
             .or_else(|| seg.map(|d| d.segmentation_event_id))
-            .map(|id| format!("EventID: {id}"))
-            .unwrap_or_else(|| "EventID: -".into());
+            .map_or_else(|| "EventID: -".into(), |id| format!("EventID: {id}"));
         let pts = self
             .pts_time_secs
-            .map(|s| format!("PTS: {s:.3}s"))
-            .unwrap_or_else(|| "PTS: -".into());
+            .map_or_else(|| "PTS: -".into(), |s| format!("PTS: {s:.3}s"));
         let sched = self
             .splice_count
             .map(|n| format!("ScheduleN: {n}"))
@@ -212,7 +209,7 @@ pub fn decode_scte35_payload(raw: &str) -> Option<Vec<u8>> {
             return Some(bytes);
         }
     }
-    let hex: String = s.chars().filter(|c| c.is_ascii_hexdigit()).collect();
+    let hex: String = s.chars().filter(char::is_ascii_hexdigit).collect();
     if hex.len() >= 28 && hex.len().is_multiple_of(2) {
         let mut out = Vec::with_capacity(hex.len() / 2);
         let chars: Vec<char> = hex.chars().collect();
@@ -301,7 +298,7 @@ pub fn parse_scte35_bytes(data: &[u8]) -> Option<SpliceInfoSection> {
                     out_of_network = Some(data[off] & 0x80 != 0);
                     let program_splice = data[off] & 0x40 != 0;
                     let duration_flag = data[off] & 0x20 != 0;
-                    let _splice_immediate = data[off] & 0x10 != 0;
+                    let _ = data[off] & 0x10;
                     off += 1;
                     if program_splice && off < cmd_end {
                         let (pts, consumed) = parse_splice_time(&data[off..cmd_end]);
@@ -568,9 +565,10 @@ fn parse_segmentation_descriptor(body: &[u8]) -> Option<SegmentationDescriptor> 
         Some(
             upid_bytes
                 .iter()
-                .map(|b| format!("{b:02x}"))
-                .collect::<Vec<_>>()
-                .join(""),
+                .fold(String::with_capacity(upid_len * 2), |mut s, b| {
+                    let _ = std::fmt::Write::write_fmt(&mut s, format_args!("{b:02x}"));
+                    s
+                }),
         )
     };
 

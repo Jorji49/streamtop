@@ -13,7 +13,7 @@ pub fn compute_g2g(
     wall_now_ms: u64,
 ) -> G2gMetrics {
     let origin_available_ms = program_date_time
-        .map(|pdt| pdt.timestamp_millis())
+        .map(chrono::DateTime::timestamp_millis)
         .or(dash_segment_available_ms);
 
     let ingestion_lag_ms = match (prft_ntp_unix_ms, origin_available_ms) {
@@ -23,11 +23,9 @@ pub fn compute_g2g(
 
     let edge_propagation_ms = segment_ttfb_ms;
 
-    let g2g_total_ms = if let Some(prft) = prft_ntp_unix_ms {
-        Some(wall_now_ms as i64 - prft as i64)
-    } else {
-        origin_available_ms.map(|origin| wall_now_ms as i64 - origin)
-    };
+    let g2g_total_ms = prft_ntp_unix_ms
+        .map(|prft| wall_now_ms as i64 - prft as i64)
+        .or_else(|| origin_available_ms.map(|origin| wall_now_ms as i64 - origin));
 
     G2gMetrics {
         ingestion_lag_ms,
@@ -39,8 +37,7 @@ pub fn compute_g2g(
 pub fn wall_now_unix_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0)
+        .map_or(0, |d| d.as_millis() as u64)
 }
 
 #[cfg(test)]

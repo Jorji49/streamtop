@@ -61,21 +61,21 @@ async fn collect_report_data(
     };
     let metrics = Arc::new(RwLock::new({
         let mut snap = MetricsSnapshot::default();
-        snap.url = url.clone();
+        snap.url.clone_from(&url);
         snap
     }));
     let (tx, mut rx) = mpsc::channel(EVENT_CHANNEL_CAPACITY);
     let mut poller = ManifestPoller::new(
-        url.clone(),
-        session.headers.clone(),
-        session.user_agent.clone(),
+        url.as_str(),
+        &session.headers,
+        session.user_agent.as_deref(),
         session.interval_ms,
         session.probe_headers,
         session.probe_drm,
         tx,
     )?
     .with_metrics(Arc::clone(&metrics))
-    .with_diagnostics(DiagnosticOpts {
+    .with_diagnostics(&DiagnosticOpts {
         tr101290: session.tr101290,
         probe_sei: session.probe_sei,
         simulate_player: session.simulate_player,
@@ -153,8 +153,7 @@ async fn collect_report_data(
                 }
                 _ => {}
             },
-            Ok(None) => break,
-            Err(_) => break,
+            Ok(None) | Err(_) => break,
         }
     }
     handle.abort();
@@ -177,28 +176,24 @@ async fn collect_report_data(
         summary: DiagnosticSummary {
             channel: url::Url::parse(&url)
                 .ok()
-                .and_then(|u| u.host_str().map(|h| h.to_string())),
+                .and_then(|u| u.host_str().map(std::string::ToString::to_string)),
             captured_at: now,
             source_url: redact_url(&url),
-            active_url: redact_url(playlist.as_ref().map(|p| p.url.as_str()).unwrap_or(&url)),
+            active_url: redact_url(playlist.as_ref().map_or(&url, |p| p.url.as_str())),
             status: status_label.into(),
             health_score: health.score,
             health_label: health.label.clone(),
             latency: latency.display(),
-            cdn: cdn
-                .last
-                .as_ref()
-                .map(|c| c.badge())
-                .unwrap_or_else(|| "UNKNOWN".into()),
-            dvr_window: playlist
-                .as_ref()
-                .map(|p| crate::models::format_dvr_window(p.window_segments, p.window_secs))
-                .unwrap_or_else(|| "-".into()),
+            cdn: cdn.last.as_ref().map_or_else(
+                || "UNKNOWN".into(),
+                super::super::models::stream::CdnEdgeInfo::badge,
+            ),
+            dvr_window: playlist.as_ref().map_or_else(
+                || "-".into(),
+                |p| crate::models::format_dvr_window(p.window_segments, p.window_secs),
+            ),
             buffer: buffer.display(),
-            ll_hls: playlist
-                .as_ref()
-                .map(|p| p.ll_hls.is_ll_hls)
-                .unwrap_or(false),
+            ll_hls: playlist.as_ref().is_some_and(|p| p.ll_hls.is_ll_hls),
             dropped_events: crate::engine::channel_stats::channel_dropped_total(),
         },
         timeline,
@@ -365,9 +360,8 @@ pre{{background:#0d1117;padding:12px;overflow:auto;font-size:12px}}
     }
     write!(
         w,
-        r#"<p><small>streamtop report v1 | summary schema v{schema_ver} | generated {ts}</small></p>
-</body></html>"#,
-        schema_ver = SUMMARY_SCHEMA_VERSION,
+        r"<p><small>streamtop report v1 | summary schema v{SUMMARY_SCHEMA_VERSION} | generated {ts}</small></p>
+</body></html>",
     )?;
     Ok(())
 }

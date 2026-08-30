@@ -269,8 +269,8 @@ impl SpecLinter {
         }
     }
 
-    pub fn on_cdn_headers(&mut self, info: CdnEdgeInfo, ttfb_ms: u64, seq: u64) {
-        self.cdn.record(&info);
+    pub fn on_cdn_headers(&mut self, info: &CdnEdgeInfo, ttfb_ms: u64, seq: u64) {
+        self.cdn.record(info);
         match info.verdict {
             CacheVerdict::Miss => {
                 self.flags.cdn_miss = true;
@@ -286,7 +286,7 @@ impl SpecLinter {
                 );
             }
             CacheVerdict::Hit => {
-                let age = info.age.map(|a| format!(" age={a}s")).unwrap_or_default();
+                let age = info.age.map_or_else(String::new, |a| format!(" age={a}s"));
                 let pop = info
                     .pop
                     .as_deref()
@@ -588,7 +588,7 @@ where
                     planned,
                     None,
                     remaining,
-                    remaining.map(|r| r > 0.0).unwrap_or(true),
+                    remaining.is_none_or(|r| r > 0.0),
                 );
                 if let Some(section) = crate::engine::scte35::parse_scte35_tag(trimmed) {
                     info.scte35_binary = Some(section.summary_line());
@@ -614,13 +614,10 @@ pub fn ad_log_key(ad: &AdBreakInfo) -> String {
             ad.planned_duration_secs.unwrap_or(0.0).round() as i64
         ),
         "CUE-IN" => "cue-in".into(),
-        other => {
-            if let Some(id) = &ad.id {
-                format!("{other}:{id}")
-            } else {
-                format!("{other}:{}", ad.summary)
-            }
-        }
+        other => ad.id.as_ref().map_or_else(
+            || format!("{other}:{}", ad.summary),
+            |id| format!("{other}:{id}"),
+        ),
     }
 }
 
@@ -736,9 +733,7 @@ pub fn parse_byterange_attr(raw: &str) -> Option<(u64, Option<u64>)> {
 pub fn ll_hls_probe_range(offset: Option<u64>, length: Option<u64>) -> String {
     let start = offset.unwrap_or(0);
     let max_len = crate::models::RANGE_PROBE_BYTES;
-    let span = length
-        .map(|l| l.min(max_len).saturating_sub(1))
-        .unwrap_or(max_len);
+    let span = length.map_or(max_len, |l| l.min(max_len).saturating_sub(1));
     let end = start.saturating_add(span);
     format!("bytes={start}-{end}")
 }
@@ -765,10 +760,10 @@ pub fn next_blocking_targets(
 /// Append RFC 8216bis blocking playlist reload query params (`_HLS_msn`, `_HLS_part`).
 pub fn apply_hls_blocking_params(base_url: &str, msn: u64, part: Option<u64>) -> String {
     let sep = if base_url.contains('?') { '&' } else { '?' };
-    match part {
-        Some(p) => format!("{base_url}{sep}_HLS_msn={msn}&_HLS_part={p}"),
-        None => format!("{base_url}{sep}_HLS_msn={msn}"),
-    }
+    part.map_or_else(
+        || format!("{base_url}{sep}_HLS_msn={msn}"),
+        |p| format!("{base_url}{sep}_HLS_msn={msn}&_HLS_part={p}"),
+    )
 }
 
 pub fn inspect_container(bytes: &[u8]) -> ContainerKind {
@@ -805,8 +800,8 @@ pub fn scan_drm_keys(raw: &str) -> crate::models::DrmInfo {
         });
         let key_format = attr_quoted(t, "KEYFORMAT");
         let key_uri = attr_quoted(t, "URI");
-        info.method = method.clone();
-        info.key_format = key_format.clone();
+        info.method.clone_from(&method);
+        info.key_format.clone_from(&key_format);
         info.key_uri = key_uri;
 
         let upper_m = method.as_deref().unwrap_or("").to_ascii_uppercase();
@@ -897,21 +892,18 @@ pub fn scan_media_renditions(raw: &str) -> crate::models::MediaRenditions {
         let chars = attr_quoted(t, "CHARACTERISTICS");
         match media_type.to_ascii_uppercase().as_str() {
             "AUDIO" => {
-                let extra = channels.map(|c| format!(" · {c}ch")).unwrap_or_default();
+                let extra = channels.map_or_else(String::new, |c| format!(" · {c}ch"));
                 out.audio.push(format!("{name} ({lang}){extra}"));
             }
             "SUBTITLES" | "CLOSED-CAPTIONS" => {
-                let fmt = if chars
-                    .as_deref()
-                    .map(|c| c.to_ascii_lowercase().contains("cea-608") || c.contains("608"))
-                    .unwrap_or(false)
-                {
+                let fmt = if chars.as_deref().is_some_and(|c| {
+                    c.to_ascii_lowercase().contains("cea-608") || c.contains("608")
+                }) {
                     "CEA-608"
                 } else if t.to_ascii_lowercase().contains("webvtt")
                     || chars
                         .as_deref()
-                        .map(|c| c.to_ascii_lowercase().contains("vtt"))
-                        .unwrap_or(false)
+                        .is_some_and(|c| c.to_ascii_lowercase().contains("vtt"))
                 {
                     "WebVTT"
                 } else {

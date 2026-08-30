@@ -188,8 +188,7 @@ impl PaneState {
             manifest_url: self
                 .playlist
                 .as_ref()
-                .map(|p| p.url.clone())
-                .unwrap_or_else(|| self.url.clone()),
+                .map_or_else(|| self.url.clone(), |p| p.url.clone()),
             segment_url: self.last_segment.as_ref().map(|s| s.uri.clone()),
             probe_headers: session.probe_headers,
             headers: session.headers.clone(),
@@ -233,27 +232,27 @@ impl CompareApp {
             simulated_rtt_ms: session.simulated_rtt_ms,
         };
         let left_poller = ManifestPoller::new(
-            url1.clone(),
-            session.headers.clone(),
-            session.user_agent.clone(),
+            url1.as_str(),
+            &session.headers,
+            session.user_agent.as_deref(),
             session.interval_ms,
             session.probe_headers,
             session.probe_drm,
             l_tx,
         )
         .wrap_err("failed to start primary poller")?
-        .with_diagnostics(diag.clone());
+        .with_diagnostics(&diag);
         let right_poller = ManifestPoller::new(
-            url2.clone(),
-            session.headers.clone(),
-            session.user_agent.clone(),
+            url2.as_str(),
+            &session.headers,
+            session.user_agent.as_deref(),
             session.interval_ms,
             session.probe_headers,
             session.probe_drm,
             r_tx,
         )
         .wrap_err("failed to start backup poller")?
-        .with_diagnostics(diag);
+        .with_diagnostics(&diag);
 
         let mut app = Self {
             left: PaneState::new("Primary / Origin", url1),
@@ -375,10 +374,10 @@ impl CompareApp {
                     ));
                 }
             }
-            KeyCode::Char('d') | KeyCode::Char('D') => {
+            KeyCode::Char('d' | 'D') => {
                 self.show_detail = !self.show_detail;
             }
-            KeyCode::Char('l') | KeyCode::Char('L') => {
+            KeyCode::Char('l' | 'L') => {
                 self.log_focus = !self.log_focus;
             }
             KeyCode::Tab => {
@@ -387,25 +386,25 @@ impl CompareApp {
                     FocusPane::Right => FocusPane::Left,
                 };
             }
-            KeyCode::Char('c') | KeyCode::Char('C') => {
+            KeyCode::Char('c' | 'C') => {
                 let cmd = build_curl(&self.focused().export_capture(&self.session));
-                match arboard::Clipboard::new().and_then(|mut cb| cb.set_text(cmd.clone())) {
-                    Ok(()) => {
-                        self.toast = Some((
-                            "curl copied (redacted)".into(),
-                            Instant::now() + Duration::from_secs(TOAST_SECS),
-                        ));
-                    }
-                    Err(_) => {
-                        self.focused_mut().log_tail.push(format!("curl: {cmd}"));
-                        self.toast = Some((
-                            "clipboard failed - see log".into(),
-                            Instant::now() + Duration::from_secs(TOAST_SECS),
-                        ));
-                    }
+                if matches!(
+                    arboard::Clipboard::new().and_then(|mut cb| cb.set_text(cmd.clone())),
+                    Ok(())
+                ) {
+                    self.toast = Some((
+                        "curl copied (redacted)".into(),
+                        Instant::now() + Duration::from_secs(TOAST_SECS),
+                    ));
+                } else {
+                    self.focused_mut().log_tail.push(format!("curl: {cmd}"));
+                    self.toast = Some((
+                        "clipboard failed - see log".into(),
+                        Instant::now() + Duration::from_secs(TOAST_SECS),
+                    ));
                 }
             }
-            KeyCode::Char('h') | KeyCode::Char('H') | KeyCode::Char('e') | KeyCode::Char('E') => {
+            KeyCode::Char('h' | 'H' | 'e' | 'E') => {
                 self.export_har()?;
             }
             KeyCode::Up | KeyCode::Char('k') => {
@@ -545,26 +544,25 @@ fn diff_line(left: &PaneState, right: &PaneState, paused: bool) -> String {
         "Cache: {} vs {}",
         left.last_segment
             .as_ref()
-            .map(|s| s.cdn.badge())
-            .unwrap_or_else(|| "-".into()),
+            .map_or_else(|| "-".into(), |s| s.cdn.badge()),
         right
             .last_segment
             .as_ref()
-            .map(|s| s.cdn.badge())
-            .unwrap_or_else(|| "-".into())
+            .map_or_else(|| "-".into(), |s| s.cdn.badge())
     );
     let pause = if paused { " PAUSED" } else { "" };
-    let ad = if left.ad_mismatch_total != right.ad_mismatch_total {
+    let ad = if left.ad_mismatch_total == right.ad_mismatch_total {
+        String::new()
+    } else {
         format!(
             "  |  Δ AdMismatch: {}",
             right.ad_mismatch_total as i64 - left.ad_mismatch_total as i64
         )
-    } else {
-        String::new()
     };
     format!("{seq}  |  {lat}  |  {br}  |  {cache}{ad}{pause}")
 }
 
+#[allow(clippy::fn_params_excessive_bools)]
 #[allow(clippy::too_many_arguments)]
 fn draw_pane(
     frame: &mut Frame,
@@ -607,16 +605,16 @@ fn draw_pane(
         ])
         .split(inner);
 
-    let seq = pane
-        .seq()
-        .map(|s| s.to_string())
-        .unwrap_or_else(|| "-".into());
+    let seq = pane.seq().map_or_else(|| "-".into(), |s| s.to_string());
     let lat = pane.latency.display();
     let shi = format!("{} ({})", pane.health.score, pane.health.label);
-    let cdn = pane
-        .last_segment
-        .as_ref()
-        .map(|s| {
+    let cdn = pane.last_segment.as_ref().map_or_else(
+        || {
+            pane.cdn
+                .hit_ratio_pct()
+                .map_or_else(|| "-".into(), |p| format!("hit {p:.0}%"))
+        },
+        |s| {
             let b = s.cdn.badge();
             let d = s.cdn.edge_detail();
             if d.is_empty() {
@@ -624,23 +622,19 @@ fn draw_pane(
             } else {
                 format!("{b} {d}")
             }
-        })
-        .unwrap_or_else(|| {
-            pane.cdn
-                .hit_ratio_pct()
-                .map(|p| format!("hit {p:.0}%"))
-                .unwrap_or_else(|| "-".into())
-        });
+        },
+    );
     let net = pane
         .last_segment
         .as_ref()
         .and_then(|s| s.network.as_ref())
-        .map(|n| n.display_line())
-        .unwrap_or_else(|| "DNS/TCP/TLS/TTFB: -".into());
+        .map_or_else(
+            || "DNS/TCP/TLS/TTFB: -".into(),
+            super::super::models::stream::NetworkTiming::display_line,
+        );
     let br = pane
         .bitrate_kbps()
-        .map(|b| format!("{b} kbps"))
-        .unwrap_or_else(|| "-".into());
+        .map_or_else(|| "-".into(), |b| format!("{b} kbps"));
 
     let mut status_lines = vec![
         Line::from(truncate_url(
@@ -704,20 +698,20 @@ fn draw_pane(
 
     let visible = chunks[2].height as usize;
     let scroll = pane.log_scroll as usize;
-    let filtered: Vec<&String> = if let Some(pat) = log_filter {
-        let needle = pat.to_ascii_lowercase();
-        pane.log_tail
-            .iter()
-            .filter(|m| m.to_ascii_lowercase().contains(&needle))
-            .collect()
-    } else {
-        pane.log_tail.iter().collect()
-    };
-    let log_title = if let Some(pat) = log_filter {
-        format!(" Log [filter: {pat}] (j/k) ")
-    } else {
-        " Log (j/k) ".into()
-    };
+    let filtered: Vec<&String> = log_filter.map_or_else(
+        || pane.log_tail.iter().collect(),
+        |pat| {
+            let needle = pat.to_ascii_lowercase();
+            pane.log_tail
+                .iter()
+                .filter(|m| m.to_ascii_lowercase().contains(&needle))
+                .collect()
+        },
+    );
+    let log_title = log_filter.map_or_else(
+        || " Log (j/k) ".into(),
+        |pat| format!(" Log [filter: {pat}] (j/k) "),
+    );
     let logs: Vec<Line> = filtered
         .iter()
         .rev()

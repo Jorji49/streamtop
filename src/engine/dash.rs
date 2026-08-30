@@ -71,11 +71,13 @@ pub fn parse_dash_mpd(xml: &str, base: &Url) -> Result<DashSummary> {
     let type_live = mpd
         .mpdtype
         .as_deref()
-        .map(|t| t.eq_ignore_ascii_case("dynamic"))
-        .unwrap_or(false);
+        .is_some_and(|t| t.eq_ignore_ascii_case("dynamic"));
 
-    let availability_start_time = mpd.availabilityStartTime.as_ref().map(|t| t.to_rfc3339());
-    let publish_time = mpd.publishTime.as_ref().map(|t| t.to_rfc3339());
+    let availability_start_time = mpd
+        .availabilityStartTime
+        .as_ref()
+        .map(chrono::DateTime::to_rfc3339);
+    let publish_time = mpd.publishTime.as_ref().map(chrono::DateTime::to_rfc3339);
 
     let mut root = base.clone();
     if let Some(b) = mpd.base_url.first() {
@@ -105,7 +107,7 @@ pub fn parse_dash_mpd(xml: &str, base: &Url) -> Result<DashSummary> {
     let mut drm = DrmInfo::default();
 
     for period in &mpd.periods {
-        let period_out = parse_period(period, &root)?;
+        let period_out = parse_period(period, &root);
         for lang in period_out.audio_languages {
             if !audio_languages.contains(&lang) {
                 audio_languages.push(lang);
@@ -180,7 +182,7 @@ struct PeriodParseOut {
     drm: DrmInfo,
 }
 
-fn parse_period(period: &Period, root: &Url) -> Result<PeriodParseOut> {
+fn parse_period(period: &Period, root: &Url) -> PeriodParseOut {
     let mut period_base = root.clone();
     if let Some(b) = period.BaseURL.first() {
         if let Some(joined) = join_url(&period_base, &b.base) {
@@ -264,14 +266,14 @@ fn parse_period(period: &Period, root: &Url) -> Result<PeriodParseOut> {
         }
     }
 
-    Ok(PeriodParseOut {
+    PeriodParseOut {
         variants,
         audio_languages,
         probe_url,
         segment_duration_hint_secs,
         best_bw,
         drm,
-    })
+    }
 }
 
 fn merge_drm(into: &mut DrmInfo, protections: &[dash_mpd::ContentProtection]) {
@@ -344,12 +346,10 @@ fn duration_secs(d: &Duration) -> f64 {
 fn looks_video(a: &AdaptationSet) -> bool {
     a.contentType
         .as_deref()
-        .map(|c| c.eq_ignore_ascii_case("video"))
-        .unwrap_or(false)
+        .is_some_and(|c| c.eq_ignore_ascii_case("video"))
         || a.mimeType
             .as_deref()
-            .map(|m| m.starts_with("video/"))
-            .unwrap_or(false)
+            .is_some_and(|m| m.starts_with("video/"))
 }
 
 fn segment_duration_from(adaptation: &AdaptationSet, rep: &Representation) -> Option<f32> {
@@ -464,8 +464,7 @@ pub fn extract_dash_ad_events(xml: &str) -> Vec<AdBreakInfo> {
         let base = search_from + es_idx;
         let end_tag = lower[base..]
             .find("</eventstream>")
-            .map(|i| base + i)
-            .unwrap_or_else(|| xml.len().min(base + 8192));
+            .map_or_else(|| xml.len().min(base + 8192), |i| base + i);
         let block = &xml[base..end_tag];
         let scheme = parse_xml_attr_string(block, "schemeIdUri")
             .unwrap_or_default()
@@ -484,24 +483,18 @@ pub fn extract_dash_ad_events(xml: &str) -> Vec<AdBreakInfo> {
         while let Some(ev_idx) = block_lower[ev_from..].find("<event") {
             let ev_base = ev_from + ev_idx;
             let after = ev_base + 6;
-            if after < block_lower.len() {
-                match block_lower.as_bytes().get(after) {
-                    Some(b's') | Some(b'S') => {
-                        ev_from = ev_base + 1;
-                        continue;
-                    }
-                    Some(b' ') | Some(b'/') | Some(b'>') | Some(b'\t') | Some(b'\n')
-                    | Some(b'\r') => {}
-                    _ => {
-                        ev_from = ev_base + 1;
-                        continue;
-                    }
-                }
+            if after < block_lower.len()
+                && !matches!(
+                    block_lower.as_bytes().get(after),
+                    Some(b' ' | b'/' | b'>' | b'\t' | b'\n' | b'\r')
+                )
+            {
+                ev_from = ev_base + 1;
+                continue;
             }
             let tag_end = block[ev_base..]
                 .find('>')
-                .map(|i| ev_base + i + 1)
-                .unwrap_or(ev_base + 1);
+                .map_or(ev_base + 1, |i| ev_base + i + 1);
             let tag = &block[ev_base..tag_end.min(block.len())];
             let id = parse_xml_attr_string(tag, "id");
             let duration_ticks = parse_xml_attr_u64(tag, "duration");
@@ -583,10 +576,10 @@ fn iso8601_duration_to_ms(s: &str) -> Option<u64> {
         if ch.is_ascii_digit() || ch == '.' {
             num.push(ch);
         } else if ch == 'H' || ch == 'h' {
-            secs += num.parse::<f64>().ok()? * 3600.0;
+            secs = num.parse::<f64>().ok()?.mul_add(3600.0, secs);
             num.clear();
         } else if ch == 'M' || ch == 'm' {
-            secs += num.parse::<f64>().ok()? * 60.0;
+            secs = num.parse::<f64>().ok()?.mul_add(60.0, secs);
             num.clear();
         } else if ch == 'S' || ch == 's' {
             secs += num.parse::<f64>().ok()?;

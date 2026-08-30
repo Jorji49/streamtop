@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 use std::io::{self, Write};
 use std::panic;
 use std::path::Path;
@@ -37,8 +39,8 @@ enum SummaryFormatArg {
 impl From<SummaryFormatArg> for SummaryFormat {
     fn from(v: SummaryFormatArg) -> Self {
         match v {
-            SummaryFormatArg::Text => SummaryFormat::Text,
-            SummaryFormatArg::Json => SummaryFormat::Json,
+            SummaryFormatArg::Text => Self::Text,
+            SummaryFormatArg::Json => Self::Json,
         }
     }
 }
@@ -49,6 +51,7 @@ impl From<SummaryFormatArg> for SummaryFormat {
     version,
     about = "HLS/DASH/IPTV stream diagnostics TUI"
 )]
+#[allow(clippy::struct_excessive_bools)] // clap CLI flags
 struct Cli {
     /// Stream URL, local playlist/MPD, or channel lineup (M3U / JSON / YAML)
     #[arg(required_unless_present_any = ["compare", "export_grafana", "vod", "agent"])]
@@ -102,7 +105,7 @@ struct Cli {
     #[arg(long = "full-segment")]
     full_segment: bool,
 
-    /// Staging ClearKey: KID_HEX:KEY_HEX for encrypted probe validation
+    /// Staging `ClearKey`: `KID_HEX:KEY_HEX` for encrypted probe validation
     #[arg(long = "clearkey", value_name = "KID:KEY")]
     clearkey: Option<String>,
 
@@ -110,11 +113,11 @@ struct Cli {
     #[arg(long = "export-incident", value_name = "PATH", num_args = 0..=1, default_missing_value = "")]
     export_incident: Option<String>,
 
-    /// Probe DRM license / EXT-X-KEY / DASH LA_URL ClearKey TTFB
+    /// Probe DRM license / EXT-X-KEY / DASH `LA_URL` `ClearKey` TTFB
     #[arg(long = "probe-drm")]
     probe_drm: bool,
 
-    /// Range-probe every channel; write audit_report.json/.csv
+    /// Range-probe every channel; write `audit_report.json/.csv`
     #[arg(long = "audit", alias = "matrix")]
     audit: bool,
 
@@ -126,7 +129,7 @@ struct Cli {
     #[arg(long = "vod", value_name = "URL")]
     vod: Option<String>,
 
-    /// OTLP trace export endpoint (e.g. http://127.0.0.1:4318)
+    /// OTLP trace export endpoint (e.g. <http://127.0.0.1:4318>)
     #[arg(long = "otel-endpoint", value_name = "URL")]
     otel_endpoint: Option<String>,
 
@@ -168,7 +171,7 @@ struct Cli {
     #[arg(long = "webhook", value_name = "URL")]
     webhook: Option<String>,
 
-    /// Alert kinds: stall,shi_below_70,http_5xx,mismatch,ad_start,ad_mismatch
+    /// Alert kinds: `stall,shi_below_70,http_5xx,mismatch,ad_start,ad_mismatch`
     #[arg(long = "alert-on", value_name = "EVENTS")]
     alert_on: Option<String>,
 
@@ -192,7 +195,7 @@ struct Cli {
     #[arg(long = "probe-sei")]
     probe_sei: bool,
 
-    /// Synthetic player QoE simulator (TDR, rebuffer risk, ABR selection)
+    /// Synthetic player `QoE` simulator (TDR, rebuffer risk, ABR selection)
     #[arg(long = "simulate-player")]
     simulate_player: bool,
 
@@ -216,6 +219,7 @@ impl std::str::FromStr for PathBufArg {
     }
 }
 
+#[allow(clippy::too_many_lines)]
 #[tokio::main]
 async fn main() -> Result<ExitCode> {
     let _ = rustls::crypto::ring::default_provider().install_default();
@@ -344,7 +348,7 @@ async fn main() -> Result<ExitCode> {
             .wrap_err("webhook SSRF check failed")?;
     }
 
-    let client = build_http_client(&session.headers, session.user_agent.clone())?;
+    let client = build_http_client(&session.headers, session.user_agent.as_deref())?;
     let metrics_port = cli.metrics_port.or(cli.prometheus);
     let metrics_bind: std::net::IpAddr = cli
         .metrics_bind
@@ -356,8 +360,11 @@ async fn main() -> Result<ExitCode> {
             .or_else(|| std::env::var("STREAMTOP_METRICS_TOKEN").ok()),
     );
     if metrics_port.is_some() {
-        streamtop::engine::metrics::require_metrics_token_for_bind(metrics_bind, &metrics_token)
-            .wrap_err("metrics bind security check failed")?;
+        streamtop::engine::metrics::require_metrics_token_for_bind(
+            metrics_bind,
+            metrics_token.as_deref(),
+        )
+        .wrap_err("metrics bind security check failed")?;
     }
 
     if let Some(urls) = &cli.compare {
@@ -516,7 +523,7 @@ async fn load_input(client: &Client, input: &str) -> Result<(String, Vec<u8>, Op
             .headers()
             .get(reqwest::header::CONTENT_TYPE)
             .and_then(|v| v.to_str().ok())
-            .map(|s| s.to_string());
+            .map(std::string::ToString::to_string);
         let body = response.bytes().await?.to_vec();
         return Ok((input.to_string(), body, content_type));
     }

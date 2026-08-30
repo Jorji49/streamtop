@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
@@ -47,11 +47,11 @@ use crate::engine::synthetic_qoe::SyntheticQoeEngine;
 use crate::engine::tr101290::{probe_container_tr101290, Tr101290Engine};
 use crate::engine::wire_timing::WireTimingTracker;
 use crate::models::{
-    AbrVariant, CdnEdgeInfo, ContainerKind, DiagCategory, DiagSeverity, LatencyState, LogLevel,
-    NetworkTiming, PlaylistMeta, SegmentMetrics, StreamEvent, StreamProtocol, StreamStatus,
-    VirtualBuffer, WireProbeInfo, AD_SCAN_LIVE_EDGE_SEGMENTS, DEEP_WIRE_PROBE_BYTES,
-    HLS_LIVE_EDGE_SEGMENTS, MAX_MANIFEST_BYTES, MAX_PLAYLIST_DEPTH, MAX_SEGMENT_BYTES,
-    MEDIA_SEQ_GAP_TOLERANCE,
+    AbrVariant, CdnEdgeInfo, ContainerKind, DiagCategory, DiagSeverity, LatencyState, LlDashInfo,
+    LlHlsInfo, LogLevel, MediaRenditions, NetworkTiming, PlaylistMeta, SegmentMetrics, StreamEvent,
+    StreamProtocol, StreamStatus, VirtualBuffer, WireProbeInfo, AD_SCAN_LIVE_EDGE_SEGMENTS,
+    DEEP_WIRE_PROBE_BYTES, HLS_LIVE_EDGE_SEGMENTS, MAX_MANIFEST_BYTES, MAX_PLAYLIST_DEPTH,
+    MAX_SEGMENT_BYTES, MEDIA_SEQ_GAP_TOLERANCE,
 };
 
 const DEFAULT_UA: &str = concat!("streamtop/", env!("CARGO_PKG_VERSION"));
@@ -118,17 +118,17 @@ struct SegmentFetch {
 
 impl ManifestPoller {
     pub fn new(
-        source_url: String,
-        headers: Vec<String>,
-        user_agent: Option<String>,
+        source_url: &str,
+        headers: &[String],
+        user_agent: Option<&str>,
         interval_ms: Option<u64>,
         probe_headers: bool,
         probe_drm: bool,
         tx: Sender<StreamEvent>,
     ) -> Result<Self> {
-        let source_url = Url::parse(&source_url).wrap_err("invalid stream URL")?;
-        let extra_headers = parse_header_pairs(&headers);
-        let client = build_http_client(&headers, user_agent)?;
+        let source_url = Url::parse(source_url).wrap_err("invalid stream URL")?;
+        let extra_headers = parse_header_pairs(headers);
+        let client = build_http_client(headers, user_agent)?;
         let interval = interval_ms.map(Duration::from_millis);
 
         Ok(Self {
@@ -157,12 +157,14 @@ impl ManifestPoller {
         })
     }
 
+    #[must_use]
     pub fn with_clearkey(mut self, spec: Option<ClearKeySpec>) -> Self {
         self.clearkey = spec;
         self
     }
 
-    pub fn with_diagnostics(mut self, opts: DiagnosticOpts) -> Self {
+    #[must_use]
+    pub fn with_diagnostics(mut self, opts: &DiagnosticOpts) -> Self {
         self.diagnostics = opts.clone();
         if let Ok(mut qoe) = self.qoe.lock() {
             *qoe = SyntheticQoeEngine::new(opts.throttle_kbps, opts.simulated_rtt_ms);
@@ -170,16 +172,19 @@ impl ManifestPoller {
         self
     }
 
+    #[must_use]
     pub fn with_otel(mut self, otel: Arc<OtelExporter>) -> Self {
         self.otel = Some(otel);
         self
     }
 
+    #[must_use]
     pub fn with_metrics(mut self, metrics: Arc<RwLock<MetricsSnapshot>>) -> Self {
         self.metrics = Some(metrics);
         self
     }
 
+    #[must_use]
     pub fn with_agent_metrics(
         mut self,
         registry: Arc<RwLock<AgentMetricsRegistry>>,
@@ -189,6 +194,7 @@ impl ManifestPoller {
         self
     }
 
+    #[must_use]
     pub fn with_webhook_tx(mut self, hook_tx: Sender<StreamEvent>) -> Self {
         self.hook_tx = Some(hook_tx);
         self
@@ -211,18 +217,13 @@ impl ManifestPoller {
             }
         }
         // Bounded: drop when UI/webhook cannot keep up (prefer liveness over backlog).
-        let mut dropped = false;
-        if self.tx.try_send(event.clone()).is_err() {
-            record_channel_drop();
-            dropped = true;
-        }
-        if let Some(h) = &self.hook_tx {
-            if h.try_send(event).is_err() {
-                record_channel_drop();
-                dropped = true;
-            }
-        }
+        let dropped = self.tx.try_send(event.clone()).is_err()
+            || self
+                .hook_tx
+                .as_ref()
+                .is_some_and(|h| h.try_send(event).is_err());
         if dropped {
+            record_channel_drop();
             if let Some((reg, _)) = &self.agent_metrics {
                 if let Ok(mut guard) = reg.write() {
                     guard.dropped_events = guard.dropped_events.saturating_add(1);
@@ -257,7 +258,7 @@ impl ManifestPoller {
         }
     }
 
-    fn merge_wire_pssh(&self, drm: &mut crate::models::DrmInfo, wire: &WireProbeInfo) {
+    fn merge_wire_pssh(drm: &mut crate::models::DrmInfo, wire: &WireProbeInfo) {
         if wire.pssh.is_empty() {
             return;
         }
@@ -282,12 +283,10 @@ impl ManifestPoller {
         if fetch.probe_bytes.is_empty() {
             return;
         }
-        let wall_ms = if let Ok(mut w) = self.segment_wall_ms.lock() {
+        let wall_ms = self.segment_wall_ms.lock().map_or(0, |mut w| {
             *w = w.saturating_add((f64::from(duration_secs.max(0.001)) * 1000.0) as u64);
             *w
-        } else {
-            0
-        };
+        });
         if d.tr101290 {
             if let Ok(mut eng) = self.tr101290.lock() {
                 if let Some(report) =
@@ -377,9 +376,7 @@ impl ManifestPoller {
     }
 
     fn apply_wire_target_duration(&self, wire: &mut WireProbeInfo, target_secs: f32) {
-        if let Ok(mut timing) = self.wire_timing_tracker.lock() {
-            timing.apply_target(&mut wire.timing, Some(target_secs));
-        }
+        WireTimingTracker::apply_target(&mut wire.timing, Some(target_secs));
         if let Some(label) = wire.timing.timing_label() {
             self.emit_log(
                 LogLevel::Warn,
@@ -548,16 +545,17 @@ impl ManifestPoller {
             self.send_event(StreamEvent::CdnStats(linter.cdn_stats()));
 
             let wait = self.interval.unwrap_or_else(|| {
-                if let Some(mup) = last_mup {
-                    Duration::from_millis((mup * 1000.0).max(500.0) as u64)
-                } else {
-                    let ms = if target_duration == 0 {
-                        2_000
-                    } else {
-                        (target_duration * 500).max(500)
-                    };
-                    Duration::from_millis(ms)
-                }
+                last_mup.map_or_else(
+                    || {
+                        let ms = if target_duration == 0 {
+                            2_000
+                        } else {
+                            (target_duration * 500).max(500)
+                        };
+                        Duration::from_millis(ms)
+                    },
+                    |mup| Duration::from_millis((mup * 1000.0).max(500.0) as u64),
+                )
             });
             sleep(wait).await;
         }
@@ -686,7 +684,6 @@ impl ManifestPoller {
         let target = seg_hint.ceil() as u64;
         let publish_changed = match (&summary.publish_time, last_publish.as_ref()) {
             (Some(p), Some(prev)) => p != prev,
-            (Some(_), None) => true,
             _ => true,
         };
         if let Some(p) = &summary.publish_time {
@@ -748,7 +745,7 @@ impl ManifestPoller {
                 self.download_segment(&probe_url).await?
             };
 
-            linter.on_cdn_headers(fetch.cdn.clone(), fetch.ttfb_ms, seq);
+            linter.on_cdn_headers(&fetch.cdn, fetch.ttfb_ms, seq);
 
             let kbps = if fetch.probed {
                 None
@@ -812,7 +809,7 @@ impl ManifestPoller {
                 .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
                 .map(|dt| dt.timestamp_millis());
             self.emit_g2g(&fetch.wire, None, dash_avail_ms, fetch.ttfb_ms);
-            self.merge_wire_pssh(&mut dash_drm, &fetch.wire);
+            Self::merge_wire_pssh(&mut dash_drm, &fetch.wire);
 
             let mut wire = fetch.wire.clone();
             self.post_wire_extras(&fetch, &mut wire);
@@ -855,7 +852,7 @@ impl ManifestPoller {
                     metrics
                         .network
                         .as_ref()
-                        .map(|n| n.display_line())
+                        .map(super::super::models::stream::NetworkTiming::display_line)
                         .unwrap_or_default()
                 ),
             );
@@ -884,10 +881,10 @@ impl ManifestPoller {
             refresh_interval_ms: summary
                 .minimum_update_period_secs
                 .map(|s| (s * 1000.0).round() as u64),
-            ll_hls: Default::default(),
+            ll_hls: LlHlsInfo::default(),
             ll_dash: ll_dash.clone(),
             drm: dash_drm,
-            renditions: Default::default(),
+            renditions: MediaRenditions::default(),
         }));
 
         Ok((target.max(1), summary.minimum_update_period_secs))
@@ -976,16 +973,17 @@ impl ManifestPoller {
             self.send_event(StreamEvent::CdnStats(linter.cdn_stats()));
 
             let wait = self.interval.unwrap_or_else(|| {
-                if let Some(ms) = ll_hls_state.part_interval_ms {
-                    Duration::from_millis(ms)
-                } else {
-                    let ms = if target_duration == 0 {
-                        2_000
-                    } else {
-                        (target_duration * 500).max(500)
-                    };
-                    Duration::from_millis(ms)
-                }
+                ll_hls_state.part_interval_ms.map_or_else(
+                    || {
+                        let ms = if target_duration == 0 {
+                            2_000
+                        } else {
+                            (target_duration * 500).max(500)
+                        };
+                        Duration::from_millis(ms)
+                    },
+                    Duration::from_millis,
+                )
             });
             sleep(wait).await;
         }
@@ -1091,7 +1089,7 @@ impl ManifestPoller {
                     self.emit_log(LogLevel::Warn, DiagCategory::Abr, w.clone());
                 }
 
-                *cached_variants = marked.clone();
+                cached_variants.clone_from(&marked);
                 *has_master = true;
                 self.send_event(StreamEvent::Variants(marked));
                 self.emit_log(
@@ -1147,7 +1145,7 @@ impl ManifestPoller {
                     linter,
                     vbuf,
                     buffer_clock,
-                    audio_url,
+                    audio_url.as_ref(),
                     seen_ads,
                     cached_variants,
                 )
@@ -1176,7 +1174,7 @@ impl ManifestPoller {
                     linter,
                     vbuf,
                     buffer_clock,
-                    audio_url,
+                    audio_url.as_ref(),
                     seen_ads,
                     cached_variants,
                 )
@@ -1278,11 +1276,10 @@ impl ManifestPoller {
                 .is_some_and(|m| m.eq_ignore_ascii_case("clearkey"));
 
         if clearkey_post {
-            let body = if let Some(spec) = &self.clearkey {
-                clearkey_license_body(spec)
-            } else {
-                serde_json::json!({ "kids": [], "type": "temporary" })
-            };
+            let body = self.clearkey.as_ref().map_or_else(
+                || serde_json::json!({ "kids": [], "type": "temporary" }),
+                clearkey_license_body,
+            );
             drm.license_method = Some("POST".into());
             match crate::engine::network_trace::pinned_post_json(
                 &key_url,
@@ -1378,7 +1375,7 @@ impl ManifestPoller {
         linter: &mut SpecLinter,
         vbuf: &mut VirtualBuffer,
         buffer_clock: &mut Instant,
-        audio_url: &mut Option<Url>,
+        audio_url: Option<&Url>,
         seen_ads: &mut HashSet<String>,
         variants: &mut Vec<AbrVariant>,
     ) -> Result<u64> {
@@ -1467,8 +1464,7 @@ impl ManifestPoller {
             *announced_ll = true;
             let target = ll
                 .part_target_secs
-                .map(|s| format!("{s:.3}s"))
-                .unwrap_or_else(|| "n/a".into());
+                .map_or_else(|| "n/a".into(), |s| format!("{s:.3}s"));
             self.emit_log(
                 LogLevel::Info,
                 DiagCategory::LlHls,
@@ -1509,7 +1505,7 @@ impl ManifestPoller {
             has_master_playlist: has_master,
             refresh_interval_ms,
             ll_hls: ll_meta,
-            ll_dash: Default::default(),
+            ll_dash: LlDashInfo::default(),
             drm,
             renditions,
         }));
@@ -1557,9 +1553,9 @@ impl ManifestPoller {
             }
         }
 
-        if let Some(audio) = audio_url.clone() {
+        if let Some(audio) = audio_url {
             self.check_av_drift(
-                &audio,
+                audio,
                 media.media_sequence,
                 window_secs,
                 media.target_duration,
@@ -1704,7 +1700,7 @@ impl ManifestPoller {
             self.download_segment(segment_url.as_str()).await?
         };
 
-        linter.on_cdn_headers(fetch.cdn.clone(), fetch.ttfb_ms, media_sequence);
+        linter.on_cdn_headers(&fetch.cdn, fetch.ttfb_ms, media_sequence);
 
         let download_kbps = if fetch.probed {
             None
@@ -1749,14 +1745,14 @@ impl ManifestPoller {
             self.emit_log(LogLevel::Warn, DiagCategory::Abr, w);
         }
 
-        let (latency, latency_ms) = match &segment.program_date_time {
-            Some(pdt) => {
+        let (latency, latency_ms) = segment.program_date_time.as_ref().map_or_else(
+            || (LatencyState::Estimated(estimated_ms), Some(estimated_ms)),
+            |pdt| {
                 let ms = (Utc::now() - pdt.with_timezone(&Utc)).num_milliseconds();
                 let ms = if ms < 0 { 0 } else { ms as u64 };
                 (LatencyState::Measured(ms), Some(ms))
-            }
-            None => (LatencyState::Estimated(estimated_ms), Some(estimated_ms)),
-        };
+            },
+        );
 
         let mut wire = fetch.wire.clone();
         if segment.duration > 0.0 {
@@ -1879,7 +1875,7 @@ impl ManifestPoller {
             variants.push(AbrVariant {
                 bandwidth: 0,
                 resolution: wire.resolution_label(),
-                codecs: wire.profile_level.clone().or(wire.codec.clone()),
+                codecs: wire.profile_level.clone().or_else(|| wire.codec.clone()),
                 frame_rate: wire.frame_rate,
                 uri: String::new(),
                 selected: true,
@@ -1929,7 +1925,7 @@ impl ManifestPoller {
             .headers()
             .get(reqwest::header::CONTENT_TYPE)
             .and_then(|v| v.to_str().ok())
-            .map(|s| s.to_string());
+            .map(std::string::ToString::to_string);
         let body = read_response_bytes_limited(response, MAX_MANIFEST_BYTES)
             .await
             .wrap_err("failed to read body")?;
@@ -1956,11 +1952,16 @@ impl ManifestPoller {
         video_pts_ms: Option<u64>,
     ) -> Option<crate::models::SubtitleSyncInfo> {
         let lower = url.to_ascii_lowercase();
-        if !lower.ends_with(".vtt")
-            && !lower.ends_with(".ttml")
-            && !lower.contains("webvtt")
-            && !lower.contains("ttml")
-        {
+        let path = std::path::Path::new(url);
+        let is_vtt = path
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("vtt"))
+            || lower.contains("webvtt");
+        let is_ttml = path
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("ttml"))
+            || lower.contains("ttml");
+        if !is_vtt && !is_ttml {
             return None;
         }
         let bytes = self.fetch_bytes(url).await.ok()?;
@@ -1992,10 +1993,10 @@ impl ManifestPoller {
                 let head = resp.body[..head_len].to_vec();
                 let mut wire = deep_wire_probe(&head);
                 self.finalize_wire(&mut wire);
-                let container = if wire.container != ContainerKind::Unknown {
-                    wire.container
-                } else {
+                let container = if wire.container == ContainerKind::Unknown {
                     inspect_container(&head)
+                } else {
+                    wire.container
                 };
                 Ok(SegmentFetch {
                     size_bytes: total,
@@ -2053,10 +2054,10 @@ impl ManifestPoller {
         let download_ms = started.elapsed().as_millis() as u64;
         let mut wire = deep_wire_probe(&head);
         self.finalize_wire(&mut wire);
-        let container = if wire.container != ContainerKind::Unknown {
-            wire.container
-        } else {
+        let container = if wire.container == ContainerKind::Unknown {
             inspect_container(&head)
+        } else {
+            wire.container
         };
         Ok(SegmentFetch {
             size_bytes: total,
@@ -2106,10 +2107,10 @@ impl ManifestPoller {
                 let size_bytes = if declared > 0 { declared } else { transferred };
                 let mut wire = deep_wire_probe(&resp.body);
                 self.finalize_wire(&mut wire);
-                let container = if wire.container != ContainerKind::Unknown {
-                    wire.container
-                } else {
+                let container = if wire.container == ContainerKind::Unknown {
                     inspect_container(&resp.body)
+                } else {
+                    wire.container
                 };
                 Ok(SegmentFetch {
                     size_bytes,
@@ -2184,10 +2185,10 @@ impl ManifestPoller {
         };
         let mut wire = deep_wire_probe(&buf);
         self.finalize_wire(&mut wire);
-        let container = if wire.container != ContainerKind::Unknown {
-            wire.container
-        } else {
+        let container = if wire.container == ContainerKind::Unknown {
             inspect_container(&buf)
+        } else {
+            wire.container
         };
         Ok(SegmentFetch {
             size_bytes,
@@ -2243,7 +2244,7 @@ struct LlHlsProbeStats {
     transfer_kbps: f64,
 }
 
-pub fn build_http_client(headers: &[String], user_agent: Option<String>) -> Result<Client> {
+pub fn build_http_client(headers: &[String], user_agent: Option<&str>) -> Result<Client> {
     build_http_client_with_timeouts(headers, user_agent, 10, 30)
 }
 
@@ -2261,7 +2262,7 @@ async fn read_response_bytes_limited(response: reqwest::Response, max: usize) ->
 }
 
 /// Audit HTTP client with short connect/total timeouts.
-pub fn build_audit_http_client(headers: &[String], user_agent: Option<String>) -> Result<Client> {
+pub fn build_audit_http_client(headers: &[String], user_agent: Option<&str>) -> Result<Client> {
     use crate::models::{AUDIT_CONNECT_TIMEOUT_SECS, AUDIT_REQUEST_TIMEOUT_SECS};
     build_http_client_with_timeouts(
         headers,
@@ -2273,12 +2274,12 @@ pub fn build_audit_http_client(headers: &[String], user_agent: Option<String>) -
 
 fn build_http_client_with_timeouts(
     headers: &[String],
-    user_agent: Option<String>,
+    user_agent: Option<&str>,
     connect_secs: u64,
     timeout_secs: u64,
 ) -> Result<Client> {
     let mut builder = Client::builder()
-        .user_agent(user_agent.unwrap_or_else(|| DEFAULT_UA.to_string()))
+        .user_agent(user_agent.unwrap_or(DEFAULT_UA))
         .gzip(true)
         .brotli(true)
         .redirect(reqwest::redirect::Policy::none())
@@ -2319,21 +2320,19 @@ fn resolve_url(base: &Url, href: &str) -> Result<Url> {
 
 pub fn collect_variants(variants: &[VariantStream], base: &Url) -> Vec<AbrVariant> {
     let mut out = Vec::new();
-    let mut seen: HashMap<String, ()> = HashMap::new();
+    let mut seen: HashSet<String> = HashSet::new();
 
     for v in variants {
         if v.is_i_frame || v.uri.is_empty() {
             continue;
         }
 
-        let resolved = resolve_url(base, &v.uri)
-            .map(|u| u.to_string())
-            .unwrap_or_else(|_| v.uri.clone());
+        let resolved = resolve_url(base, &v.uri).map_or_else(|_| v.uri.clone(), |u| u.to_string());
 
-        if seen.contains_key(&resolved) {
+        if seen.contains(&resolved) {
             continue;
         }
-        seen.insert(resolved.clone(), ());
+        seen.insert(resolved.clone());
 
         let resolution = v.resolution.map(|r| format!("{}x{}", r.width, r.height));
 
@@ -2384,10 +2383,10 @@ async fn read_local_segment(path: &std::path::Path, probe: bool) -> Result<Segme
     };
     let slice = &data[..take];
     let wire = deep_wire_probe(slice);
-    let container = if wire.container != ContainerKind::Unknown {
-        wire.container
-    } else {
+    let container = if wire.container == ContainerKind::Unknown {
         inspect_container(slice)
+    } else {
+        wire.container
     };
     let download_ms = started.elapsed().as_millis() as u64;
     Ok(SegmentFetch {
@@ -2413,7 +2412,7 @@ fn probe_slice(bytes: &[u8]) -> Vec<u8> {
 
 fn parse_cdn_headers_http(headers: &http::HeaderMap) -> CdnEdgeInfo {
     let mut map = HeaderMap::new();
-    for (k, v) in headers.iter() {
+    for (k, v) in headers {
         if let (Ok(name), Ok(val)) = (
             HeaderName::from_bytes(k.as_str().as_bytes()),
             HeaderValue::from_bytes(v.as_bytes()),
@@ -2433,13 +2432,13 @@ mod tests {
     use tokio::sync::mpsc;
     use tokio::time::{timeout, Duration as TokioDuration};
 
-    const MEDIA: &str = r#"#EXTM3U
+    const MEDIA: &str = r"#EXTM3U
 #EXT-X-VERSION:3
 #EXT-X-TARGETDURATION:4
 #EXT-X-MEDIA-SEQUENCE:10
 #EXTINF:4.0,
 seg.ts
-"#;
+";
 
     async fn spawn_mock_hls() -> (SocketAddr, tokio::task::JoinHandle<()>) {
         let app = Router::new()
@@ -2478,20 +2477,18 @@ seg.ts
         let url = format!("http://{addr}/index.m3u8");
         let (tx, mut rx) = mpsc::channel(64);
         let poller =
-            ManifestPoller::new(url, vec![], None, Some(200), true, false, tx).expect("poller");
+            ManifestPoller::new(&url, &[], None, Some(200), true, false, tx).expect("poller");
         let runner = tokio::spawn(async move { poller.run().await });
 
         let mut saw_segment = false;
         let deadline = TokioDuration::from_secs(3);
         let start = std::time::Instant::now();
         while start.elapsed() < deadline {
-            match timeout(TokioDuration::from_millis(400), rx.recv()).await {
-                Ok(Some(StreamEvent::Segment(_))) => {
-                    saw_segment = true;
-                    break;
-                }
-                Ok(Some(_)) => continue,
-                Ok(None) | Err(_) => continue,
+            if let Ok(Some(StreamEvent::Segment(_))) =
+                timeout(TokioDuration::from_millis(400), rx.recv()).await
+            {
+                saw_segment = true;
+                break;
             }
         }
         runner.abort();

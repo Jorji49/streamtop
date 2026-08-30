@@ -123,8 +123,7 @@ fn read_cstr(data: &[u8], start: usize) -> Option<(String, usize)> {
     let end = data[start..]
         .iter()
         .position(|&b| b == 0)
-        .map(|i| start + i)
-        .unwrap_or(data.len());
+        .map_or(data.len(), |i| start + i);
     let s = String::from_utf8_lossy(&data[start..end]).into_owned();
     let next = if end < data.len() { end + 1 } else { end };
     Some((s, next))
@@ -151,6 +150,7 @@ fn detect_silent_audio(data: &[u8]) -> bool {
         return false;
     }
     let sample = &data[..data.len().min(4096)];
+    #[allow(clippy::naive_bytecount)] // small fixed probe window; clarity over memchr dep
     let zeros = sample.iter().filter(|&&b| b == 0).count();
     zeros * 100 / sample.len().max(1) > 92
 }
@@ -161,7 +161,7 @@ fn apply_prft(payload: &[u8], timing: &mut WireTimingInfo) {
     if payload.len() < 24 {
         return;
     }
-    let _version = payload[0];
+    let _ = payload[0];
     let ntp_secs = u64::from_be_bytes([
         payload[8],
         payload[9],
@@ -188,8 +188,7 @@ fn apply_prft(payload: &[u8], timing: &mut WireTimingInfo) {
         timing.prft_ntp_unix_ms = Some(unix_ms);
         let now_ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_millis() as u64)
-            .unwrap_or(unix_ms);
+            .map_or(unix_ms, |d| d.as_millis() as u64);
         timing.glass_to_glass_ms = Some(now_ms as i64 - unix_ms as i64);
     }
 }
@@ -602,6 +601,7 @@ fn walk_boxes(
     }
 }
 
+#[allow(clippy::trivially_copy_pass_by_ref)] // ISO BMFF box tag compare
 fn find_child_box<'a>(payload: &'a [u8], want: &[u8; 4]) -> Option<&'a [u8]> {
     let mut found = None;
     let start = if payload.len() > 86 { 78 } else { 0 };
@@ -776,9 +776,7 @@ fn probe_mpeg_ts(bytes: &[u8]) -> WireProbeInfo {
     let mut audio_payload = Vec::new();
     for pkt in &packets {
         let pid = packet_pid(pkt);
-        if video_pid.map(|v| v == pid).unwrap_or(false)
-            || (video_pid.is_none() && has_pes_start(pkt))
-        {
+        if (video_pid == Some(pid)) || (video_pid.is_none() && has_pes_start(pkt)) {
             if let Some(payload) = ts_payload(pkt) {
                 if payload
                     .windows(4)
@@ -789,7 +787,7 @@ fn probe_mpeg_ts(bytes: &[u8]) -> WireProbeInfo {
                 }
             }
         }
-        if audio_pid.map(|a| a == pid).unwrap_or(false) {
+        if audio_pid == Some(pid) {
             if let Some(payload) = ts_payload(pkt) {
                 audio_payload.extend_from_slice(payload);
             }
@@ -829,10 +827,10 @@ fn probe_mpeg_ts(bytes: &[u8]) -> WireProbeInfo {
         }
     }
 
-    if !audio_payload.is_empty() {
-        parse_adts_header(&audio_payload, &mut info);
-    } else {
+    if audio_payload.is_empty() {
         parse_adts_header(&video_payload, &mut info);
+    } else {
+        parse_adts_header(&audio_payload, &mut info);
     }
 
     let codec_hint = info.codec.clone();
@@ -851,11 +849,11 @@ fn has_pes_start(pkt: &[u8]) -> bool {
 
 fn ts_payload(pkt: &[u8]) -> Option<&[u8]> {
     let adaptation = (pkt[3] >> 4) & 0x3;
-    let mut off = 4usize;
-    if adaptation == 2 || adaptation == 3 {
-        let len = pkt[4] as usize;
-        off = 5 + len;
-    }
+    let off = if adaptation == 2 || adaptation == 3 {
+        5 + pkt[4] as usize
+    } else {
+        4
+    };
     if adaptation == 0 || off >= 188 {
         return None;
     }
@@ -1249,7 +1247,7 @@ fn apply_h264_sps(nal: &[u8], info: &mut WireProbeInfo) {
         let _ = br.read_ue();
         let _ = br.read_bit();
         if br.read_bit().unwrap_or(0) == 1 {
-            let count = if chroma_format_idc != 3 { 8 } else { 12 };
+            let count = if chroma_format_idc == 3 { 12 } else { 8 };
             for i in 0..count {
                 if br.read_bit().unwrap_or(0) == 1 {
                     let size = if i < 6 { 16 } else { 64 };
@@ -1284,16 +1282,16 @@ fn apply_h264_sps(nal: &[u8], info: &mut WireProbeInfo) {
         let _ = br.read_bit();
     }
     let _ = br.read_bit();
-    let mut crop_l = 0u32;
-    let mut crop_r = 0u32;
-    let mut crop_t = 0u32;
-    let mut crop_b = 0u32;
-    if br.read_bit().unwrap_or(0) == 1 {
-        crop_l = br.read_ue().unwrap_or(0);
-        crop_r = br.read_ue().unwrap_or(0);
-        crop_t = br.read_ue().unwrap_or(0);
-        crop_b = br.read_ue().unwrap_or(0);
-    }
+    let (crop_l, crop_r, crop_t, crop_b) = if br.read_bit().unwrap_or(0) == 1 {
+        (
+            br.read_ue().unwrap_or(0),
+            br.read_ue().unwrap_or(0),
+            br.read_ue().unwrap_or(0),
+            br.read_ue().unwrap_or(0),
+        )
+    } else {
+        (0, 0, 0, 0)
+    };
     let width = ((w_mbs + 1) * 16).saturating_sub((crop_l + crop_r) * 2);
     let height = ((2 - frame_mbs_only) * (h_map + 1) * 16).saturating_sub((crop_t + crop_b) * 2);
     if width > 0 && height > 0 {
@@ -1329,10 +1327,11 @@ fn apply_h264_sps(nal: &[u8], info: &mut WireProbeInfo) {
             let time_scale = br.read_bits(32).unwrap_or(0);
             let fixed = br.read_bit().unwrap_or(0);
             if num_units > 0 && time_scale > 0 {
-                let mut fps = time_scale as f64 / (2.0 * num_units as f64);
-                if fixed == 0 {
-                    fps = time_scale as f64 / num_units as f64;
-                }
+                let fps = if fixed == 0 {
+                    time_scale as f64 / num_units as f64
+                } else {
+                    time_scale as f64 / (2.0 * num_units as f64)
+                };
                 if fps > 0.0 && fps < 120.0 {
                     info.frame_rate = Some(fps);
                 }

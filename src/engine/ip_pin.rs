@@ -46,7 +46,11 @@ pub fn is_blocked_hostname(host: &str) -> bool {
         || host_l == "metadata.goog"
         || host_l == "instance-data.ec2.internal"
         || host_l.ends_with(".internal")
-        || host_l.ends_with(".local")
+        || {
+            #[allow(clippy::case_sensitive_file_extension_comparisons)]
+            // mDNS .local hostname suffix
+            host_l.ends_with(".local")
+        }
 }
 
 pub fn is_blocked_ip(ip: IpAddr) -> bool {
@@ -123,9 +127,7 @@ fn is_local_ingest_host(host: &str) -> bool {
     if host.eq_ignore_ascii_case("localhost") {
         return true;
     }
-    host.parse::<IpAddr>()
-        .map(|ip| ip.is_loopback())
-        .unwrap_or(false)
+    host.parse::<IpAddr>().is_ok_and(|ip| ip.is_loopback())
 }
 
 /// SSRF gate for SRT/RTMP ingest targets (loopback allowed for local encoders).
@@ -159,7 +161,7 @@ pub fn pick_connect_addr(addrs: &[SocketAddr]) -> SocketAddr {
         return SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0);
     }
     let mut sorted: Vec<SocketAddr> = addrs.to_vec();
-    sorted.sort_by_key(|a| if a.is_ipv4() { 0 } else { 1 });
+    sorted.sort_by_key(|a| i32::from(!a.is_ipv4()));
     sorted[0]
 }
 

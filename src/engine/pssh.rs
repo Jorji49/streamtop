@@ -8,7 +8,7 @@ pub const FAIRPLAY_SYSTEM_ID: &str = "94ce86fb-07ff-4f43-adb4-93fb26514845";
 pub const CLEARKEY_SYSTEM_ID: &str = "1077efec-c0b2-4d02-ace3-3c48c139a369";
 
 impl PsshProbeInfo {
-    pub fn merge(&mut self, other: PsshProbeInfo) {
+    pub fn merge(&mut self, other: Self) {
         for e in other.entries {
             if !self
                 .entries
@@ -96,7 +96,7 @@ pub fn parse_pssh_payload(payload: &[u8]) -> Option<PsshEntry> {
     };
 
     Some(PsshEntry {
-        system_id: system_id.clone(),
+        system_id,
         drm_system,
         version,
         key_ids,
@@ -165,7 +165,11 @@ fn format_system_id(raw: &[u8]) -> String {
 }
 
 fn format_kid(raw: &[u8]) -> String {
-    raw.iter().map(|b| format!("{b:02x}")).collect()
+    raw.iter()
+        .fold(String::with_capacity(raw.len() * 2), |mut s, b| {
+            let _ = std::fmt::Write::write_fmt(&mut s, format_args!("{b:02x}"));
+            s
+        })
 }
 
 fn infer_encryption_scheme(payload: &[u8]) -> Option<String> {

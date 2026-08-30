@@ -45,10 +45,7 @@ impl SyntheticQoeEngine {
 
         let mut effective_kbps = throughput_kbps;
         if let Some(cap) = self.throttle_kbps {
-            effective_kbps = Some(match effective_kbps {
-                Some(k) => k.min(cap),
-                None => cap,
-            });
+            effective_kbps = Some(effective_kbps.map_or(cap, |k| k.min(cap)));
             let bytes = (duration * cap as f64 * 1000.0 / 8.0) as u64;
             let throttled_ms = bytes.saturating_mul(1000) / cap.saturating_mul(1000).max(1);
             effective_download_ms = effective_download_ms.max(throttled_ms);
@@ -99,6 +96,7 @@ impl SyntheticQoeEngine {
     }
 }
 
+#[allow(clippy::trivially_copy_pass_by_ref)] // QoE score helper; f64 copy not worth API churn
 fn compute_rebuffer_risk(tdr: f64, rebuffer_pcts: &[u8; 3]) -> u8 {
     let tdr_component = if tdr <= 0.8 {
         0.0

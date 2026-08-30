@@ -69,8 +69,7 @@ pub fn build_incident_report(
             manifest_url: snapshot
                 .playlist
                 .as_ref()
-                .map(|p| p.url.clone())
-                .unwrap_or_else(|| snapshot.summary.active_url.clone()),
+                .map_or_else(|| snapshot.summary.active_url.clone(), |p| p.url.clone()),
             segment_url: Some(seg.uri.clone()),
             probe_headers: seg.probed,
             headers: headers.to_vec(),
@@ -117,10 +116,10 @@ pub fn build_incident_report(
 
 pub fn incident_export_path(base: Option<&Path>, now: DateTime<Utc>) -> PathBuf {
     let stamp = now.format("%Y%m%d_%H%M%S");
-    match base {
-        Some(p) => p.to_path_buf(),
-        None => PathBuf::from(format!("{INCIDENT_DIR}/incident_report_{stamp}.json")),
-    }
+    base.map_or_else(
+        || PathBuf::from(format!("{INCIDENT_DIR}/incident_report_{stamp}.json")),
+        std::path::Path::to_path_buf,
+    )
 }
 
 pub fn write_incident_report(path: &Path, report: &IncidentReport) -> Result<()> {

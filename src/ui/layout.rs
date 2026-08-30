@@ -109,8 +109,8 @@ pub fn draw_regex_modal(frame: &mut Frame, area: Rect, app: &App) {
 
 fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
     let (latency_text, latency_color) = latency_display(app.latency);
-    let (badge_text, badge_fg, badge_bg) = status_badge(app);
-    let (score_fg, score_bg) = health_colors(app.health.score);
+    let (badge_text, badge_fg, badge_back) = status_badge(app);
+    let (score_fg, score_back) = health_colors(app.health.score);
 
     let seq = app
         .last_segment
@@ -121,38 +121,36 @@ fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
     let target = app
         .playlist
         .as_ref()
-        .map(|p| format!("{}s", p.target_duration))
-        .unwrap_or_else(|| "-".into());
+        .map_or_else(|| "-".into(), |p| format!("{}s", p.target_duration));
 
-    let cdn_badge = app
-        .cdn
-        .last
-        .as_ref()
-        .map(|c| c.badge())
-        .unwrap_or_else(|| "UNKNOWN".into());
-    let cdn_line = {
-        let base = match app.cdn.hit_ratio_pct() {
-            Some(pct) => format!(
+    let cdn_badge = app.cdn.last.as_ref().map_or_else(
+        || "UNKNOWN".into(),
+        super::super::models::stream::CdnEdgeInfo::badge,
+    );
+    let cdn_line = app.cdn.hit_ratio_pct().map_or_else(
+        || format!("CDN: {cdn_badge}"),
+        |pct| {
+            format!(
                 "CDN: {cdn_badge}  hit {:.0}% ({}/{})",
                 pct,
                 app.cdn.hits,
                 app.cdn.hits + app.cdn.misses
-            ),
-            None => format!("CDN: {cdn_badge}"),
-        };
-        if let Some(edge) = app.cdn.last.as_ref().and_then(|c| {
+            )
+        },
+    );
+    let cdn_line = app
+        .cdn
+        .last
+        .as_ref()
+        .and_then(|c| {
             let d = c.edge_detail();
             if d.is_empty() {
                 None
             } else {
-                Some(d)
+                Some(format!("{cdn_line}  {d}"))
             }
-        }) {
-            format!("{base}  {edge}")
-        } else {
-            base
-        }
-    };
+        })
+        .unwrap_or(cdn_line);
 
     let window = app
         .playlist
@@ -189,7 +187,7 @@ fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
         }
         _ => " - FPS ".into(),
     };
-    let (fps_fg, fps_bg) = if video_fps.is_some() {
+    let (fps_fg, fps_back) = if video_fps.is_some() {
         (Color::Black, Color::LightCyan)
     } else {
         (Color::DarkGray, Color::Black)
@@ -202,7 +200,7 @@ fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
             format!(" {badge_text} "),
             Style::default()
                 .fg(badge_fg)
-                .bg(badge_bg)
+                .bg(badge_back)
                 .add_modifier(Modifier::BOLD),
         ),
         Span::raw(" "),
@@ -210,7 +208,7 @@ fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
             format!(" SHI {:>3} {} ", app.health.score, app.health.label),
             Style::default()
                 .fg(score_fg)
-                .bg(score_bg)
+                .bg(score_back)
                 .add_modifier(Modifier::BOLD),
         ),
         Span::raw(" "),
@@ -218,7 +216,7 @@ fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
             fps_label,
             Style::default()
                 .fg(fps_fg)
-                .bg(fps_bg)
+                .bg(fps_back)
                 .add_modifier(Modifier::BOLD),
         ),
         Span::raw("  Seq "),
@@ -238,7 +236,7 @@ fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
     ];
     if let Some(w) = wire {
         if let Some(gop) = w.gop_badge() {
-            let (gop_fg, gop_bg) = if gop == "IDR" {
+            let (gop_fg, gop_back) = if gop == "IDR" {
                 (Color::Black, Color::LightGreen)
             } else {
                 (Color::Black, Color::Yellow)
@@ -248,7 +246,7 @@ fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
                 format!(" {gop} "),
                 Style::default()
                     .fg(gop_fg)
-                    .bg(gop_bg)
+                    .bg(gop_back)
                     .add_modifier(Modifier::BOLD),
             ));
         }
@@ -315,9 +313,10 @@ fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
                 buf,
                 Style::default().fg(buf_color).add_modifier(Modifier::BOLD),
             ),
-            window
-                .map(|w| Span::styled(format!("  {w}"), Style::default().fg(Color::DarkGray)))
-                .unwrap_or_else(|| Span::raw("")),
+            window.map_or_else(
+                || Span::raw(""),
+                |w| Span::styled(format!("  {w}"), Style::default().fg(Color::DarkGray)),
+            ),
         ]),
     ];
 
@@ -376,7 +375,7 @@ fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
 
 fn status_badge(app: &App) -> (&'static str, Color, Color) {
     match app.status.kind {
-        StreamStatusKind::Live if app.active_ad.as_ref().map(|a| a.active).unwrap_or(false) => {
+        StreamStatusKind::Live if app.active_ad.as_ref().is_some_and(|a| a.active) => {
             ("DAI", Color::White, Color::Magenta)
         }
         StreamStatusKind::Live if app.latency.is_estimated() || !app.uses_pdt() => {
@@ -409,89 +408,88 @@ fn draw_left(frame: &mut Frame, app: &App, area: Rect) {
 }
 
 fn draw_segment_panel(frame: &mut Frame, app: &App, area: Rect) {
-    let lines = if let Some(seg) = &app.last_segment {
-        let probe = if seg.probed { "range-probe" } else { "full" };
-        let size_line = if seg.probed {
-            format!(
-                " Declared size  : {:.1} KB (not fully downloaded)",
-                seg.size_bytes as f64 / 1024.0
-            )
-        } else {
-            format!(
-                " Duration/Size  : {:.3}s · {:.1} KB",
-                seg.duration_secs,
-                seg.size_bytes as f64 / 1024.0
-            )
-        };
-        let net = seg
-            .network
-            .as_ref()
-            .map(|n| n.display_line())
-            .unwrap_or_else(|| format!("TTFB: {}ms", seg.ttfb_ms));
-        let mut lines = vec![
-            Line::from(format!(" Media Sequence : {}", seg.media_sequence)),
-            Line::from(size_line),
-            Line::from(format!(
-                " TTFB / Transfer: {} ms / {} ms ({probe})",
-                seg.ttfb_ms, seg.download_ms
-            )),
-            Line::from(Span::styled(
-                format!(" {net}"),
-                Style::default().fg(Color::Cyan),
-            )),
-            Line::from(format!(
-                " Rate / Type    : {} · {}",
-                seg.rate_label(),
-                seg.container.as_str()
-            )),
-            Line::from(format!(" CDN            : {}", seg.cdn.badge())),
-        ];
-        if let Some(wire) = &seg.wire {
-            if let Some(res) = wire.resolution_label() {
+    let lines = app.last_segment.as_ref().map_or_else(
+        || vec![Line::from(" No segment sample yet…")],
+        |seg| {
+            let probe = if seg.probed { "range-probe" } else { "full" };
+            let size_line = if seg.probed {
+                format!(
+                    " Declared size  : {:.1} KB (not fully downloaded)",
+                    seg.size_bytes as f64 / 1024.0
+                )
+            } else {
+                format!(
+                    " Duration/Size  : {:.3}s · {:.1} KB",
+                    seg.duration_secs,
+                    seg.size_bytes as f64 / 1024.0
+                )
+            };
+            let net = seg.network.as_ref().map_or_else(
+                || format!("TTFB: {}ms", seg.ttfb_ms),
+                super::super::models::stream::NetworkTiming::display_line,
+            );
+            let mut lines = vec![
+                Line::from(format!(" Media Sequence : {}", seg.media_sequence)),
+                Line::from(size_line),
+                Line::from(format!(
+                    " TTFB / Transfer: {} ms / {} ms ({probe})",
+                    seg.ttfb_ms, seg.download_ms
+                )),
+                Line::from(Span::styled(
+                    format!(" {net}"),
+                    Style::default().fg(Color::Cyan),
+                )),
+                Line::from(format!(
+                    " Rate / Type    : {} · {}",
+                    seg.rate_label(),
+                    seg.container.as_str()
+                )),
+                Line::from(format!(" CDN            : {}", seg.cdn.badge())),
+            ];
+            if let Some(wire) = &seg.wire {
+                if let Some(res) = wire.resolution_label() {
+                    lines.push(Line::from(format!(
+                        " Wire           : {res} · {} fps · {}",
+                        wire.frame_rate
+                            .map_or_else(|| "-".into(), |f| format!("{f:.2}")),
+                        wire.codec.as_deref().unwrap_or("-")
+                    )));
+                } else if wire.codec.is_some() {
+                    lines.push(Line::from(format!(
+                        " Wire           : {}",
+                        wire.codec.as_deref().unwrap_or("-")
+                    )));
+                }
+                if let Some(gop) = wire.gop_label() {
+                    lines.push(Line::from(format!(" GOP            : {gop}")));
+                }
+                if let Some(audio) = wire.audio_label() {
+                    lines.push(Line::from(format!(" Audio          : {audio}")));
+                }
+            }
+            let sei = &app.sei_probe;
+            if sei.cea608_present || sei.cea708_present || sei.hdr10_present || sei.hlg_present {
+                let mut badges = Vec::new();
+                if sei.cea608_present {
+                    badges.push("CEA-608");
+                }
+                if sei.cea708_present {
+                    badges.push("CEA-708");
+                }
+                if sei.hdr10_present {
+                    badges.push("HDR10");
+                }
+                if sei.hlg_present {
+                    badges.push("HLG");
+                }
                 lines.push(Line::from(format!(
-                    " Wire           : {res} · {} fps · {}",
-                    wire.frame_rate
-                        .map(|f| format!("{f:.2}"))
-                        .unwrap_or_else(|| "-".into()),
-                    wire.codec.as_deref().unwrap_or("-")
-                )));
-            } else if wire.codec.is_some() {
-                lines.push(Line::from(format!(
-                    " Wire           : {}",
-                    wire.codec.as_deref().unwrap_or("-")
+                    " SEI/Captions   : {}",
+                    badges.join(" · ")
                 )));
             }
-            if let Some(gop) = wire.gop_label() {
-                lines.push(Line::from(format!(" GOP            : {gop}")));
-            }
-            if let Some(audio) = wire.audio_label() {
-                lines.push(Line::from(format!(" Audio          : {audio}")));
-            }
-        }
-        let sei = &app.sei_probe;
-        if sei.cea608_present || sei.cea708_present || sei.hdr10_present || sei.hlg_present {
-            let mut badges = Vec::new();
-            if sei.cea608_present {
-                badges.push("CEA-608");
-            }
-            if sei.cea708_present {
-                badges.push("CEA-708");
-            }
-            if sei.hdr10_present {
-                badges.push("HDR10");
-            }
-            if sei.hlg_present {
-                badges.push("HLG");
-            }
-            lines.push(Line::from(format!(
-                " SEI/Captions   : {}",
-                badges.join(" · ")
-            )));
-        }
-        lines
-    } else {
-        vec![Line::from(" No segment sample yet…")]
-    };
+            lines
+        },
+    );
 
     frame.render_widget(
         Paragraph::new(lines).block(rounded(" Last Segment / Edge ")),
@@ -645,7 +643,7 @@ fn draw_right(frame: &mut Frame, app: &App, area: Rect) {
     let bitrate_data = app.bitrate_history.to_vec();
     let transfer_data = app.transfer_history.to_vec();
 
-    if app.probe_mode || app.last_segment.as_ref().map(|s| s.probed).unwrap_or(false) {
+    if app.probe_mode || app.last_segment.as_ref().is_some_and(|s| s.probed) {
         let last_ms = transfer_data.last().copied().unwrap_or(0);
         let title = format!(" Transfer Time ({last_ms} ms) ");
         render_spark_or_placeholder(frame, chunks[1], &title, &transfer_data, Color::Magenta);
@@ -690,25 +688,31 @@ fn render_spark_or_placeholder(
 
 fn draw_log(frame: &mut Frame, app: &App, area: Rect) {
     let visible = area.height.saturating_sub(2) as usize;
-    let filtered: Vec<&crate::models::LogEntry> = if let Some(re) = &app.log_filter_regex {
-        app.log
-            .iter()
-            .filter(|e| {
-                re.is_match(&e.message) || re.is_match(e.category.tag()) || re.is_match(&e.time)
-            })
-            .collect()
-    } else if let Some(pat) = &app.log_filter {
-        let needle = pat.to_ascii_lowercase();
-        app.log
-            .iter()
-            .filter(|e| {
-                e.message.to_ascii_lowercase().contains(&needle)
-                    || e.category.tag().to_ascii_lowercase().contains(&needle)
-            })
-            .collect()
-    } else {
-        app.log.iter().collect()
-    };
+    let filtered: Vec<&crate::models::LogEntry> = app.log_filter_regex.as_ref().map_or_else(
+        || {
+            app.log_filter.as_ref().map_or_else(
+                || app.log.iter().collect(),
+                |pat| {
+                    let needle = pat.to_ascii_lowercase();
+                    app.log
+                        .iter()
+                        .filter(|e| {
+                            e.message.to_ascii_lowercase().contains(&needle)
+                                || e.category.tag().to_ascii_lowercase().contains(&needle)
+                        })
+                        .collect()
+                },
+            )
+        },
+        |re| {
+            app.log
+                .iter()
+                .filter(|e| {
+                    re.is_match(&e.message) || re.is_match(e.category.tag()) || re.is_match(&e.time)
+                })
+                .collect()
+        },
+    );
     let total = filtered.len();
     let max_scroll = total.saturating_sub(visible);
     let scroll = (app.log_scroll as usize).min(max_scroll);
@@ -750,11 +754,10 @@ fn log_block_title(app: &App) -> String {
     if app.log_filter_edit {
         return format!(" Log filter: /{}_ ", app.log_filter_draft);
     }
-    if let Some(ref pat) = app.log_filter {
-        format!(" Diagnostics / Event Log [regex: /{pat}/] ")
-    } else {
-        " Diagnostics / Event Log ".into()
-    }
+    app.log_filter.as_ref().map_or_else(
+        || " Diagnostics / Event Log ".into(),
+        |pat| format!(" Diagnostics / Event Log [regex: /{pat}/] "),
+    )
 }
 
 fn category_style(cat: DiagCategory, level: LogLevel) -> (&'static str, Color) {
@@ -768,15 +771,13 @@ fn category_style(cat: DiagCategory, level: LogLevel) -> (&'static str, Color) {
             other.tag(),
             match other {
                 DiagCategory::Rfc => Color::Red,
-                DiagCategory::Stalling => Color::LightYellow,
-                DiagCategory::Cdn => Color::Cyan,
-                DiagCategory::Ad => Color::Magenta,
-                DiagCategory::Abr => Color::LightYellow,
+                DiagCategory::Stalling
+                | DiagCategory::Abr
+                | DiagCategory::Buffer
+                | DiagCategory::AvSync => Color::LightYellow,
+                DiagCategory::Cdn | DiagCategory::LlHls => Color::Cyan,
+                DiagCategory::Ad | DiagCategory::Drm => Color::Magenta,
                 DiagCategory::Segment => Color::LightGreen,
-                DiagCategory::Buffer => Color::LightYellow,
-                DiagCategory::LlHls => Color::Cyan,
-                DiagCategory::AvSync => Color::LightYellow,
-                DiagCategory::Drm => Color::Magenta,
                 DiagCategory::Info => Color::Gray,
             },
         ),
@@ -971,12 +972,8 @@ fn draw_sei_panel(frame: &mut Frame, area: Rect, app: &App) {
         )),
         Line::from(format!(
             " MaxCLL/MaxFALL : {}/{}",
-            s.max_cll
-                .map(|v| v.to_string())
-                .unwrap_or_else(|| "-".into()),
-            s.max_fall
-                .map(|v| v.to_string())
-                .unwrap_or_else(|| "-".into()),
+            s.max_cll.map_or_else(|| "-".into(), |v| v.to_string()),
+            s.max_fall.map_or_else(|| "-".into(), |v| v.to_string()),
         )),
         Line::from(format!(
             " Caption lang   : {}",
@@ -997,15 +994,12 @@ fn draw_qoe_panel(frame: &mut Frame, area: Rect, app: &App) {
         Line::from(format!(" Rebuffer risk  : {} / 100", q.rebuffer_risk_score)),
         Line::from(format!(
             " TTFF           : {} ms",
-            q.ttff_ms
-                .map(|v| v.to_string())
-                .unwrap_or_else(|| "-".into())
+            q.ttff_ms.map_or_else(|| "-".into(), |v| v.to_string())
         )),
         Line::from(format!(
             " Selected ABR   : {} bps",
             q.selected_bitrate_bps
-                .map(|v| v.to_string())
-                .unwrap_or_else(|| "-".into())
+                .map_or_else(|| "-".into(), |v| v.to_string())
         )),
         Line::from(format!(
             " Buffer 2s/4s/6s: {}% / {}% / {}%",
@@ -1014,14 +1008,12 @@ fn draw_qoe_panel(frame: &mut Frame, area: Rect, app: &App) {
         Line::from(format!(
             " Throttle       : {} kbps",
             q.throttle_kbps
-                .map(|v| v.to_string())
-                .unwrap_or_else(|| "-".into())
+                .map_or_else(|| "-".into(), |v| v.to_string())
         )),
         Line::from(format!(
             " Simulated RTT  : {} ms",
             q.simulated_rtt_ms
-                .map(|v| v.to_string())
-                .unwrap_or_else(|| "-".into())
+                .map_or_else(|| "-".into(), |v| v.to_string())
         )),
     ];
     frame.render_widget(

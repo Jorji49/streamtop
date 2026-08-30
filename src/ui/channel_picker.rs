@@ -116,7 +116,7 @@ impl ChannelPicker {
         }
 
         match key.code {
-            KeyCode::Char('q') | KeyCode::Char('Q') => PickerAction::Quit,
+            KeyCode::Char('q' | 'Q') => PickerAction::Quit,
             KeyCode::Esc => PickerAction::Cancel,
             KeyCode::Char('/') => {
                 self.searching = true;
@@ -259,17 +259,18 @@ impl ChannelPicker {
             .highlight_symbol("▶ ");
         frame.render_stateful_widget(list, inner_list, &mut self.list_state);
 
-        let detail = if let Some(ch) = self.current() {
-            vec![
-                Line::from(format!(" {}  [{}]", ch.name, ch.group_label())),
-                Line::from(Span::styled(
-                    ch.url.clone(),
-                    Style::default().fg(Color::Cyan),
-                )),
-            ]
-        } else {
-            vec![Line::from("No channels match the filter.")]
-        };
+        let detail = self.current().map_or_else(
+            || vec![Line::from("No channels match the filter.")],
+            |ch| {
+                vec![
+                    Line::from(format!(" {}  [{}]", ch.name, ch.group_label())),
+                    Line::from(Span::styled(
+                        ch.url.clone(),
+                        Style::default().fg(Color::Cyan),
+                    )),
+                ]
+            },
+        );
         frame.render_widget(Paragraph::new(detail), inner_detail);
 
         let n = self.channels.len();

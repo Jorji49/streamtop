@@ -41,7 +41,7 @@ async fn run_audit_to(
     user_agent: Option<String>,
     output_dir: &Path,
 ) -> Result<AuditReport> {
-    let client = Arc::new(build_audit_http_client(&headers, user_agent)?);
+    let client = Arc::new(build_audit_http_client(&headers, user_agent.as_deref())?);
     let sem = Arc::new(Semaphore::new(AUDIT_CONCURRENCY));
     let total = channels.len();
 
@@ -270,8 +270,7 @@ fn last_segment_url(
     }
     Ok(base
         .join(&seg.uri)
-        .map(|u| u.to_string())
-        .unwrap_or_else(|_| seg.uri.clone()))
+        .map_or_else(|_| seg.uri.clone(), |u| u.to_string()))
 }
 
 fn normalize_status(status: u16) -> u16 {
@@ -323,7 +322,7 @@ async fn fetch_manifest(client: &Client, url: &str) -> Result<(Vec<u8>, u16, Opt
         .headers()
         .get(reqwest::header::CONTENT_TYPE)
         .and_then(|v| v.to_str().ok())
-        .map(|s| s.to_string());
+        .map(std::string::ToString::to_string);
     let body = response.bytes().await.unwrap_or_default().to_vec();
     Ok((body, status, ct))
 }
@@ -378,13 +377,11 @@ fn print_matrix(report: &AuditReport) -> Result<()> {
     for (i, row) in report.channels.iter().enumerate() {
         let http = row
             .http_status
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| "-".into());
+            .map_or_else(|| "-".into(), |s| s.to_string());
         let pdt = if row.has_pdt { "yes" } else { "no" };
         let ttfb = row
             .ttfb_ms
-            .map(|ms| format!("{ms}ms"))
-            .unwrap_or_else(|| "-".into());
+            .map_or_else(|| "-".into(), |ms| format!("{ms}ms"));
         let name = truncate(&row.name, 28);
         let group = truncate(row.group.as_deref().unwrap_or("-"), 12);
         let cdn = truncate(&row.cdn, 22);
@@ -483,7 +480,7 @@ fn write_csv(report: &AuditReport, path: &Path) -> Result<()> {
         let bws = row
             .bitrate_profiles
             .iter()
-            .map(|b| b.to_string())
+            .map(std::string::ToString::to_string)
             .collect::<Vec<_>>()
             .join("|");
         let url = crate::engine::redact::redact_url(&row.url);
@@ -499,10 +496,10 @@ fn write_csv(report: &AuditReport, path: &Path) -> Result<()> {
             csv_escape(row.group.as_deref().unwrap_or("")),
             csv_escape(&url),
             row.verdict.as_str(),
-            row.http_status.map(|s| s.to_string()).unwrap_or_default(),
+            row.http_status.map_or_else(String::new, |s| s.to_string()),
             row.protocol.as_deref().unwrap_or(""),
             csv_escape(&row.cdn),
-            row.ttfb_ms.map(|s| s.to_string()).unwrap_or_default(),
+            row.ttfb_ms.map_or_else(String::new, |s| s.to_string()),
             csv_escape(&bws),
             row.has_pdt,
             csv_escape(&err),
@@ -526,12 +523,12 @@ mod tests {
     use axum::Router;
     use std::sync::atomic::{AtomicU64, Ordering};
 
-    const MEDIA: &str = r#"#EXTM3U
+    const MEDIA: &str = r"#EXTM3U
 #EXT-X-TARGETDURATION:2
 #EXT-X-MEDIA-SEQUENCE:1
 #EXTINF:2.0,
 seg.ts
-"#;
+";
 
     fn unique_tmpdir() -> std::path::PathBuf {
         static N: AtomicU64 = AtomicU64::new(0);

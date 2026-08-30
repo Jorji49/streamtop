@@ -1,6 +1,7 @@
 //! Multi-stream headless agent (`streamtop --agent config.toml`).
 
 use std::collections::HashMap;
+use std::fmt::Write as _;
 use std::net::{IpAddr, SocketAddr};
 use std::process::ExitCode;
 use std::sync::{Arc, RwLock};
@@ -43,7 +44,8 @@ impl AgentMetricsRegistry {
             out.push_str(&render_openmetrics_for_stream(snap, Some(id)));
         }
         let labels = r#"service="streamtop-agent""#;
-        out.push_str(&format!(
+        let _ = write!(
+            out,
             "# HELP streamtop_agent_streams_active Active agent pollers\n\
              # TYPE streamtop_agent_streams_active gauge\n\
              streamtop_agent_streams_active{{{labels}}} {}\n\
@@ -51,7 +53,7 @@ impl AgentMetricsRegistry {
              # TYPE streamtop_agent_events_dropped_total counter\n\
              streamtop_agent_events_dropped_total{{{labels}}} {}\n",
             self.active_streams, self.dropped_events
-        ));
+        );
         out
     }
 }
@@ -123,6 +125,32 @@ pub fn load_agent_config(path: &str) -> Result<AgentConfigFile> {
     Ok(cfg)
 }
 
+fn registry_read(
+    registry: &RwLock<AgentMetricsRegistry>,
+) -> std::sync::RwLockReadGuard<'_, AgentMetricsRegistry> {
+    registry
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+fn registry_write(
+    registry: &RwLock<AgentMetricsRegistry>,
+) -> std::sync::RwLockWriteGuard<'_, AgentMetricsRegistry> {
+    registry
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+fn registry_active_streams(registry: &RwLock<AgentMetricsRegistry>, fallback: u64) -> u64 {
+    registry.read().map_or_else(
+        |_| {
+            eprintln!("streamtop agent: metrics registry poisoned, using configured stream count");
+            fallback
+        },
+        |guard| guard.active_streams,
+    )
+}
+
 fn validate_agent_stream_count(n: usize) -> Result<()> {
     if n > MAX_AGENT_STREAMS {
         return Err(eyre!(
@@ -139,7 +167,7 @@ pub async fn run_agent(config_path: &str) -> Result<ExitCode> {
         .parse()
         .wrap_err("invalid metrics_bind in agent config")?;
     let token = normalize_metrics_token(cfg.metrics_token.clone());
-    require_metrics_token_for_bind(bind, &token)?;
+    require_metrics_token_for_bind(bind, token.as_deref())?;
 
     let registry = Arc::new(RwLock::new(AgentMetricsRegistry {
         active_streams: cfg.streams.len() as u64,
@@ -147,8 +175,8 @@ pub async fn run_agent(config_path: &str) -> Result<ExitCode> {
     }));
 
     let streams = cfg.streams.clone();
-    for stream in streams {
-        spawn_agent_stream(stream, Arc::clone(&registry), &cfg)?;
+    for stream in &streams {
+        spawn_agent_stream(stream, &registry, &cfg)?;
     }
 
     let auth = MetricsAuth {
@@ -161,9 +189,10 @@ pub async fn run_agent(config_path: &str) -> Result<ExitCode> {
     let app = app.layer(axum::Extension(auth));
 
     let addr = SocketAddr::new(bind, cfg.metrics_port);
+    let configured_streams = cfg.streams.len() as u64;
     eprintln!(
         "streamtop agent: {} streams | metrics http://{addr}/metrics",
-        registry.read().unwrap().active_streams
+        registry_active_streams(&registry, configured_streams)
     );
     let listener = tokio::net::TcpListener::bind(addr).await?;
     axum::serve(listener, app).await?;
@@ -171,19 +200,17 @@ pub async fn run_agent(config_path: &str) -> Result<ExitCode> {
 }
 
 fn spawn_agent_stream(
-    stream: AgentStreamConfig,
-    registry: Arc<RwLock<AgentMetricsRegistry>>,
+    stream: &AgentStreamConfig,
+    registry: &Arc<RwLock<AgentMetricsRegistry>>,
     agent: &AgentConfigFile,
 ) -> Result<()> {
     let stream_id = stream.id.clone();
     let url = stream.url.clone();
     {
-        let mut reg = registry.write().unwrap();
-        reg.streams.insert(stream_id.clone(), {
-            let mut snap = MetricsSnapshot::default();
-            snap.url = url.clone();
-            snap
-        });
+        let mut reg = registry_write(registry);
+        let mut snap = MetricsSnapshot::default();
+        snap.url.clone_from(&url);
+        reg.streams.insert(stream_id.clone(), snap);
     }
 
     let (tx, mut rx) = mpsc::channel(AGENT_EVENT_CHANNEL_CAPACITY);
@@ -212,16 +239,16 @@ fn spawn_agent_stream(
     };
 
     let mut poller = ManifestPoller::new(
-        url.clone(),
-        session.headers.clone(),
-        session.user_agent.clone(),
+        url.as_str(),
+        &session.headers,
+        session.user_agent.as_deref(),
         session.interval_ms,
         session.probe_headers,
         session.probe_drm,
         tx,
     )?
-    .with_agent_metrics(Arc::clone(&registry), stream_id.clone())
-    .with_diagnostics(crate::engine::poller::DiagnosticOpts {
+    .with_agent_metrics(Arc::clone(registry), stream_id.clone())
+    .with_diagnostics(&crate::engine::poller::DiagnosticOpts {
         tr101290: session.tr101290,
         probe_sei: session.probe_sei,
         simulate_player: false,
@@ -247,20 +274,19 @@ fn spawn_agent_stream(
                 allow_insecure: session.allow_insecure_webhooks,
             },
             hook_rx,
-            format!("{}:{url}", stream_id),
+            format!("{stream_id}:{url}"),
         );
     }
 
     if stream.compare_with.is_some() {
         eprintln!(
-            "agent stream {}: compare_with noted (pair metrics via stream_id labels)",
-            stream_id
+            "agent stream {stream_id}: compare_with noted (pair metrics via stream_id labels)"
         );
     }
 
     tokio::spawn(async move { while rx.recv().await.is_some() {} });
     tokio::spawn(async move {
-        let _ = poller.run().await;
+        let () = poller.run().await;
     });
     Ok(())
 }
@@ -279,10 +305,7 @@ async fn agent_metrics_handler(
             );
         }
     }
-    let body = registry
-        .read()
-        .map(|r| r.render_openmetrics())
-        .unwrap_or_default();
+    let body = registry_read(&registry).render_openmetrics();
     (
         StatusCode::OK,
         [("content-type", "text/plain; version=0.0.4; charset=utf-8")],
