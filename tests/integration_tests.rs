@@ -157,7 +157,9 @@ fn dash_fixture_parses_widevine_content_protection() {
 fn g2g_correlates_prft_and_pdt() {
     use chrono::{TimeZone, Utc};
     let prft = 1_700_000_000_000u64;
-    let pdt = Utc.timestamp_millis_opt(prft as i64 + 500).single();
+    let pdt = Utc
+        .timestamp_millis_opt(i64::try_from(prft + 500).expect("test prft fits i64"))
+        .single();
     let m = compute_g2g(Some(prft), pdt.as_ref(), None, Some(80), prft + 3_000);
     assert_eq!(m.ingestion_lag_ms, Some(500));
     assert_eq!(m.edge_propagation_ms, Some(80));

@@ -27,6 +27,7 @@ pub mod redact;
 pub mod report_export;
 pub mod scte35;
 pub mod sei_probe;
+pub mod slice_util;
 pub mod subtitle_probe;
 pub mod summary;
 pub mod synthetic_qoe;

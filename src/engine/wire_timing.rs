@@ -6,6 +6,7 @@ const PTS33_MOD: u64 = 1 << 33;
 const ROLLOVER_THRESHOLD_TICKS: u64 = PTS33_MOD / 2;
 
 #[derive(Debug, Clone, Default)]
+#[allow(clippy::struct_field_names)] // continuity state: last_decode_ticks, last_timescale, ...
 pub struct WireTimingTracker {
     last_decode_ticks: Option<u64>,
     last_timescale: Option<u32>,
@@ -25,12 +26,12 @@ impl WireTimingTracker {
         }
     }
 
-    pub fn apply(&mut self, timing: &mut WireTimingInfo, target_duration_secs: Option<f32>) {
+    pub fn apply(&self, timing: &mut WireTimingInfo, target_duration_secs: Option<f32>) {
         self.apply_cross_segment(timing);
-        self.apply_target(timing, target_duration_secs);
+        Self::apply_target(timing, target_duration_secs);
     }
 
-    pub fn apply_target(&mut self, timing: &mut WireTimingInfo, target_duration_secs: Option<f32>) {
+    pub(crate) fn apply_target(timing: &mut WireTimingInfo, target_duration_secs: Option<f32>) {
         if let (Some(wire_dur), Some(target)) = (timing.wire_duration_sec, target_duration_secs) {
             if target > 0.0 && wire_dur.is_finite() && wire_dur > 0.0 {
                 let pct = ((wire_dur - f64::from(target)) / f64::from(target)) * 100.0;
@@ -41,7 +42,7 @@ impl WireTimingTracker {
         }
     }
 
-    fn apply_cross_segment(&mut self, timing: &mut WireTimingInfo) {
+    fn apply_cross_segment(&self, timing: &mut WireTimingInfo) {
         if let (Some(base), Some(prev)) = (timing.moof_base_decode_time, self.last_decode_ticks) {
             if self.last_timescale == timing.moof_timescale {
                 let delta = base.wrapping_sub(prev);
@@ -66,7 +67,7 @@ mod tests {
 
     #[test]
     fn target_duration_deviation_computed() {
-        let mut tracker = WireTimingTracker::default();
+        let tracker = WireTimingTracker::default();
         let mut timing = WireTimingInfo {
             wire_duration_sec: Some(3.0),
             ..Default::default()
@@ -77,7 +78,7 @@ mod tests {
 
     #[test]
     fn decode_time_gap_flags_discontinuity() {
-        let mut tracker = WireTimingTracker {
+        let tracker = WireTimingTracker {
             last_decode_ticks: Some(0),
             last_timescale: Some(90000),
             ..Default::default()
@@ -94,7 +95,7 @@ mod tests {
 
     #[test]
     fn rollover_suspect_on_33bit_wrap() {
-        let mut tracker = WireTimingTracker {
+        let tracker = WireTimingTracker {
             last_decode_ticks: Some(PTS33_MOD - 90000),
             last_timescale: Some(90000),
             ..Default::default()

@@ -75,7 +75,7 @@ pub struct SummaryJson {
 }
 
 pub fn build_summary_json(
-    url: String,
+    url: &str,
     ok: bool,
     health: &HealthReport,
     status_label: &'static str,
@@ -113,7 +113,7 @@ pub fn build_summary_json(
         last_http_status,
         origin_stalls,
         critical_rfc_errors,
-        url: redact_url(&url),
+        url: redact_url(url),
         errors,
         saw_segment,
         dropped_events,
@@ -146,21 +146,21 @@ pub async fn run_summary(
     };
     let metrics = Arc::new(RwLock::new({
         let mut snap = MetricsSnapshot::default();
-        snap.url = url.clone();
+        snap.url.clone_from(&url);
         snap
     }));
     let (tx, mut rx) = mpsc::channel(EVENT_CHANNEL_CAPACITY);
     let mut poller = ManifestPoller::new(
-        url.clone(),
-        session.headers.clone(),
-        session.user_agent.clone(),
+        url.as_str(),
+        &session.headers,
+        session.user_agent.as_deref(),
         session.interval_ms,
         session.probe_headers,
         session.probe_drm,
         tx,
     )?
     .with_metrics(Arc::clone(&metrics))
-    .with_diagnostics(DiagnosticOpts {
+    .with_diagnostics(&DiagnosticOpts {
         tr101290: session.tr101290,
         probe_sei: session.probe_sei,
         simulate_player: session.simulate_player,
@@ -276,8 +276,7 @@ pub async fn run_summary(
                 }
                 _ => {}
             },
-            Ok(None) => break,
-            Err(_) => break,
+            Ok(None) | Err(_) => break,
         }
     }
 
@@ -287,16 +286,13 @@ pub async fn run_summary(
         let _ = exporter.flush_all().await;
     }
 
-    let cdn_badge = cdn
-        .last
-        .as_ref()
-        .map(|c| c.badge())
-        .unwrap_or_else(|| "UNKNOWN".into());
-    let ttfb = last_ttfb
-        .map(|ms| format!("{ms}ms"))
-        .unwrap_or_else(|| "-".into());
+    let cdn_badge = cdn.last.as_ref().map_or_else(
+        || "UNKNOWN".into(),
+        super::super::models::stream::CdnEdgeInfo::badge,
+    );
+    let ttfb = last_ttfb.map_or_else(|| "-".into(), |ms| format!("{ms}ms"));
 
-    let http_ok = matches!(last_http_status, Some(200) | Some(206));
+    let http_ok = matches!(last_http_status, Some(200 | 206));
     let ok = matches!(status.kind, StreamStatusKind::Live)
         && health.score >= 85
         && critical_rfc_errors == 0
@@ -324,7 +320,7 @@ pub async fn run_summary(
     match format {
         SummaryFormat::Json => {
             let payload = build_summary_json(
-                url.clone(),
+                &url,
                 ok,
                 &health,
                 status_label,
@@ -365,9 +361,7 @@ pub async fn run_summary(
                 latency.display(),
                 cdn_badge,
                 ttfb,
-                last_http_status
-                    .map(|c| c.to_string())
-                    .unwrap_or_else(|| "-".into()),
+                last_http_status.map_or_else(|| "-".into(), |c| c.to_string()),
                 origin_stalls,
                 critical_rfc_errors,
                 redact_url(&url)
@@ -426,7 +420,7 @@ pub async fn run_ingest_summary(
                 }
             };
             let payload = build_summary_json(
-                url,
+                url.as_str(),
                 ok,
                 &health,
                 if ok { "LIVE" } else { "ERROR" },
@@ -490,7 +484,7 @@ mod tests {
     fn summary_json_schema_fields() {
         let health = HealthReport::perfect();
         let payload = build_summary_json(
-            "https://ex/m.m3u8?token=secret".into(),
+            "https://ex/m.m3u8?token=secret",
             true,
             &health,
             "LIVE",
@@ -535,7 +529,7 @@ mod tests {
 
         let health = HealthReport::perfect();
         let payload = build_summary_json(
-            "https://example.test/live.m3u8".into(),
+            "https://example.test/live.m3u8",
             true,
             &health,
             "LIVE",

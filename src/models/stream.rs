@@ -398,11 +398,9 @@ impl WireProbeInfo {
             "{} · {} · {}",
             self.audio_codec.as_deref().unwrap_or("-"),
             self.audio_sample_rate
-                .map(|r| format!("{r} Hz"))
-                .unwrap_or_else(|| "- Hz".into()),
+                .map_or_else(|| "- Hz".into(), |r| format!("{r} Hz")),
             self.audio_channels
-                .map(|c| format!("{c} ch"))
-                .unwrap_or_else(|| "- ch".into())
+                .map_or_else(|| "- ch".into(), |c| format!("{c} ch"))
         ))
     }
 
@@ -414,26 +412,26 @@ impl WireProbeInfo {
             return None;
         }
         let codec = self.audio_codec.as_deref().unwrap_or("audio");
-        let sr = self
-            .audio_sample_rate
-            .map(|r| {
+        let sr = self.audio_sample_rate.map_or_else(
+            || "-".into(),
+            |r| {
                 if r >= 1000 {
                     format!("{}k", r / 1000)
                 } else {
                     format!("{r}")
                 }
-            })
-            .unwrap_or_else(|| "-".into());
+            },
+        );
         let ch = self
             .audio_channels
-            .map(|c| c.to_string())
-            .unwrap_or_else(|| "-".into());
+            .map_or_else(|| "-".into(), |c| c.to_string());
         Some(format!("{codec}·{sr}·{ch}ch"))
     }
 }
 
 /// Socket-level timing breakdown for a single HTTP fetch.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[allow(clippy::struct_field_names)] // OpenMetrics: dns_ms, tcp_ms, tls_ms, ttfb_ms
 pub struct NetworkTiming {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dns_ms: Option<u64>,
@@ -447,7 +445,7 @@ pub struct NetworkTiming {
 
 impl NetworkTiming {
     pub fn display_line(&self) -> String {
-        let fmt = |v: Option<u64>| v.map(|ms| format!("{ms}ms")).unwrap_or_else(|| "-".into());
+        let fmt = |v: Option<u64>| v.map_or_else(|| "-".into(), |ms| format!("{ms}ms"));
         format!(
             "DNS: {} | TCP: {} | TLS: {} | TTFB: {}ms",
             fmt(self.dns_ms),
@@ -578,7 +576,7 @@ impl StreamStatus {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum LatencyState {
     Measured(u64),
     Estimated(u64),
@@ -816,24 +814,18 @@ impl CdnEdgeInfo {
             CacheVerdict::Unknown => self.guess_edge_badge(),
             other => other.badge(),
         };
-        match &self.provider {
-            Some(p) => format!("{p} · {edge}"),
-            None => edge.to_string(),
-        }
+        self.provider
+            .as_ref()
+            .map_or_else(|| edge.to_string(), |p| format!("{p} · {edge}"))
     }
 
     fn guess_edge_badge(&self) -> &'static str {
-        if self.age.map(|a| a > 0).unwrap_or(false) {
+        if self.age.is_some_and(|a| a > 0) {
             "HIT? (Age)"
-        } else if self
-            .served_by
-            .as_deref()
-            .map(|s| {
-                let u = s.to_ascii_uppercase();
-                u.contains("CACHE") || u.contains("EDGE") || u.contains("VARNISH")
-            })
-            .unwrap_or(false)
-            || self.via.is_some()
+        } else if self.served_by.as_deref().is_some_and(|s| {
+            let u = s.to_ascii_uppercase();
+            u.contains("CACHE") || u.contains("EDGE") || u.contains("VARNISH")
+        }) || self.via.is_some()
             || self.pop.is_some()
         {
             "EDGE?"
@@ -966,7 +958,8 @@ impl VirtualBuffer {
 }
 
 /// Glass-to-glass pipeline latency breakdown.
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[allow(clippy::struct_field_names)] // G2G pipeline: ingestion_lag_ms, edge_propagation_ms, g2g_total_ms
 pub struct G2gMetrics {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ingestion_lag_ms: Option<i64>,
@@ -986,16 +979,13 @@ impl G2gMetrics {
     pub fn display(&self) -> String {
         let ingest = self
             .ingestion_lag_ms
-            .map(|v| format!("ingest {v}ms"))
-            .unwrap_or_else(|| "ingest -".into());
+            .map_or_else(|| "ingest -".into(), |v| format!("ingest {v}ms"));
         let edge = self
             .edge_propagation_ms
-            .map(|v| format!("edge {v}ms"))
-            .unwrap_or_else(|| "edge -".into());
+            .map_or_else(|| "edge -".into(), |v| format!("edge {v}ms"));
         let total = self
             .g2g_total_ms
-            .map(|v| format!("G2G {v}ms"))
-            .unwrap_or_else(|| "G2G -".into());
+            .map_or_else(|| "G2G -".into(), |v| format!("G2G {v}ms"));
         format!("{total} | {ingest} | {edge}")
     }
 }
@@ -1116,22 +1106,13 @@ impl LlHlsInfo {
         }
         let latency = self
             .part_latency_ms()
-            .map(|ms| format!("{ms}ms"))
-            .unwrap_or_else(|| "-".into());
-        let seq = self
-            .last_part_sequence
-            .map(|s| format!("seq={s}"))
-            .unwrap_or_else(|| format!("parts={}", self.part_count));
-        let rate = self
-            .last_part_transfer_kbps
-            .map(|k| {
-                if k >= 1000.0 {
-                    format!("{:.2} Mbps", k / 1000.0)
-                } else {
-                    format!("{k:.0} kbps")
-                }
-            })
-            .unwrap_or_else(|| {
+            .map_or_else(|| "-".into(), |ms| format!("{ms}ms"));
+        let seq = self.last_part_sequence.map_or_else(
+            || format!("parts={}", self.part_count),
+            |s| format!("seq={s}"),
+        );
+        let rate = self.last_part_transfer_kbps.map_or_else(
+            || {
                 if self.preload_hint_fetched {
                     "probed".into()
                 } else if self.has_preload_hint {
@@ -1139,7 +1120,15 @@ impl LlHlsInfo {
                 } else {
                     "-".into()
                 }
-            });
+            },
+            |k| {
+                if k >= 1000.0 {
+                    format!("{:.2} Mbps", k / 1000.0)
+                } else {
+                    format!("{k:.0} kbps")
+                }
+            },
+        );
         Some(format!("[LL-HLS] part {latency} | {seq} | {rate}"))
     }
 
@@ -1180,17 +1169,14 @@ impl LlDashInfo {
         }
         let target = self
             .latency_target_ms
-            .map(|ms| format!("{ms}ms"))
-            .unwrap_or_else(|| "-".into());
+            .map_or_else(|| "-".into(), |ms| format!("{ms}ms"));
         let ato = self
             .availability_time_offset_secs
-            .map(|s| format!("ato={s:.3}s"))
-            .unwrap_or_else(|| "-".into());
+            .map_or_else(|| "-".into(), |s| format!("ato={s:.3}s"));
         let cte = if self.chunked_transfer { "CTE" } else { "-" };
         let drift = self
             .production_drift_ms
-            .map(|d| format!("drift={d}ms"))
-            .unwrap_or_else(|| "-".into());
+            .map_or_else(|| "-".into(), |d| format!("drift={d}ms"));
         Some(format!(
             "[LL-DASH] target {target} | {ato} | {cte} | {drift}"
         ))
@@ -1435,7 +1421,7 @@ pub fn format_duration_human(secs: f64) -> String {
     } else if secs >= 60.0 {
         format!("{:.1} min", secs / 60.0)
     } else {
-        format!("{:.1}s", secs)
+        format!("{secs:.1}s")
     }
 }
 

@@ -137,7 +137,11 @@ fn parse_range_header(req: &str) -> Option<(usize, usize)> {
 }
 
 fn route(path: &str, scenario: MockScenario) -> (&'static str, Vec<u8>, &'static str) {
-    if path.ends_with(".vtt") {
+    let path_obj = std::path::Path::new(path);
+    if path_obj
+        .extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("vtt"))
+    {
         let body = if matches!(scenario, MockScenario::SubtitleDrift) {
             b"WEBVTT\n\n00:00:05.000 --> 00:00:08.000\nDrifted cue\n".to_vec()
         } else {
@@ -146,7 +150,10 @@ fn route(path: &str, scenario: MockScenario) -> (&'static str, Vec<u8>, &'static
         return ("200 OK", body, "text/vtt");
     }
 
-    if (path.ends_with(".mpd") || path.contains("live.mpd"))
+    if (path_obj
+        .extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("mpd"))
+        || path.contains("live.mpd"))
         && matches!(scenario, MockScenario::DashLive)
     {
         return (
@@ -156,7 +163,10 @@ fn route(path: &str, scenario: MockScenario) -> (&'static str, Vec<u8>, &'static
         );
     }
 
-    if path.ends_with(".m3u8") {
+    if path_obj
+        .extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("m3u8"))
+    {
         let body = match scenario {
             MockScenario::LlHlsFmp4 if path.contains("master") => ll_hls_master_playlist(),
             MockScenario::OutOfOrderLlHls | MockScenario::LlHlsFmp4
@@ -184,7 +194,10 @@ fn route(path: &str, scenario: MockScenario) -> (&'static str, Vec<u8>, &'static
         return ("200 OK", body, "application/vnd.apple.mpegurl");
     }
 
-    if path.ends_with(".ts") {
+    if std::path::Path::new(path)
+        .extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("ts"))
+    {
         if matches!(scenario, MockScenario::Tr101290) {
             return ("200 OK", fixtures::tr101290_broken_ts(), "video/mp2t");
         }
@@ -195,7 +208,13 @@ fn route(path: &str, scenario: MockScenario) -> (&'static str, Vec<u8>, &'static
         return ("200 OK", fixtures::minimal_ts_packet(seq), "video/mp2t");
     }
 
-    if path.ends_with(".m4s") || path.ends_with(".mp4") {
+    if std::path::Path::new(path)
+        .extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("m4s"))
+        || std::path::Path::new(path)
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("mp4"))
+    {
         if matches!(scenario, MockScenario::CorruptPssh) {
             return ("200 OK", corrupt_pssh_segment_bytes(), "video/mp4");
         }

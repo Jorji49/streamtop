@@ -159,7 +159,7 @@ impl App {
             return Err(eyre!("channel list is empty"));
         }
         let app = Self::new(origin, None, channels, session)?;
-        debug_assert!(app.mode == UiMode::Picker);
+        debug_assert_eq!(app.mode, UiMode::Picker);
         debug_assert!(app.poller.is_none());
         app.run().await
     }
@@ -167,7 +167,7 @@ impl App {
     /// Single HLS/DASH URL → diagnostics dashboard + poller.
     pub async fn run_diagnostics(origin: String, url: String, session: SessionOpts) -> Result<()> {
         let app = Self::new(origin, Some(url), Vec::new(), session)?;
-        debug_assert!(app.mode == UiMode::Diagnostic);
+        debug_assert_eq!(app.mode, UiMode::Diagnostic);
         app.run().await
     }
 
@@ -250,10 +250,7 @@ impl App {
     }
 
     pub fn has_catalog(&self) -> bool {
-        self.picker
-            .as_ref()
-            .map(|p| !p.channels.is_empty())
-            .unwrap_or(false)
+        self.picker.as_ref().is_some_and(|p| !p.channels.is_empty())
     }
 
     fn spawn_poller(&mut self, url: String) -> Result<()> {
@@ -263,8 +260,8 @@ impl App {
         let (tx, rx) = mpsc::channel(EVENT_CHANNEL_CAPACITY);
         self.tx = tx.clone();
         self.rx = rx;
-        self.source_url = url.clone();
-        self.active_url = url.clone();
+        self.source_url.clone_from(&url);
+        self.active_url.clone_from(&url);
 
         if crate::engine::ingest_probe::is_ingest_url(&url) {
             let allow_insecure = self.session.allow_insecure_ingest;
@@ -275,16 +272,16 @@ impl App {
         }
 
         let mut poller = ManifestPoller::new(
-            url.clone(),
-            self.session.headers.clone(),
-            self.session.user_agent.clone(),
+            url.as_str(),
+            &self.session.headers,
+            self.session.user_agent.as_deref(),
             self.session.interval_ms,
             self.session.probe_headers,
             self.session.probe_drm,
             tx,
         )
         .wrap_err("failed to start poller")?
-        .with_diagnostics(DiagnosticOpts {
+        .with_diagnostics(&DiagnosticOpts {
             tr101290: self.session.tr101290,
             probe_sei: self.session.probe_sei,
             simulate_player: self.session.simulate_player,
@@ -349,7 +346,7 @@ impl App {
         if let Some(handle) = self.poller.take() {
             handle.abort();
         }
-        let _ = restore_terminal(&mut terminal);
+        restore_terminal(&mut terminal);
         result
     }
 
@@ -516,7 +513,7 @@ impl App {
         }
 
         match key.code {
-            KeyCode::Char('q') | KeyCode::Char('Q') => {
+            KeyCode::Char('q' | 'Q') => {
                 self.should_quit = true;
             }
             KeyCode::Esc => {
@@ -531,17 +528,17 @@ impl App {
                     self.overlay = true;
                 }
             }
-            KeyCode::Char('c') | KeyCode::Char('C') => {
-                self.copy_curl_to_clipboard()?;
+            KeyCode::Char('c' | 'C') => {
+                self.copy_curl_to_clipboard();
             }
-            KeyCode::Char('p') | KeyCode::Char('P') => {
+            KeyCode::Char('p' | 'P') => {
                 self.quick_play();
             }
             KeyCode::Char('?') => {
                 self.show_help = true;
             }
             KeyCode::Char(' ') => self.export_diagnostic()?,
-            KeyCode::Char('e') | KeyCode::Char('E') => self.export_incident()?,
+            KeyCode::Char('e' | 'E') => self.export_incident()?,
             KeyCode::Char('f') => {
                 self.log_filter = match self.log_filter.as_deref() {
                     None => Some("404".into()),
@@ -559,22 +556,22 @@ impl App {
                 self.log_filter_edit = true;
                 self.log_filter_draft = self.log_filter.clone().unwrap_or_default();
             }
-            KeyCode::Char('r') | KeyCode::Char('R') => self.reset_metrics(),
-            KeyCode::Char('t') | KeyCode::Char('T') => {
+            KeyCode::Char('r' | 'R') => self.reset_metrics(),
+            KeyCode::Char('t' | 'T') => {
                 self.diagnostic_panel = if self.diagnostic_panel == DiagnosticPanel::Tr101290 {
                     DiagnosticPanel::None
                 } else {
                     DiagnosticPanel::Tr101290
                 };
             }
-            KeyCode::Char('s') | KeyCode::Char('S') => {
+            KeyCode::Char('s' | 'S') => {
                 self.diagnostic_panel = if self.diagnostic_panel == DiagnosticPanel::Sei {
                     DiagnosticPanel::None
                 } else {
                     DiagnosticPanel::Sei
                 };
             }
-            KeyCode::Char('y') | KeyCode::Char('Y') => {
+            KeyCode::Char('y' | 'Y') => {
                 self.diagnostic_panel = if self.diagnostic_panel == DiagnosticPanel::Qoe {
                     DiagnosticPanel::None
                 } else {
@@ -598,7 +595,7 @@ impl App {
         Ok(())
     }
 
-    fn copy_curl_to_clipboard(&mut self) -> Result<()> {
+    fn copy_curl_to_clipboard(&mut self) {
         let cmd = self.build_curl_command();
         match arboard::Clipboard::new().and_then(|mut cb| cb.set_text(cmd.clone())) {
             Ok(()) => {
@@ -624,7 +621,6 @@ impl App {
                 ));
             }
         }
-        Ok(())
     }
 
     fn quick_play(&mut self) {
@@ -743,7 +739,7 @@ impl App {
                 }
             }
             StreamEvent::PlaylistMeta(meta) => {
-                self.active_url = meta.url.clone();
+                self.active_url.clone_from(&meta.url);
                 push_manifest_history(&mut self.manifest_history, meta.clone());
                 self.playlist = Some(meta);
             }
@@ -795,7 +791,7 @@ impl App {
                     category: DiagCategory::Ad,
                     severity: crate::models::DiagSeverity::Error,
                     rule: m.rule.clone(),
-                    message: m.message.clone(),
+                    message: m.message,
                 });
             }
             StreamEvent::InbandAdEvent(ev) => {
@@ -839,11 +835,10 @@ impl App {
     }
 
     fn export_diagnostic(&mut self) -> Result<()> {
-        let dvr = self
-            .playlist
-            .as_ref()
-            .map(|p| format_dvr_window(p.window_segments, p.window_secs))
-            .unwrap_or_else(|| "n/a".into());
+        let dvr = self.playlist.as_ref().map_or_else(
+            || "n/a".into(),
+            |p| format_dvr_window(p.window_segments, p.window_secs),
+        );
         let status = match self.status.kind {
             crate::models::StreamStatusKind::Live => "LIVE",
             crate::models::StreamStatusKind::Error => "ERROR",
@@ -855,19 +850,23 @@ impl App {
         let channel = self.channel_name.clone().or_else(|| {
             url::Url::parse(&self.active_url)
                 .ok()
-                .and_then(|u| u.host_str().map(|h| h.to_string()))
+                .and_then(|u| u.host_str().map(std::string::ToString::to_string))
         });
 
-        let title = match &channel {
-            Some(name) => format!(
-                "{name} - diagnostic @ {}",
-                now.format("%Y-%m-%d %H:%M:%S UTC")
-            ),
-            None => format!(
-                "streamtop diagnostic @ {}",
-                now.format("%Y-%m-%d %H:%M:%S UTC")
-            ),
-        };
+        let title = channel.as_ref().map_or_else(
+            || {
+                format!(
+                    "streamtop diagnostic @ {}",
+                    now.format("%Y-%m-%d %H:%M:%S UTC")
+                )
+            },
+            |name| {
+                format!(
+                    "{name} - diagnostic @ {}",
+                    now.format("%Y-%m-%d %H:%M:%S UTC")
+                )
+            },
+        );
 
         let timeline: Vec<String> = self
             .log
@@ -886,19 +885,13 @@ impl App {
                 health_score: health.score,
                 health_label: health.label.clone(),
                 latency: self.latency.display(),
-                cdn: self
-                    .cdn
-                    .last
-                    .as_ref()
-                    .map(|c| c.badge())
-                    .unwrap_or_else(|| "UNKNOWN".into()),
+                cdn: self.cdn.last.as_ref().map_or_else(
+                    || "UNKNOWN".into(),
+                    super::super::models::stream::CdnEdgeInfo::badge,
+                ),
                 dvr_window: dvr,
                 buffer: self.buffer.display(),
-                ll_hls: self
-                    .playlist
-                    .as_ref()
-                    .map(|p| p.ll_hls.is_ll_hls)
-                    .unwrap_or(false),
+                ll_hls: self.playlist.as_ref().is_some_and(|p| p.ll_hls.is_ll_hls),
                 dropped_events: crate::engine::channel_stats::channel_dropped_total(),
             },
             timeline,
@@ -958,7 +951,7 @@ impl App {
         let snapshot = StreamSnapshot {
             title,
             summary: DiagnosticSummary {
-                channel: channel.clone(),
+                channel,
                 captured_at: now,
                 source_url: crate::engine::redact::redact_url(&self.source_url),
                 active_url: crate::engine::redact::redact_url(&self.active_url),
@@ -966,23 +959,16 @@ impl App {
                 health_score: health.score,
                 health_label: health.label.clone(),
                 latency: self.latency.display(),
-                cdn: self
-                    .cdn
-                    .last
-                    .as_ref()
-                    .map(|c| c.badge())
-                    .unwrap_or_else(|| "UNKNOWN".into()),
-                dvr_window: self
-                    .playlist
-                    .as_ref()
-                    .map(|p| format_dvr_window(p.window_segments, p.window_secs))
-                    .unwrap_or_else(|| "n/a".into()),
+                cdn: self.cdn.last.as_ref().map_or_else(
+                    || "UNKNOWN".into(),
+                    super::super::models::stream::CdnEdgeInfo::badge,
+                ),
+                dvr_window: self.playlist.as_ref().map_or_else(
+                    || "n/a".into(),
+                    |p| format_dvr_window(p.window_segments, p.window_secs),
+                ),
                 buffer: self.buffer.display(),
-                ll_hls: self
-                    .playlist
-                    .as_ref()
-                    .map(|p| p.ll_hls.is_ll_hls)
-                    .unwrap_or(false),
+                ll_hls: self.playlist.as_ref().is_some_and(|p| p.ll_hls.is_ll_hls),
                 dropped_events: crate::engine::channel_stats::channel_dropped_total(),
             },
             timeline,
@@ -1003,15 +989,16 @@ impl App {
             &self.session.headers,
             self.session.user_agent.as_deref(),
         );
-        let path = if let Some(ref p) = self.session.export_incident {
-            if p.is_empty() {
-                crate::engine::incident::incident_export_path(None, now)
-            } else {
-                std::path::PathBuf::from(p)
-            }
-        } else {
-            crate::engine::incident::incident_export_path(None, now)
-        };
+        let path = self.session.export_incident.as_ref().map_or_else(
+            || crate::engine::incident::incident_export_path(None, now),
+            |p| {
+                if p.is_empty() {
+                    crate::engine::incident::incident_export_path(None, now)
+                } else {
+                    std::path::PathBuf::from(p)
+                }
+            },
+        );
         crate::engine::incident::write_incident_report(&path, &report)?;
         let saved = path.display().to_string();
         self.toast = Some((
@@ -1027,7 +1014,7 @@ impl App {
     }
 
     pub fn uses_pdt(&self) -> bool {
-        self.playlist.as_ref().map(|p| p.has_pdt).unwrap_or(false) || self.latency.is_measured()
+        self.playlist.as_ref().is_some_and(|p| p.has_pdt) || self.latency.is_measured()
     }
 }
 
@@ -1095,11 +1082,10 @@ fn setup_terminal() -> Result<Terminal<CrosstermBackend<Stdout>>> {
     Ok(terminal)
 }
 
-pub fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Result<()> {
+pub fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<Stdout>>) {
     let _ = disable_raw_mode();
     let _ = execute!(terminal.backend_mut(), LeaveAlternateScreen);
     let _ = terminal.show_cursor();
-    Ok(())
 }
 
 #[cfg(test)]

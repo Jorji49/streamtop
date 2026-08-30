@@ -52,7 +52,7 @@ impl Default for VodReport {
 pub async fn run_vod(url: String, session: SessionOpts, format: SummaryFormat) -> Result<ExitCode> {
     let client = Arc::new(build_http_client(
         &session.headers,
-        session.user_agent.clone(),
+        session.user_agent.as_deref(),
     )?);
     let base = Url::parse(&url).wrap_err("invalid VOD URL")?;
     let (body, ct) = fetch_bytes(&client, &url).await?;
@@ -79,7 +79,7 @@ pub async fn run_vod(url: String, session: SessionOpts, format: SummaryFormat) -
     match format {
         SummaryFormat::Json => {
             let doc = build_summary_json(
-                url,
+                url.as_str(),
                 ok,
                 &report.health,
                 status_label,
@@ -330,7 +330,7 @@ async fn fetch_bytes(client: &Client, url: &str) -> Result<(Vec<u8>, Option<Stri
         .headers()
         .get(reqwest::header::CONTENT_TYPE)
         .and_then(|v| v.to_str().ok())
-        .map(|s| s.to_string());
+        .map(std::string::ToString::to_string);
     let body = read_vod_body_limited(response).await?;
     Ok((body, ct))
 }

@@ -101,18 +101,17 @@ impl OtelExporter {
     }
 
     pub fn traceparent(&self) -> String {
-        self.trace
-            .lock()
-            .map(|t| t.traceparent())
-            .unwrap_or_else(|_| "00-00000000000000000000000000000000-0000000000000000-01".into())
+        self.trace.lock().map_or_else(
+            |_| "00-00000000000000000000000000000000-0000000000000000-01".into(),
+            |t| t.traceparent(),
+        )
     }
 
     fn push_span(&self, name: &str, start_ns: u128, end_ns: u128, attrs: Vec<(String, String)>) {
-        let (trace_id, parent) = self
-            .trace
-            .lock()
-            .map(|t| (t.trace_id.clone(), Some(t.root_span_id.clone())))
-            .unwrap_or_else(|_| (random_hex_id(16), None));
+        let (trace_id, parent) = self.trace.lock().map_or_else(
+            |_| (random_hex_id(16), None),
+            |t| (t.trace_id.clone(), Some(t.root_span_id.clone())),
+        );
         let span_id = random_hex_id(8);
         if let Ok(mut pending) = self.pending.lock() {
             if pending.len() >= OTEL_PENDING_CAP {
@@ -347,8 +346,7 @@ impl OtelExporter {
 fn now_unix_nano() -> u128 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0)
+        .map_or(0, |d| d.as_nanos())
 }
 
 fn random_hex_id(bytes: usize) -> String {

@@ -369,7 +369,7 @@ fn parse_pes_pts(payload: &[u8]) -> Option<u64> {
     if flags & 0x80 == 0 {
         return None;
     }
-    let pts_bytes = &payload[9..14];
+    let pts_bytes = crate::engine::slice_util::subslice_len(payload, 9, 5)?;
     let pts = u64::from(pts_bytes[0] >> 1 & 0x07) << 30
         | u64::from(pts_bytes[1]) << 22
         | u64::from(pts_bytes[2] >> 1) << 15

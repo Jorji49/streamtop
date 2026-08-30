@@ -1,5 +1,7 @@
 //! Synthetic MPEG-TS / fMP4 bytes for hermetic E2E and integration tests.
 
+#![allow(clippy::cast_possible_truncation)] // fixed-width TS packet layout
+
 const TS: usize = 188;
 const SYNC: u8 = 0x47;
 
@@ -29,7 +31,7 @@ fn ts_packet(pid: u16, cc: u8, payload: &[u8], with_pcr: bool) -> [u8; TS] {
     pkt
 }
 
-fn ts_packet_pcr(pid: u16, cc: u8, pcr_base: u64) -> [u8; TS] {
+const fn ts_packet_pcr(pid: u16, cc: u8, pcr_base: u64) -> [u8; TS] {
     let mut pkt = [0u8; TS];
     pkt[0] = SYNC;
     pkt[1] = ((pid >> 8) as u8) & 0x1f;

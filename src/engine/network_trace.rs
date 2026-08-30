@@ -1,5 +1,6 @@
 //! Socket-level DNS / TCP / TLS / TTFB breakdown for HTTP(S) GETs.
 
+use std::fmt::Write as _;
 use std::io::ErrorKind;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -83,22 +84,22 @@ pub async fn traced_get(
         env!("CARGO_PKG_VERSION")
     );
     if let Some(r) = range {
-        request.push_str(&format!("Range: {r}\r\n"));
+        let _ = write!(request, "Range: {r}\r\n");
     }
     if let Some(tp) = traceparent {
-        request.push_str(&format!("traceparent: {tp}\r\n"));
+        let _ = write!(request, "traceparent: {tp}\r\n");
     }
     for (k, v) in extra_headers {
         if k.eq_ignore_ascii_case("host") || k.eq_ignore_ascii_case("connection") {
             continue;
         }
-        request.push_str(&format!("{k}: {v}\r\n"));
+        let _ = write!(request, "{k}: {v}\r\n");
     }
     request.push_str("\r\n");
 
     let (status, headers, body, ttfb_ms) = if scheme == "https" {
         let tls_start = Instant::now();
-        let connector = build_tls_connector()?;
+        let connector = build_tls_connector();
         let server_name =
             ServerName::try_from(host.clone()).map_err(|_| eyre!("invalid TLS server name"))?;
         let mut tls = tokio::time::timeout(DEFAULT_TIMEOUT, connector.connect(server_name, tcp))
@@ -120,7 +121,7 @@ pub async fn traced_get(
         stream.write_all(request.as_bytes()).await?;
         stream.flush().await?;
         let (st, hdrs, body_bytes, header_done) = read_http_response(&mut stream, max_body).await?;
-        let ttfb_ms = header_done.unwrap_or(write_start.elapsed().as_millis() as u64);
+        let ttfb_ms = header_done.unwrap_or_else(|| write_start.elapsed().as_millis() as u64);
         (st, hdrs, body_bytes, ttfb_ms)
     };
 
@@ -141,14 +142,14 @@ pub async fn traced_get(
     })
 }
 
-fn build_tls_connector() -> Result<TlsConnector> {
+fn build_tls_connector() -> TlsConnector {
     let _ = rustls::crypto::ring::default_provider().install_default();
     let mut root_store = rustls::RootCertStore::empty();
     root_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
     let config = rustls::ClientConfig::builder()
         .with_root_certificates(root_store)
         .with_no_client_auth();
-    Ok(TlsConnector::from(Arc::new(config)))
+    TlsConnector::from(Arc::new(config))
 }
 
 async fn read_http_response<S: AsyncReadExt + Unpin>(
@@ -308,7 +309,7 @@ pub async fn pinned_post_json(
     );
     let scheme = parsed.scheme();
     let (status, _headers, _body, _) = if scheme == "https" {
-        let connector = build_tls_connector()?;
+        let connector = build_tls_connector();
         let server_name =
             ServerName::try_from(host.clone()).map_err(|_| eyre!("invalid TLS server name"))?;
         let tcp = tokio::time::timeout(timeout, TcpStream::connect(addr))
@@ -364,14 +365,14 @@ pub async fn pinned_get_range(
         env!("CARGO_PKG_VERSION")
     );
     if let Some(r) = range {
-        request.push_str(&format!("Range: {r}\r\n"));
+        let _ = write!(request, "Range: {r}\r\n");
     }
     request.push_str("\r\n");
 
     let started = Instant::now();
     let scheme = parsed.scheme();
     let (status, _headers, _body, _) = if scheme == "https" {
-        let connector = build_tls_connector()?;
+        let connector = build_tls_connector();
         let server_name =
             ServerName::try_from(host.clone()).map_err(|_| eyre!("invalid TLS server name"))?;
         let tcp = tokio::time::timeout(timeout, TcpStream::connect(addr))

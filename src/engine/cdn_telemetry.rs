@@ -4,6 +4,7 @@ use crate::models::{CacheVerdict, CdnEdgeInfo, CdnStats, SegmentMetrics};
 
 /// Parsed W3C Server-Timing metrics (ms).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[allow(clippy::struct_field_names)] // W3C Server-Timing: edge_cache_ms, origin_ms, total_ms
 pub struct ServerTiming {
     pub edge_cache_ms: Option<u64>,
     pub origin_ms: Option<u64>,
@@ -48,7 +49,7 @@ pub fn parse_cdn_headers(headers: &reqwest::header::HeaderMap) -> CdnEdgeInfo {
         headers
             .get(name)
             .and_then(|v| v.to_str().ok())
-            .map(|s| s.to_string())
+            .map(std::string::ToString::to_string)
     };
 
     let server = get("server");
@@ -74,7 +75,7 @@ pub fn parse_cdn_headers(headers: &reqwest::header::HeaderMap) -> CdnEdgeInfo {
 
     let server_timing = get("server-timing").map(|s| parse_server_timing(&s));
 
-    let provider = detect_cdn_provider(CdnDetectHints {
+    let provider = detect_cdn_provider(&CdnDetectHints {
         server: server.as_deref(),
         cf_cache: cf_cache.as_deref(),
         x_cache: x_cache.as_deref(),
@@ -104,12 +105,6 @@ pub fn parse_cdn_headers(headers: &reqwest::header::HeaderMap) -> CdnEdgeInfo {
         Some("CloudFront") => classify_cloudfront(x_cache.as_deref()),
         Some("Fastly") => classify_fastly(x_cache.as_deref(), age, cache_control.as_deref()),
         Some("BunnyCDN") => classify_bunny(cache_status.as_deref(), age, cache_control.as_deref()),
-        Some("Azure CDN") => {
-            classify_generic_cdn(cache_status.as_deref(), age, cache_control.as_deref())
-        }
-        Some("Google Cloud CDN") => {
-            classify_generic_cdn(cache_status.as_deref(), age, cache_control.as_deref())
-        }
         _ => classify_generic_cdn(cache_status.as_deref(), age, cache_control.as_deref()),
     };
 
@@ -156,22 +151,17 @@ struct CdnDetectHints<'a> {
     akamai_cache: Option<&'a str>,
 }
 
-fn detect_cdn_provider(h: CdnDetectHints<'_>) -> Option<String> {
-    let server_u = h.server.map(|s| s.to_ascii_uppercase()).unwrap_or_default();
-    let x_cache_u = h
-        .x_cache
-        .map(|s| s.to_ascii_uppercase())
-        .unwrap_or_default();
-    let via_u = h.via.map(|s| s.to_ascii_uppercase()).unwrap_or_default();
-    let served_u = h
+fn detect_cdn_provider(h: &CdnDetectHints<'_>) -> Option<String> {
+    let server_u = h.server.map_or_else(String::new, str::to_ascii_uppercase);
+    let x_cache_u = h.x_cache.map_or_else(String::new, str::to_ascii_uppercase);
+    let via_u = h.via.map_or_else(String::new, str::to_ascii_uppercase);
+    let served_by_upper = h
         .served_by
-        .map(|s| s.to_ascii_uppercase())
-        .unwrap_or_default();
+        .map_or_else(String::new, str::to_ascii_uppercase);
 
     let cc_u = h
         .cache_control
-        .map(|s| s.to_ascii_uppercase())
-        .unwrap_or_default();
+        .map_or_else(String::new, str::to_ascii_uppercase);
 
     if h.cf_cache.is_some() || h.cf_ray.is_some() {
         return Some("Cloudflare".into());
@@ -186,7 +176,8 @@ fn detect_cdn_provider(h: CdnDetectHints<'_>) -> Option<String> {
     {
         return Some("Akamai".into());
     }
-    if served_u.contains("FASTLY") || via_u.contains("FASTLY") || server_u.contains("FASTLY") {
+    if served_by_upper.contains("FASTLY") || via_u.contains("FASTLY") || server_u.contains("FASTLY")
+    {
         return Some("Fastly".into());
     }
     if h.bunny.is_some() || h.cdn_pullzone.is_some() {
@@ -202,7 +193,7 @@ fn detect_cdn_provider(h: CdnDetectHints<'_>) -> Option<String> {
     {
         return Some("Google Cloud CDN".into());
     }
-    if served_u.contains("CACHE-")
+    if served_by_upper.contains("CACHE-")
         || via_u.contains("VARNISH")
         || via_u.contains("FASTLY")
         || server_u.contains("VARNISH")
@@ -224,7 +215,7 @@ fn classify_akamai(x_cache: Option<&str>) -> CacheVerdict {
 }
 
 fn classify_cloudflare(cf: Option<&str>) -> CacheVerdict {
-    match cf.map(|s| s.to_ascii_uppercase()).as_deref() {
+    match cf.map(str::to_ascii_uppercase).as_deref() {
         Some(s) if s.contains("HIT") => CacheVerdict::Hit,
         Some(s) if s.contains("MISS") || s.contains("EXPIRED") || s.contains("BYPASS") => {
             CacheVerdict::Miss
@@ -285,7 +276,7 @@ fn classify_generic_cdn(
 }
 
 /// Cross-CDN drift between two concurrent segment fetches.
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CdnDriftMetrics {
     pub seq_delta: Option<i64>,
     pub latency_ms_delta: Option<i64>,
@@ -336,27 +327,23 @@ pub fn format_compare_drift(left: &CdnStats, right: &CdnStats, drift: &CdnDriftM
     };
     let seq = drift
         .seq_delta
-        .map(|d| format!("Δ Seq {d:+}"))
-        .unwrap_or_else(|| "Δ Seq -".into());
+        .map_or_else(|| "Δ Seq -".into(), |d| format!("Δ Seq {d:+}"));
     let lat = drift
         .latency_ms_delta
-        .map(|d| format!("Δ Lat {d:+}ms"))
-        .unwrap_or_else(|| "Δ Lat -".into());
+        .map_or_else(|| "Δ Lat -".into(), |d| format!("Δ Lat {d:+}ms"));
     let pts = drift
         .pts_ms_delta
-        .map(|d| format!("Δ PTS {d:+}ms"))
-        .unwrap_or_else(|| "Δ PTS -".into());
+        .map_or_else(|| "Δ PTS -".into(), |d| format!("Δ PTS {d:+}ms"));
     let cache = format!(
         "Cache {} vs {}",
-        left.last
-            .as_ref()
-            .map(|c| c.badge())
-            .unwrap_or_else(|| "-".into()),
-        right
-            .last
-            .as_ref()
-            .map(|c| c.badge())
-            .unwrap_or_else(|| "-".into())
+        left.last.as_ref().map_or_else(
+            || "-".into(),
+            super::super::models::stream::CdnEdgeInfo::badge
+        ),
+        right.last.as_ref().map_or_else(
+            || "-".into(),
+            super::super::models::stream::CdnEdgeInfo::badge
+        )
     );
     format!("{seq}  |  {lat}  |  {pts}  |  {pop}  |  {cache}")
 }

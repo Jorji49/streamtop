@@ -62,7 +62,7 @@ pub fn path_to_file_url(path: &Path) -> Result<String> {
     };
     Url::from_file_path(&abs)
         .map(|u| u.to_string())
-        .map_err(|_| eyre!("cannot convert path to file URL: {}", abs.display()))
+        .map_err(|()| eyre!("cannot convert path to file URL: {}", abs.display()))
 }
 
 /// Classify input bytes (IPTV / HLS / DASH / catalog).
@@ -130,7 +130,7 @@ pub fn classify_source(
 
 fn classify_ext_playlist(origin: &str, text: &str) -> Result<ParsedInput> {
     if is_iptv_channel_list(text) {
-        let channels = parse_m3u_channels(text, origin)?;
+        let channels = parse_m3u_channels(text, origin);
         if channels.is_empty() {
             return Err(eyre!("M3U lineup contains no playable channel URLs"));
         }
@@ -155,7 +155,7 @@ fn classify_ext_playlist(origin: &str, text: &str) -> Result<ParsedInput> {
     }
 
     if text.contains("#EXTINF") {
-        let channels = parse_m3u_channels(text, origin)?;
+        let channels = parse_m3u_channels(text, origin);
         if !channels.is_empty() {
             return Ok(ParsedInput::IptvChannels {
                 origin: origin.to_string(),
@@ -210,31 +210,37 @@ fn origin_path_hint(origin: &str) -> Option<String> {
         return u
             .path_segments()
             .and_then(|mut s| s.next_back())
-            .map(|s| s.to_ascii_lowercase());
+            .map(str::to_ascii_lowercase);
     }
     Path::new(origin)
         .file_name()
         .and_then(|s| s.to_str())
-        .map(|s| s.to_ascii_lowercase())
+        .map(str::to_ascii_lowercase)
 }
 
 fn is_json_hint(origin: &str, file: Option<&str>, body: &str) -> bool {
     origin.contains(".json")
-        || file.map(|f| f.ends_with(".json")).unwrap_or(false)
+        || file.is_some_and(|f| {
+            std::path::Path::new(f)
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("json"))
+        })
         || ((body.starts_with('{') || body.starts_with('[')) && !body.contains("#EXT"))
 }
 
 fn is_yaml_hint(origin: &str, file: Option<&str>, body: &str) -> bool {
     origin.contains(".yaml")
         || origin.contains(".yml")
-        || file
-            .map(|f| f.ends_with(".yaml") || f.ends_with(".yml"))
-            .unwrap_or(false)
+        || file.is_some_and(|f| {
+            std::path::Path::new(f).extension().is_some_and(|ext| {
+                ext.eq_ignore_ascii_case("yaml") || ext.eq_ignore_ascii_case("yml")
+            })
+        })
         || body.starts_with("---")
 }
 
 /// Parse IPTV M3U into channel entries.
-pub fn parse_m3u_channels(text: &str, base: &str) -> Result<Vec<ChannelEntry>> {
+pub fn parse_m3u_channels(text: &str, base: &str) -> Vec<ChannelEntry> {
     let base_url = Url::parse(base).ok();
     let mut channels = Vec::new();
     #[allow(clippy::type_complexity)]
@@ -268,7 +274,7 @@ pub fn parse_m3u_channels(text: &str, base: &str) -> Result<Vec<ChannelEntry>> {
         });
     }
 
-    Ok(channels)
+    channels
 }
 
 fn parse_extinf(line: &str) -> (String, Option<String>, Option<String>, Option<String>) {
@@ -404,14 +410,12 @@ https://edge.example/bein.m3u8
 https://edge.example/trt.m3u8
 "#;
         let src = detect_and_parse("file:///lineup.m3u", body.as_bytes(), None).unwrap();
-        match src {
-            ParsedInput::IptvChannels { channels, .. } => {
-                assert_eq!(channels.len(), 2);
-                assert_eq!(channels[0].name, "beIN Sports 1");
-                assert_eq!(channels[0].group.as_deref(), Some("Spor"));
-                assert_eq!(channels[1].name, "TRT Haber");
-            }
-            _ => panic!("expected IPTV channel list"),
+        assert!(matches!(src, ParsedInput::IptvChannels { .. }));
+        if let ParsedInput::IptvChannels { channels, .. } = src {
+            assert_eq!(channels.len(), 2);
+            assert_eq!(channels[0].name, "beIN Sports 1");
+            assert_eq!(channels[0].group.as_deref(), Some("Spor"));
+            assert_eq!(channels[1].name, "TRT Haber");
         }
     }
 
@@ -434,9 +438,9 @@ https://edge.example/trt.m3u8
             b"#EXTM3U\n#EXTINF:-1 tvg-id=\"trt1.tr\" tvg-name=\"TRT 1\",TRT 1\nhttps://a/b.m3u8\n";
         assert!(is_iptv_channel_list(&String::from_utf8_lossy(body)));
         let src = detect_and_parse("https://x/tr.m3u", body, None).unwrap();
-        match src {
-            ParsedInput::IptvChannels { channels, .. } => assert_eq!(channels.len(), 1),
-            _ => panic!("expected IPTV"),
+        assert!(matches!(src, ParsedInput::IptvChannels { .. }));
+        if let ParsedInput::IptvChannels { channels, .. } = src {
+            assert_eq!(channels.len(), 1);
         }
     }
 
@@ -460,11 +464,9 @@ https://edge.example/trt.m3u8
     fn json_catalog() {
         let body = r#"[{"name":"beIN Sports 1","url":"https://ex.com/a.m3u8","group":"Spor"}]"#;
         let src = detect_and_parse("channels.json", body.as_bytes(), None).unwrap();
-        match src {
-            ParsedInput::IptvChannels { channels, .. } => {
-                assert_eq!(channels[0].name, "beIN Sports 1");
-            }
-            _ => panic!("expected json catalog"),
+        assert!(matches!(src, ParsedInput::IptvChannels { .. }));
+        if let ParsedInput::IptvChannels { channels, .. } = src {
+            assert_eq!(channels[0].name, "beIN Sports 1");
         }
     }
 }

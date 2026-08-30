@@ -92,10 +92,10 @@ pub fn session_from_profile(
 
 fn apply_section(session: &mut SessionOpts, section: &ProfileSection) {
     if !section.headers.is_empty() {
-        session.headers = section.headers.clone();
+        session.headers.clone_from(&section.headers);
     }
     if section.user_agent.is_some() {
-        session.user_agent = section.user_agent.clone();
+        session.user_agent.clone_from(&section.user_agent);
     }
     if section.interval_ms.is_some() {
         session.interval_ms = section.interval_ms;
@@ -107,16 +107,16 @@ fn apply_section(session: &mut SessionOpts, section: &ProfileSection) {
         session.probe_drm = p;
     }
     if section.webhook.is_some() {
-        session.webhook_url = section.webhook.clone();
+        session.webhook_url.clone_from(&section.webhook);
     }
     if let Some(a) = &section.alert_on {
-        session.alert_on = a.clone();
+        session.alert_on.clone_from(a);
     }
     if let Some(v) = section.allow_insecure_webhooks {
         session.allow_insecure_webhooks = v;
     }
     if section.otel_endpoint.is_some() {
-        session.otel_endpoint = section.otel_endpoint.clone();
+        session.otel_endpoint.clone_from(&section.otel_endpoint);
     }
     if let Some(v) = section.allow_insecure_otel {
         session.allow_insecure_otel = v;

@@ -1,5 +1,7 @@
 //! Staging ClearKey probe: KID match and cenc/cbcs sample validation.
 
+use std::fmt::Write as _;
+
 use aes::Aes128;
 use cbc::cipher::{block_padding::NoPadding, BlockDecryptMut, KeyIvInit};
 use cbc::Decryptor;
@@ -82,7 +84,7 @@ pub fn probe_clearkey(bytes: &[u8], spec: &ClearKeySpec) -> ClearKeyProbeResult 
         e.key_ids
             .iter()
             .any(|k| k.replace('-', "").eq_ignore_ascii_case(&kid_hex))
-    }) || bytes_windows_match_kid(bytes, &spec.kid);
+    }) || bytes_windows_match_kid(bytes, spec.kid);
 
     let scheme = read_schm_scheme(bytes);
     let cenc_boxes_seen = contains_box(bytes, b"tenc")
@@ -91,7 +93,6 @@ pub fn probe_clearkey(bytes: &[u8], spec: &ClearKeySpec) -> ClearKeyProbeResult 
 
     let decrypt_ok = match scheme.as_deref() {
         Some("cbcs") => try_cbcs_decrypt(bytes, &spec.key),
-        Some("cenc") | None => try_cenc_decrypt(bytes, &spec.key),
         _ => try_cenc_decrypt(bytes, &spec.key),
     };
 
@@ -145,10 +146,7 @@ pub fn apply_clearkey_to_wire(wire: &mut WireProbeInfo, result: &ClearKeyProbeRe
 
 fn read_schm_scheme(bytes: &[u8]) -> Option<String> {
     let payload = find_box_payload_recursive(bytes, b"schm")?;
-    if payload.len() < 12 {
-        return None;
-    }
-    let scheme = &payload[8..12];
+    let scheme = crate::engine::slice_util::subslice_len(payload, 8, 4)?;
     Some(
         String::from_utf8_lossy(scheme)
             .trim_end_matches('\0')
@@ -164,11 +162,11 @@ fn try_cbcs_decrypt(bytes: &[u8], key: &[u8; 16]) -> bool {
         return false;
     };
     let start = clear_bytes as usize;
-    if start + 16 > mdat.len() {
+    let Some(block_slice) = crate::engine::slice_util::subslice_len(mdat, start, 16) else {
         return false;
-    }
+    };
     let mut block = [0u8; 16];
-    block.copy_from_slice(&mdat[start..start + 16]);
+    block.copy_from_slice(block_slice);
     let Ok(decryptor) = Aes128CbcDec::new_from_slices(key, &iv[..16]) else {
         return false;
     };
@@ -301,6 +299,7 @@ fn looks_like_decrypted_sample(dec: &[u8]) -> bool {
     false
 }
 
+#[allow(clippy::trivially_copy_pass_by_ref)] // ISO BMFF box walk
 fn find_box_payload_recursive<'a>(data: &'a [u8], tag: &[u8; 4]) -> Option<&'a [u8]> {
     let mut i = 0usize;
     while i + 8 <= data.len() {
@@ -348,13 +347,20 @@ fn is_container_box(tag: &[u8]) -> bool {
 }
 
 fn hex_encode(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
+    bytes
+        .iter()
+        .fold(String::with_capacity(bytes.len() * 2), |mut s, b| {
+            let _ = write!(s, "{b:02x}");
+            s
+        })
 }
 
-fn bytes_windows_match_kid(bytes: &[u8], kid: &[u8; 16]) -> bool {
+#[allow(clippy::trivially_copy_pass_by_ref)] // fixed 16-byte KID window scan
+fn bytes_windows_match_kid(bytes: &[u8], kid: [u8; 16]) -> bool {
     bytes.windows(16).any(|w| w == kid)
 }
 
+#[allow(clippy::trivially_copy_pass_by_ref)] // ISO BMFF box tag scan
 fn contains_box(bytes: &[u8], tag: &[u8; 4]) -> bool {
     bytes.windows(4).any(|w| w == tag)
 }

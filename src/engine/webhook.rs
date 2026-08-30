@@ -156,7 +156,9 @@ pub fn spawn_webhook_listener_with_log(
     tokio::spawn(async move {
         if let Err(err) = validate_webhook_url(&cfg.url, cfg.allow_insecure) {
             {
-                let mut st = delivery.lock().unwrap_or_else(|e| e.into_inner());
+                let mut st = delivery
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
                 st.push(DeliveryRecord {
                     at: Utc::now().to_rfc3339(),
                     alert: "ssrf_block".into(),
@@ -181,7 +183,9 @@ pub fn spawn_webhook_listener_with_log(
             if let Some(payload) = event_to_alert(&cfg, &event, &stream_url, &mut last_shi_alert) {
                 let dedupe_key = format!("{}:{}", payload.kind.as_str(), payload.severity);
                 {
-                    let mut st = delivery.lock().unwrap_or_else(|e| e.into_inner());
+                    let mut st = delivery
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
                     if !st.should_send(&dedupe_key) {
                         continue;
                     }
@@ -189,7 +193,9 @@ pub fn spawn_webhook_listener_with_log(
                 let body = build_platform_body(platform, &payload);
                 // Deliver sequentially so alert bursts cannot create unbounded tasks.
                 let result = post_with_retry(&client, &cfg.url, &body, cfg.allow_insecure).await;
-                let mut st = delivery.lock().unwrap_or_else(|e| e.into_inner());
+                let mut st = delivery
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
                 match result {
                     Ok(status) => st.push(DeliveryRecord {
                         at: Utc::now().to_rfc3339(),

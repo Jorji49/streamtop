@@ -1,6 +1,7 @@
 //! Prometheus `/metrics` exporter (OpenMetrics text).
 
 use std::collections::HashMap;
+use std::fmt::Write as _;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::process::ExitCode;
 use std::sync::{Arc, RwLock};
@@ -73,16 +74,12 @@ impl Hist {
         let mut cumulative = 0u64;
         for (i, le) in bounds.iter().enumerate() {
             cumulative = cumulative.saturating_add(self.buckets.get(i).copied().unwrap_or(0));
-            out.push_str(&format!(
-                "{name}_bucket{{{labels},le=\"{le}\"}} {cumulative}\n"
-            ));
+            let _ = writeln!(out, "{name}_bucket{{{labels},le=\"{le}\"}} {cumulative}");
         }
         cumulative = cumulative.saturating_add(self.buckets.last().copied().unwrap_or(0));
-        out.push_str(&format!(
-            "{name}_bucket{{{labels},le=\"+Inf\"}} {cumulative}\n"
-        ));
-        out.push_str(&format!("{name}_sum{{{labels}}} {:.6}\n", self.sum));
-        out.push_str(&format!("{name}_count{{{labels}}} {}\n", self.count));
+        let _ = writeln!(out, "{name}_bucket{{{labels},le=\"+Inf\"}} {cumulative}");
+        let _ = writeln!(out, "{name}_sum{{{labels}}} {:.6}", self.sum);
+        let _ = writeln!(out, "{name}_count{{{labels}}} {}", self.count);
         out
     }
 }
@@ -283,7 +280,7 @@ fn parse_http_status(msg: &str) -> Option<u16> {
     }
     if let Some(idx) = msg.find("HTTP ") {
         let rest = &msg[idx + 5..];
-        let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+        let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
         if let Ok(code) = digits.parse::<u16>() {
             if (400..600).contains(&code) {
                 return Some(code);
@@ -328,13 +325,15 @@ pub fn render_openmetrics(snap: &MetricsSnapshot) -> String {
 pub fn render_openmetrics_for_stream(snap: &MetricsSnapshot, stream_id: Option<&str>) -> String {
     let url = label_escape(&redact_url(&snap.url));
     let cdn = label_escape(&snap.cdn_provider);
-    let labels = match stream_id {
-        Some(id) => format!(
-            "url=\"{url}\",stream_id=\"{}\"",
-            label_escape(&sanitize_stream_id_label(id))
-        ),
-        None => format!("url=\"{url}\""),
-    };
+    let labels = stream_id.map_or_else(
+        || format!("url=\"{url}\""),
+        |id| {
+            format!(
+                "url=\"{url}\",stream_id=\"{}\"",
+                label_escape(&sanitize_stream_id_label(id))
+            )
+        },
+    );
     let mut out = format!(
         r#"# HELP streamtop_stream_health_score Stream Health Index (SHI) 0-100
 # TYPE streamtop_stream_health_score gauge
@@ -422,17 +421,19 @@ streamtop_channel_dropped_total{{{labels}}} {drops}
     );
 
     if snap.http_errors.is_empty() {
-        out.push_str(&format!(
-            "streamtop_http_errors_total{{{labels},status=\"none\"}} 0\n"
-        ));
+        let _ = writeln!(
+            out,
+            "streamtop_http_errors_total{{{labels},status=\"none\"}} 0"
+        );
     } else {
         let mut keys: Vec<_> = snap.http_errors.keys().cloned().collect();
         keys.sort();
         for status in keys {
             let n = snap.http_errors[&status];
-            out.push_str(&format!(
-                "streamtop_http_errors_total{{{labels},status=\"{status}\"}} {n}\n"
-            ));
+            let _ = writeln!(
+                out,
+                "streamtop_http_errors_total{{{labels},status=\"{status}\"}} {n}"
+            );
         }
     }
 
@@ -486,16 +487,17 @@ pub fn authorize_metrics_bearer(headers: &HeaderMap, expected: &str) -> bool {
 }
 
 /// Non-loopback binds must use a non-empty `--metrics-token` (or `STREAMTOP_METRICS_TOKEN`).
-pub fn require_metrics_token_for_bind(bind: IpAddr, token: &Option<String>) -> Result<()> {
+pub fn require_metrics_token_for_bind(bind: IpAddr, token: Option<&str>) -> Result<()> {
     if bind.is_loopback() {
         return Ok(());
     }
-    match token {
-        Some(t) if !t.trim().is_empty() => Ok(()),
-        _ => Err(color_eyre::eyre::eyre!(
+    if token.is_some_and(|t| !t.trim().is_empty()) {
+        Ok(())
+    } else {
+        Err(color_eyre::eyre::eyre!(
             "--metrics-bind {bind} is not loopback; set a non-empty --metrics-token \
              (or STREAMTOP_METRICS_TOKEN) so /metrics is not publicly scrapable"
-        )),
+        ))
     }
 }
 
@@ -525,7 +527,9 @@ async fn metrics_handler(
             );
         }
     }
-    let snap = state.read().unwrap_or_else(|e| e.into_inner());
+    let snap = state
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     (
         StatusCode::OK,
         [("content-type", "text/plain; version=0.0.4; charset=utf-8")],
@@ -549,16 +553,16 @@ pub async fn run_prometheus(
     let (tx, mut rx) = mpsc::channel(EVENT_CHANNEL_CAPACITY);
     tokio::spawn(async move { while rx.recv().await.is_some() {} });
     let mut poller = ManifestPoller::new(
-        url.clone(),
-        session.headers.clone(),
-        session.user_agent.clone(),
+        url.as_str(),
+        &session.headers,
+        session.user_agent.as_deref(),
         session.interval_ms,
         session.probe_headers,
         session.probe_drm,
         tx,
     )?
     .with_metrics(Arc::clone(&metrics))
-    .with_diagnostics(crate::engine::poller::DiagnosticOpts {
+    .with_diagnostics(&crate::engine::poller::DiagnosticOpts {
         tr101290: session.tr101290,
         probe_sei: session.probe_sei,
         simulate_player: session.simulate_player,
@@ -696,17 +700,14 @@ mod tests {
 
     #[test]
     fn non_loopback_bind_requires_token() {
-        assert!(require_metrics_token_for_bind(IpAddr::V4(Ipv4Addr::UNSPECIFIED), &None).is_err());
-        assert!(require_metrics_token_for_bind(
-            IpAddr::V4(Ipv4Addr::UNSPECIFIED),
-            &Some("  ".into())
-        )
-        .is_err());
-        assert!(require_metrics_token_for_bind(
-            IpAddr::V4(Ipv4Addr::UNSPECIFIED),
-            &Some("secret".into())
-        )
-        .is_ok());
-        assert!(require_metrics_token_for_bind(IpAddr::V4(Ipv4Addr::LOCALHOST), &None).is_ok());
+        assert!(require_metrics_token_for_bind(IpAddr::V4(Ipv4Addr::UNSPECIFIED), None).is_err());
+        assert!(
+            require_metrics_token_for_bind(IpAddr::V4(Ipv4Addr::UNSPECIFIED), Some("  ")).is_err()
+        );
+        assert!(
+            require_metrics_token_for_bind(IpAddr::V4(Ipv4Addr::UNSPECIFIED), Some("secret"))
+                .is_ok()
+        );
+        assert!(require_metrics_token_for_bind(IpAddr::V4(Ipv4Addr::LOCALHOST), None).is_ok());
     }
 }

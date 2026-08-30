@@ -97,10 +97,10 @@ fn scrub_query_and_fragment(url: &str) -> String {
         None => (url, None),
     };
     let Some((base, query)) = without_frag.split_once('?') else {
-        return match frag {
-            Some(f) => format!("{without_frag}#{}", scrub_param_string(f)),
-            None => without_frag.to_string(),
-        };
+        return frag.map_or_else(
+            || without_frag.to_string(),
+            |f| format!("{without_frag}#{}", scrub_param_string(f)),
+        );
     };
     let mut out = format!("{base}?{}", scrub_param_string(query));
     if let Some(f) = frag {
@@ -200,12 +200,12 @@ fn scrub_urls_in_text(text: &str) -> String {
 }
 
 pub fn redact_user_agent(ua: Option<&str>) -> Option<String> {
-    ua.map(|s| {
-        if s.to_ascii_lowercase().contains("token") || s.to_ascii_lowercase().contains("key=") {
-            REDACTED.to_string()
-        } else {
-            s.to_string()
-        }
+    let s = ua?;
+    let lower = s.to_ascii_lowercase();
+    Some(if lower.contains("token") || lower.contains("key=") {
+        REDACTED.to_string()
+    } else {
+        s.to_string()
     })
 }
 

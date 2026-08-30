@@ -183,9 +183,9 @@ pub async fn capture_for_export(
 ) -> Result<ExportCapture> {
     let (tx, mut rx) = mpsc::channel(EVENT_CHANNEL_CAPACITY);
     let poller = ManifestPoller::new(
-        url.clone(),
-        session.headers.clone(),
-        session.user_agent.clone(),
+        url.as_str(),
+        &session.headers,
+        session.user_agent.as_deref(),
         session.interval_ms,
         session.probe_headers,
         session.probe_drm,
@@ -220,8 +220,7 @@ pub async fn capture_for_export(
                     cap.manifest_url = m.url;
                 }
             }
-            Ok(None) => break,
-            Err(_) => break,
+            Ok(None) | Err(_) => break,
             _ => {}
         }
     }

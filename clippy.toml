@@ -1,0 +1,5 @@
+# streamtop clippy workspace config.
+# Pedantic/nursery lint allows for binary parsers live in src/lib.rs (crate attributes).
+# CI: cargo clippy --all-targets --all-features -- -D warnings -W clippy::pedantic -W clippy::nursery
+
+avoid-breaking-exported-api = false
