@@ -6,12 +6,19 @@
 !/dist/winget/**
 
 /.cursor/
+/.vscode/
+/.idea/
+*.tmp
+*.bak
+/.release-artifacts/
+/.verify-release/
 
 /dist/aur/.SRCINFO
 
 /target/
 /fuzz/target/
 /stage/
+/release/
 /release-assets/
 /verify-hashes/
 /check-rel/

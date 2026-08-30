@@ -203,7 +203,7 @@ streamtop <URL> --summary --summary-format json --timeout 10
 # HTML / JSON compliance report
 streamtop <URL> --export-report report.html --timeout 10
 
-# Multi-stream headless agent (see agent.example.toml)
+# Headless background agent: multi-stream monitoring without a TUI (see agent.example.toml)
 streamtop --agent agent.example.toml
 
 # VOD playlist crawl
