@@ -22,9 +22,9 @@ use crate::engine::quick_play::{launch_quick_play, QuickPlayResult};
 use crate::engine::ManifestPoller;
 use crate::models::{
     format_dvr_window, AbrHealth, AbrVariant, AdBreakInfo, CdnStats, ChannelEntry, DiagCategory,
-    DiagnosticFinding, DiagnosticSummary, G2gMetrics, HealthReport, IngestStats, LatencyState,
-    LogEntry, LogLevel, PlaylistMeta, RingBuffer, SegmentMetrics, SeiProbeResult, StreamEvent,
-    StreamSnapshot, StreamStatus, SyntheticQoeSnapshot, Tr101290Report, VirtualBuffer,
+    DiagnosticFinding, DiagnosticSummary, DlDurHud, G2gMetrics, HealthReport, IngestStats,
+    LatencyState, LogEntry, LogLevel, PlaylistMeta, RingBuffer, SegmentMetrics, SeiProbeResult,
+    StreamEvent, StreamSnapshot, StreamStatus, SyntheticQoeSnapshot, Tr101290Report, VirtualBuffer,
     DIAGNOSTIC_DIR, EVENT_CHANNEL_CAPACITY, HISTORY_CAPACITY, LOG_CAPACITY,
 };
 use crate::ui::channel_picker::{ChannelPicker, PickerAction};
@@ -109,6 +109,7 @@ pub struct App {
     pub playlist: Option<PlaylistMeta>,
     pub variants: Vec<AbrVariant>,
     pub last_segment: Option<SegmentMetrics>,
+    pub dl_dur_hud: DlDurHud,
     pub health: HealthReport,
     pub cdn: CdnStats,
     pub abr_health: AbrHealth,
@@ -199,6 +200,7 @@ impl App {
             playlist: None,
             variants: Vec::new(),
             last_segment: None,
+            dl_dur_hud: DlDurHud::default(),
             health: HealthReport::perfect(),
             cdn: CdnStats::default(),
             abr_health: AbrHealth::default(),
@@ -706,6 +708,7 @@ impl App {
         self.buffer = VirtualBuffer::default();
         self.log_scroll = 0;
         self.last_segment = None;
+        self.dl_dur_hud.clear();
         self.playlist = None;
         self.variants.clear();
         self.active_ad = None;
@@ -752,6 +755,7 @@ impl App {
                 if metrics.probed {
                     self.probe_mode = true;
                 }
+                self.dl_dur_hud.update_from_segment(&metrics);
                 self.http_log.push(crate::models::HttpTransaction {
                     method: "GET".into(),
                     url: metrics.uri.clone(),

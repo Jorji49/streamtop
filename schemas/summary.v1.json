@@ -34,6 +34,7 @@
     "cdn": { "type": "string" },
     "ttfb_ms": { "type": ["integer", "null"], "minimum": 0 },
     "last_http_status": { "type": ["integer", "null"] },
+    "dl_to_dur_ratio": { "type": ["number", "null"], "minimum": 0 },
     "origin_stalls": { "type": "integer", "minimum": 0 },
     "critical_rfc_errors": { "type": "integer", "minimum": 0 },
     "url": { "type": "string" },

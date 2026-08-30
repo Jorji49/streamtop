@@ -87,6 +87,7 @@ pub async fn run_vod(url: String, session: SessionOpts, format: SummaryFormat) -
                 report.cdn_badge,
                 report.last_ttfb,
                 report.last_http_status,
+                None,
                 0,
                 report.issues.len() as u32,
                 report.errors,

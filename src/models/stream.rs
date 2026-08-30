@@ -23,6 +23,10 @@ pub const AUDIT_CONCURRENCY: usize = 25;
 pub const AUDIT_CONNECT_TIMEOUT_SECS: u64 = 3;
 pub const AUDIT_REQUEST_TIMEOUT_SECS: u64 = 5;
 pub const STALL_TTFB_MS: u64 = 2500;
+/// Download-to-duration ratio below this is normal buffer fill.
+pub const DL_TO_DUR_NORMAL_MAX: f32 = 0.70;
+/// Download-to-duration ratio above this depletes the virtual buffer.
+pub const DL_TO_DUR_ELEVATED_MAX: f32 = 1.00;
 /// Maximum manifest / metadata download size (decompression-bomb guard).
 pub const MAX_MANIFEST_BYTES: usize = 10 * 1024 * 1024;
 /// Maximum full segment download when not range-probing.
@@ -493,6 +497,49 @@ impl ContainerKind {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum DlToDurState {
+    #[default]
+    Normal,
+    Elevated,
+    Draining,
+}
+
+/// Stack-backed RTF label for the TUI render loop (no per-frame heap allocs).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct DlDurHud {
+    bytes: [u8; 32],
+    len: u8,
+    pub state: DlToDurState,
+}
+
+impl DlDurHud {
+    pub fn clear(&mut self) {
+        self.len = 0;
+        self.state = DlToDurState::Normal;
+    }
+
+    pub fn update_from_segment(&mut self, seg: &SegmentMetrics) {
+        self.clear();
+        let Some(ratio) = seg.dl_to_dur_ratio else {
+            return;
+        };
+        self.state = classify_dl_to_dur(ratio);
+        self.len = write_dl_dur_label(&mut self.bytes, ratio, self.state);
+    }
+
+    pub fn as_str(&self) -> &str {
+        if self.len == 0 {
+            return "-";
+        }
+        std::str::from_utf8(&self.bytes[..self.len as usize]).unwrap_or("-")
+    }
+
+    pub fn is_visible(&self) -> bool {
+        self.len > 0
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SegmentMetrics {
     pub media_sequence: u64,
@@ -503,6 +550,9 @@ pub struct SegmentMetrics {
     pub transferred_bytes: u64,
     pub ttfb_ms: u64,
     pub download_ms: u64,
+    /// `download_secs / duration_secs`; `None` when duration is zero.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dl_to_dur_ratio: Option<f32>,
     /// Throughput from transferred bytes; `None` in range-probe mode.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub download_kbps: Option<u64>,
@@ -522,6 +572,18 @@ pub struct SegmentMetrics {
 }
 
 impl SegmentMetrics {
+    pub fn compute_dl_to_dur_ratio(download_ms: u64, duration_secs: f32) -> Option<f32> {
+        if duration_secs > 0.0 {
+            Some((download_ms as f32 / 1000.0) / duration_secs)
+        } else {
+            None
+        }
+    }
+
+    pub fn dl_to_dur_state(&self) -> Option<DlToDurState> {
+        self.dl_to_dur_ratio.map(classify_dl_to_dur)
+    }
+
     pub fn rate_label(&self) -> String {
         if self.probed {
             let kb = self.transferred_bytes as f64 / 1024.0;
@@ -531,6 +593,92 @@ impl SegmentMetrics {
         } else {
             "-".into()
         }
+    }
+}
+
+pub fn classify_dl_to_dur(ratio: f32) -> DlToDurState {
+    if ratio < DL_TO_DUR_NORMAL_MAX {
+        DlToDurState::Normal
+    } else if ratio <= DL_TO_DUR_ELEVATED_MAX {
+        DlToDurState::Elevated
+    } else {
+        DlToDurState::Draining
+    }
+}
+
+fn write_dl_dur_label(out: &mut [u8], ratio: f32, state: DlToDurState) -> u8 {
+    use std::fmt::Write as _;
+    struct StackBuf<'a> {
+        buf: &'a mut [u8],
+        len: usize,
+    }
+    impl std::fmt::Write for StackBuf<'_> {
+        fn write_str(&mut self, s: &str) -> std::fmt::Result {
+            let take = s.len().min(self.buf.len().saturating_sub(self.len));
+            self.buf[self.len..self.len + take].copy_from_slice(&s.as_bytes()[..take]);
+            self.len += take;
+            Ok(())
+        }
+    }
+    let mut w = StackBuf { buf: out, len: 0 };
+    let _ = write!(w, "RTF: {ratio:.2}x");
+    if state == DlToDurState::Draining {
+        let _ = write!(w, " [STALL RISK]");
+    }
+    w.len.min(u8::MAX as usize) as u8
+}
+
+#[cfg(test)]
+mod dl_to_dur_tests {
+    use super::*;
+
+    #[test]
+    fn dl_to_dur_ratio_standard_segment() {
+        let ratio = SegmentMetrics::compute_dl_to_dur_ratio(180, 2.0);
+        assert!(ratio.is_some());
+        assert!((ratio.unwrap() - 0.09).abs() < 0.001);
+    }
+
+    #[test]
+    fn dl_to_dur_ratio_zero_duration_is_none() {
+        assert!(SegmentMetrics::compute_dl_to_dur_ratio(500, 0.0).is_none());
+    }
+
+    #[test]
+    fn dl_to_dur_threshold_classification() {
+        assert_eq!(classify_dl_to_dur(0.18), DlToDurState::Normal);
+        assert_eq!(classify_dl_to_dur(0.69), DlToDurState::Normal);
+        assert_eq!(classify_dl_to_dur(0.70), DlToDurState::Elevated);
+        assert_eq!(classify_dl_to_dur(0.85), DlToDurState::Elevated);
+        assert_eq!(classify_dl_to_dur(1.00), DlToDurState::Elevated);
+        assert_eq!(classify_dl_to_dur(1.01), DlToDurState::Draining);
+        assert_eq!(classify_dl_to_dur(2.5), DlToDurState::Draining);
+    }
+
+    #[test]
+    fn dl_dur_hud_formats_without_heap() {
+        let seg = SegmentMetrics {
+            media_sequence: 1,
+            duration_secs: 2.0,
+            size_bytes: 1000,
+            transferred_bytes: 1000,
+            ttfb_ms: 40,
+            download_ms: 360,
+            dl_to_dur_ratio: Some(0.18),
+            download_kbps: Some(500),
+            latency_ms: None,
+            uri: String::new(),
+            cdn: CdnEdgeInfo::default(),
+            probed: false,
+            container: ContainerKind::Ts,
+            http_status: 200,
+            network: None,
+            wire: None,
+        };
+        let mut hud = DlDurHud::default();
+        hud.update_from_segment(&seg);
+        assert_eq!(hud.as_str(), "RTF: 0.18x");
+        assert_eq!(hud.state, DlToDurState::Normal);
     }
 }
 

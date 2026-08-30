@@ -827,6 +827,10 @@ impl ManifestPoller {
                 transferred_bytes: fetch.transferred_bytes,
                 ttfb_ms: fetch.ttfb_ms,
                 download_ms: fetch.download_ms,
+                dl_to_dur_ratio: SegmentMetrics::compute_dl_to_dur_ratio(
+                    fetch.download_ms,
+                    seg_hint,
+                ),
                 download_kbps: kbps,
                 latency_ms: match latency {
                     LatencyState::Measured(ms) | LatencyState::Estimated(ms) => Some(ms),
@@ -845,7 +849,7 @@ impl ManifestPoller {
                 LogLevel::Info,
                 DiagCategory::Segment,
                 format!(
-                    "DASH probe seq={seq} {} | {} | {} | {}",
+                    "DASH probe seq={seq} {} | {} | {} | {}{}",
                     metrics.rate_label(),
                     fetch.container.as_str(),
                     metrics.cdn.badge(),
@@ -853,7 +857,10 @@ impl ManifestPoller {
                         .network
                         .as_ref()
                         .map(super::super::models::stream::NetworkTiming::display_line)
-                        .unwrap_or_default()
+                        .unwrap_or_default(),
+                    metrics
+                        .dl_to_dur_ratio
+                        .map_or_else(String::new, |r| format!(" | dl_to_dur_ratio={r:.2}"))
                 ),
             );
             if let Some(w) = &metrics.wire {
@@ -1828,6 +1835,10 @@ impl ManifestPoller {
             transferred_bytes: fetch.transferred_bytes,
             ttfb_ms: fetch.ttfb_ms,
             download_ms: fetch.download_ms,
+            dl_to_dur_ratio: SegmentMetrics::compute_dl_to_dur_ratio(
+                fetch.download_ms,
+                segment.duration,
+            ),
             download_kbps,
             latency_ms,
             uri: segment_url.to_string(),
@@ -1841,6 +1852,9 @@ impl ManifestPoller {
 
         let rate_label = metrics.rate_label();
         let net_line = fetch.network.display_line();
+        let rtf_line = metrics
+            .dl_to_dur_ratio
+            .map_or_else(String::new, |r| format!(" | dl_to_dur_ratio={r:.2}"));
         self.send_event(StreamEvent::WireProbe(wire));
         self.send_event(StreamEvent::Segment(metrics));
         self.send_event(StreamEvent::Latency(latency));
@@ -1852,7 +1866,7 @@ impl ManifestPoller {
             LogLevel::Info,
             DiagCategory::Segment,
             format!(
-                "seq={media_sequence} {mode} {} declared={}B xfer={}B | {rate_label} | {net_line}",
+                "seq={media_sequence} {mode} {} declared={}B xfer={}B | {rate_label}{rtf_line} | {net_line}",
                 fetch.container.as_str(),
                 fetch.size_bytes,
                 fetch.transferred_bytes

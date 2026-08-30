@@ -90,6 +90,7 @@ pub struct MetricsSnapshot {
     pub url: String,
     pub health_score: u8,
     pub segment_ttfb_secs: f64,
+    pub segment_dl_duration_ratio: f64,
     pub latency_secs: f64,
     pub bitstream_fps: f64,
     pub cdn_hits: u64,
@@ -122,6 +123,7 @@ impl Default for MetricsSnapshot {
             url: String::new(),
             health_score: 0,
             segment_ttfb_secs: 0.0,
+            segment_dl_duration_ratio: 0.0,
             latency_secs: 0.0,
             bitstream_fps: 0.0,
             cdn_hits: 0,
@@ -157,6 +159,9 @@ pub fn update_metrics(snap: &mut MetricsSnapshot, event: &StreamEvent) {
             snap.segment_ttfb_secs = s.ttfb_ms as f64 / 1000.0;
             snap.segment_ttfb_hist
                 .observe(TTFB_BUCKETS, snap.segment_ttfb_secs);
+            if let Some(ratio) = s.dl_to_dur_ratio {
+                snap.segment_dl_duration_ratio = f64::from(ratio);
+            }
             if let Some(ms) = s.latency_ms {
                 snap.latency_secs = ms as f64 / 1000.0;
             }
@@ -338,6 +343,9 @@ pub fn render_openmetrics_for_stream(snap: &MetricsSnapshot, stream_id: Option<&
         r#"# HELP streamtop_stream_health_score Stream Health Index (SHI) 0-100
 # TYPE streamtop_stream_health_score gauge
 streamtop_stream_health_score{{{labels}}} {health}
+# HELP streamtop_segment_dl_duration_ratio Download time divided by segment media duration (RTF)
+# TYPE streamtop_segment_dl_duration_ratio gauge
+streamtop_segment_dl_duration_ratio{{{labels}}} {dl_ratio:.4}
 # HELP streamtop_latency_seconds Live-edge latency (PDT or estimated)
 # TYPE streamtop_latency_seconds gauge
 streamtop_latency_seconds{{{labels}}} {latency:.6}
@@ -399,6 +407,7 @@ streamtop_channel_dropped_total{{{labels}}} {drops}
 # TYPE streamtop_http_errors_total counter
 "#,
         health = snap.health_score,
+        dl_ratio = snap.segment_dl_duration_ratio,
         latency = snap.latency_secs,
         fps = snap.bitstream_fps,
         hits = snap.cdn_hits,
@@ -645,6 +654,7 @@ mod tests {
         assert!(out.contains("streamtop_http_errors_total"));
         assert!(out.contains("streamtop_ll_hls_enabled"));
         assert!(out.contains("streamtop_segment_ttfb_seconds_bucket"));
+        assert!(out.contains("streamtop_segment_dl_duration_ratio"));
         assert!(out.contains("streamtop_llhls_part_duration_seconds_bucket"));
         assert!(out.contains("streamtop_drm_license_ttfb_seconds_bucket"));
         assert!(out.contains("streamtop_codec_mismatch_total"));
@@ -656,6 +666,31 @@ mod tests {
                 || out.contains("token=%5BREDACTED%5D")
                 || out.contains("token=[REDACTED]")
         );
+    }
+
+    #[test]
+    fn segment_dl_duration_ratio_from_segment_event() {
+        let mut snap = MetricsSnapshot::default();
+        let seg = crate::models::SegmentMetrics {
+            media_sequence: 1,
+            duration_secs: 2.0,
+            size_bytes: 1000,
+            transferred_bytes: 1000,
+            ttfb_ms: 40,
+            download_ms: 360,
+            dl_to_dur_ratio: Some(0.18),
+            download_kbps: Some(500),
+            latency_ms: None,
+            uri: String::new(),
+            cdn: crate::models::CdnEdgeInfo::default(),
+            probed: false,
+            container: crate::models::ContainerKind::Ts,
+            http_status: 200,
+            network: None,
+            wire: None,
+        };
+        update_metrics(&mut snap, &StreamEvent::Segment(seg));
+        assert!((snap.segment_dl_duration_ratio - 0.18).abs() < 0.001);
     }
 
     #[test]

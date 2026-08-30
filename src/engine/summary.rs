@@ -46,6 +46,8 @@ pub struct SummaryJson {
     pub cdn: String,
     pub ttfb_ms: Option<u64>,
     pub last_http_status: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dl_to_dur_ratio: Option<f32>,
     pub origin_stalls: u32,
     pub critical_rfc_errors: u32,
     pub url: String,
@@ -83,6 +85,7 @@ pub fn build_summary_json(
     cdn_badge: String,
     last_ttfb: Option<u64>,
     last_http_status: Option<u16>,
+    dl_to_dur_ratio: Option<f32>,
     origin_stalls: u32,
     critical_rfc_errors: u32,
     errors: u32,
@@ -111,6 +114,7 @@ pub fn build_summary_json(
         cdn: cdn_badge,
         ttfb_ms: last_ttfb,
         last_http_status,
+        dl_to_dur_ratio,
         origin_stalls,
         critical_rfc_errors,
         url: redact_url(url),
@@ -194,6 +198,7 @@ pub async fn run_summary(
     let mut cdn = CdnStats::default();
     let mut last_ttfb: Option<u64> = None;
     let mut last_http_status: Option<u16> = None;
+    let mut last_dl_to_dur_ratio: Option<f32> = None;
     let mut errors = 0u32;
     let mut origin_stalls = 0u32;
     let mut critical_rfc_errors = 0u32;
@@ -235,6 +240,7 @@ pub async fn run_summary(
                 StreamEvent::Segment(s) => {
                     saw_segment = true;
                     last_ttfb = Some(s.ttfb_ms);
+                    last_dl_to_dur_ratio = s.dl_to_dur_ratio;
                     if s.http_status > 0 {
                         last_http_status = Some(s.http_status);
                     }
@@ -328,6 +334,7 @@ pub async fn run_summary(
                 cdn_badge,
                 last_ttfb,
                 last_http_status,
+                last_dl_to_dur_ratio,
                 origin_stalls,
                 critical_rfc_errors,
                 errors,
@@ -428,6 +435,7 @@ pub async fn run_ingest_summary(
                 "INGEST".into(),
                 None,
                 None,
+                None,
                 0,
                 0,
                 errors,
@@ -492,6 +500,7 @@ mod tests {
             "Cloudflare · HIT".into(),
             Some(80),
             Some(206),
+            Some(0.18),
             0,
             0,
             0,
@@ -537,6 +546,7 @@ mod tests {
             "MISS".into(),
             Some(80),
             Some(206),
+            None,
             0,
             0,
             0,

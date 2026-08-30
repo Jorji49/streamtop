@@ -20,7 +20,7 @@ use crate::engine::metrics::{
 };
 use crate::engine::webhook::{self, AlertKind, WebhookConfig};
 use crate::engine::ManifestPoller;
-use crate::models::EVENT_CHANNEL_CAPACITY;
+use crate::models::{StreamEvent, EVENT_CHANNEL_CAPACITY};
 use crate::ui::app::SessionOpts;
 
 /// Max concurrent pollers in agent mode (bounded memory).
@@ -284,7 +284,15 @@ fn spawn_agent_stream(
         );
     }
 
-    tokio::spawn(async move { while rx.recv().await.is_some() {} });
+    tokio::spawn(async move {
+        while let Some(ev) = rx.recv().await {
+            if let StreamEvent::Segment(s) = &ev {
+                if let Some(r) = s.dl_to_dur_ratio {
+                    eprintln!("agent [{stream_id}] dl_to_dur_ratio={r:.2}");
+                }
+            }
+        }
+    });
     tokio::spawn(async move {
         let () = poller.run().await;
     });

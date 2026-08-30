@@ -6,7 +6,7 @@ use ratatui::Frame;
 
 use crate::engine::redact::redact_url;
 use crate::models::{
-    format_dvr_window, format_url_mid_ellipsis, DiagCategory, LatencyState, LogLevel,
+    format_dvr_window, format_url_mid_ellipsis, DiagCategory, DlToDurState, LatencyState, LogLevel,
     StreamStatusKind,
 };
 use crate::ui::app::App;
@@ -105,6 +105,14 @@ pub fn draw_regex_modal(frame: &mut Frame, area: Rect, app: &App) {
         ),
         modal,
     );
+}
+
+fn dl_dur_style(state: DlToDurState) -> Style {
+    match state {
+        DlToDurState::Normal => Style::default().fg(Color::LightGreen),
+        DlToDurState::Elevated => Style::default().fg(Color::Yellow),
+        DlToDurState::Draining => Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+    }
 }
 
 fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
@@ -234,6 +242,13 @@ fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
                 .add_modifier(Modifier::BOLD),
         ),
     ];
+    if app.dl_dur_hud.is_visible() {
+        status_row2.push(Span::raw("  "));
+        status_row2.push(Span::styled(
+            app.dl_dur_hud.as_str(),
+            dl_dur_style(app.dl_dur_hud.state).add_modifier(Modifier::BOLD),
+        ));
+    }
     if let Some(w) = wire {
         if let Some(gop) = w.gop_badge() {
             let (gop_fg, gop_back) = if gop == "IDR" {
@@ -435,17 +450,23 @@ fn draw_segment_panel(frame: &mut Frame, app: &App, area: Rect) {
                     " TTFB / Transfer: {} ms / {} ms ({probe})",
                     seg.ttfb_ms, seg.download_ms
                 )),
-                Line::from(Span::styled(
-                    format!(" {net}"),
-                    Style::default().fg(Color::Cyan),
-                )),
-                Line::from(format!(
-                    " Rate / Type    : {} · {}",
-                    seg.rate_label(),
-                    seg.container.as_str()
-                )),
-                Line::from(format!(" CDN            : {}", seg.cdn.badge())),
             ];
+            if app.dl_dur_hud.is_visible() {
+                lines.push(Line::from(vec![
+                    Span::raw(" DL/Dur         : "),
+                    Span::styled(app.dl_dur_hud.as_str(), dl_dur_style(app.dl_dur_hud.state)),
+                ]));
+            }
+            lines.push(Line::from(Span::styled(
+                format!(" {net}"),
+                Style::default().fg(Color::Cyan),
+            )));
+            lines.push(Line::from(format!(
+                " Rate / Type    : {} · {}",
+                seg.rate_label(),
+                seg.container.as_str()
+            )));
+            lines.push(Line::from(format!(" CDN            : {}", seg.cdn.badge())));
             if let Some(wire) = &seg.wire {
                 if let Some(res) = wire.resolution_label() {
                     lines.push(Line::from(format!(
