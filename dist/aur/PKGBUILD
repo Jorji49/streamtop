@@ -1,7 +1,7 @@
 # Maintainer: Ahmet Kayra Kama <kayraak@pm.me>
 # Contributor: Ahmet Kayra Kama <kayraak@pm.me>
 pkgname=streamtop-bin
-pkgver=1.3.0
+pkgver=1.3.1
 pkgrel=1
 pkgdesc="Terminal HLS, DASH, and IPTV stream monitor with wire probes and metrics"
 arch=('x86_64')

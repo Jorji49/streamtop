@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.3.1] - 2026-08-30
+
+- Inband DASH `emsg` box parsing and DAI cross-layer validation
+- Apple FairPlay `cbcs` 1:9 sub-sample staging decryption (ClearKey probe)
+- Self-contained HTML incident and compliance export (`--export-report`)
+- Interactive compiled regex modal overlay in TUI (`/`)
+- Multi-stream headless agent daemon (`streamtop --agent config.toml`)
+- Zero-panic refactor: `slice_util` bounds-safe indexing, pedantic clippy clean, ~40 clone sites removed
+
 ## 1.3.0
 
 - Inband DASH `emsg` SCTE-35 extraction and DAI cross-layer validation
