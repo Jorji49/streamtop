@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.3.2] - 2026-08-30
+
+- Real-Time Factor (RTF): download-to-duration ratio on each segment (`dl_to_dur_ratio`)
+- Stall risk states: Normal (<0.70x), Elevated (0.70x-1.00x), Draining (>1.00x)
+- TUI Status and Last Segment panels show color-coded RTF indicator
+- Prometheus gauge `streamtop_segment_dl_duration_ratio`
+- Headless summary JSON, agent logs, and diagnostic exports include `dl_to_dur_ratio`
+
 ## [1.3.1] - 2026-08-30
 
 - Inband DASH `emsg` box parsing and DAI cross-layer validation
