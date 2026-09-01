@@ -24,7 +24,7 @@ Terminal HLS, DASH, IPTV, and WHEP stream diagnostics with wire probes, CI expor
 - **WHEP probe**: sub-second SDP signaling check (201/200 answer, codecs, ICE, stream IDs)
 - **AES-128-CBC probe decrypt**: in-memory `#EXT-X-KEY` fetch for encrypted TS/fMP4 wire analysis
 
-### Pinnacle transport and CDN
+### Transport and CDN
 
 - **HTTP/3 (QUIC) telemetry**: reqwest `http3` + ALPN; handshake timing on h3; Prometheus `streamtop_http_version`, `streamtop_quic_handshake_seconds`, `streamtop_quic_stream_resets_total`
 - **Multi-CDN skew**: `--multi-cdn URL1,URL2,...`, `--max-cdn-skew-ms`, matrix TUI, `ERR_CDN_SYNC_SKEW`

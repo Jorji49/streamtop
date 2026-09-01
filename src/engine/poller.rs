@@ -12,12 +12,9 @@ use tokio::sync::mpsc::Sender;
 use tokio::time::sleep;
 use url::Url;
 
+use crate::engine::abr_model::{simulate_segment_fetch, AbrLadderState};
 use crate::engine::aes128_probe::{
     decrypt_aes128_cbc_probe, derive_iv, fetch_aes128_key, parse_iv_hex, Aes128KeyCache,
-};
-use crate::engine::doh::{resolve_doh, DohProvider};
-use crate::engine::abr_model::{
-    simulate_segment_fetch, AbrLadderState,
 };
 use crate::engine::agent::AgentMetricsRegistry;
 use crate::engine::channel_stats::record_channel_drop;
@@ -30,6 +27,7 @@ use crate::engine::dai_validator::{
 use crate::engine::dash::{
     extract_dash_ad_events, ll_dash_production_drift, looks_like_dash, parse_dash_mpd,
 };
+use crate::engine::doh::{resolve_doh, DohProvider};
 use crate::engine::drm_probe::{
     apply_clearkey_to_wire, clearkey_license_body, probe_clearkey, ClearKeySpec,
 };
@@ -38,30 +36,30 @@ use crate::engine::gop_tracker::GopCadenceTracker;
 use crate::engine::linter::{
     ad_log_key, analyze_abr_ladder, apply_abr_penalty, apply_hls_blocking_params,
     extract_ad_signals_near_live_edge, inspect_container, lint_abr_player, lint_subtitle_drift,
-    lint_variant_alignment, ll_hls_probe_range, next_blocking_targets, parse_cdn_headers, scan_drm_keys, scan_ll_hls,
-    scan_media_renditions, SpecLinter,
+    lint_variant_alignment, ll_hls_probe_range, next_blocking_targets, parse_cdn_headers,
+    scan_drm_keys, scan_ll_hls, scan_media_renditions, SpecLinter,
 };
-use crate::engine::middlebox::classify_transport_failure;
 use crate::engine::metrics::{update_metrics, MetricsSnapshot};
-use crate::engine::redirect::RedirectLoopError;
-use crate::engine::transport::timing_from_reqwest_version;
+use crate::engine::middlebox::classify_transport_failure;
 use crate::engine::network_trace::{
     parse_header_pairs, reqwest_headers_chunked, timing_from_ttfb, traced_get,
 };
 use crate::engine::otel::OtelExporter;
 use crate::engine::playlist_parser::{is_iptv_channel_list, local_path_from_url};
+use crate::engine::redirect::RedirectLoopError;
 use crate::engine::sei_probe::SeiProbeAccumulator;
 use crate::engine::subtitle_probe::{compute_subtitle_drift, probe_subtitle_payload};
 use crate::engine::synthetic_qoe::SyntheticQoeEngine;
 use crate::engine::tr101290::{probe_container_tr101290, Tr101290Engine};
+use crate::engine::transport::timing_from_reqwest_version;
 use crate::engine::wire_timing::WireTimingTracker;
 use crate::models::{
     AbrVariant, CdnEdgeInfo, ContainerKind, DiagCategory, DiagSeverity, DiagnosticFinding,
-    DiagnosticReasonCode, LatencyState, LlDashInfo,
-    LlHlsInfo, LogLevel, MediaRenditions, NetworkTiming, PlaylistMeta, SegmentMetrics, StreamEvent,
-    StreamProtocol, StreamStatus, VirtualBuffer, WireProbeInfo, AD_SCAN_LIVE_EDGE_SEGMENTS,
-    DEEP_WIRE_PROBE_BYTES, HLS_LIVE_EDGE_SEGMENTS, MAX_MANIFEST_BYTES, MAX_PLAYLIST_DEPTH,
-    MAX_SEGMENT_BYTES, MEDIA_SEQ_GAP_TOLERANCE,
+    DiagnosticReasonCode, LatencyState, LlDashInfo, LlHlsInfo, LogLevel, MediaRenditions,
+    NetworkTiming, PlaylistMeta, SegmentMetrics, StreamEvent, StreamProtocol, StreamStatus,
+    VirtualBuffer, WireProbeInfo, AD_SCAN_LIVE_EDGE_SEGMENTS, DEEP_WIRE_PROBE_BYTES,
+    HLS_LIVE_EDGE_SEGMENTS, MAX_MANIFEST_BYTES, MAX_PLAYLIST_DEPTH, MAX_SEGMENT_BYTES,
+    MEDIA_SEQ_GAP_TOLERANCE,
 };
 
 const DEFAULT_UA: &str = concat!("streamtop/", env!("CARGO_PKG_VERSION"));
@@ -294,15 +292,13 @@ impl ManifestPoller {
                     if let Ok(mut failed) = self.doh_failed.lock() {
                         *failed = true;
                     }
-                    self.send_event(StreamEvent::Finding(
-                        DiagnosticFinding::with_reason_code(
-                            DiagCategory::Info,
-                            DiagSeverity::Warn,
-                            "DOH_RESOLVE",
-                            format!("DoH failed for {host}: {err}"),
-                            DiagnosticReasonCode::ErrDohResolutionFailed,
-                        ),
-                    ));
+                    self.send_event(StreamEvent::Finding(DiagnosticFinding::with_reason_code(
+                        DiagCategory::Info,
+                        DiagSeverity::Warn,
+                        "DOH_RESOLVE",
+                        format!("DoH failed for {host}: {err}"),
+                        DiagnosticReasonCode::ErrDohResolutionFailed,
+                    )));
                 }
             }
         }
@@ -366,8 +362,7 @@ impl ManifestPoller {
                     probe_container_tr101290(&mut eng, probe_bytes, fetch.container, wall_ms)
                 {
                     for check in &report.checks {
-                        if let Some(code) = DiagnosticReasonCode::from_tr101290_rule(&check.code)
-                        {
+                        if let Some(code) = DiagnosticReasonCode::from_tr101290_rule(&check.code) {
                             self.send_event(StreamEvent::Finding(
                                 DiagnosticFinding::with_reason_code(
                                     DiagCategory::Info,
@@ -430,10 +425,7 @@ impl ManifestPoller {
         let Some(uri) = drm.key_uri.as_deref() else {
             return fetch.probe_bytes.clone();
         };
-        let explicit_iv = drm
-            .key_iv
-            .as_deref()
-            .and_then(|s| parse_iv_hex(s).ok());
+        let explicit_iv = drm.key_iv.as_deref().and_then(|s| parse_iv_hex(s).ok());
         let iv = derive_iv(media_sequence, explicit_iv);
         let key = match fetch_aes128_key(&self.client, uri, &self.aes_key_cache).await {
             Ok(k) => k,
@@ -958,13 +950,7 @@ impl ManifestPoller {
             self.post_wire_extras(&fetch, &mut wire);
 
             let ladder_bps: Vec<u64> = variants.iter().map(|v| v.bandwidth).collect();
-            self.post_segment_diagnostics(
-                &fetch,
-                seg_hint,
-                kbps,
-                &ladder_bps,
-                &fetch.probe_bytes,
-            );
+            self.post_segment_diagnostics(&fetch, seg_hint, kbps, &ladder_bps, &fetch.probe_bytes);
 
             let metrics = SegmentMetrics {
                 media_sequence: seq,
@@ -1635,10 +1621,11 @@ impl ManifestPoller {
                             ttfb_ms: probe.ttfb_ms,
                             download_ms: probe.download_ms,
                             part_duration_secs: part_dur,
-                            part_dl_duration_ratio: crate::models::LlHlsPartMetrics::compute_part_rtf(
-                                probe.download_ms,
-                                part_dur,
-                            ),
+                            part_dl_duration_ratio:
+                                crate::models::LlHlsPartMetrics::compute_part_rtf(
+                                    probe.download_ms,
+                                    part_dur,
+                                ),
                             transfer_kbps: Some(probe.transfer_kbps),
                         };
                         let rtf_line = part_metrics
@@ -2039,7 +2026,9 @@ impl ManifestPoller {
         }
 
         let ladder_bps: Vec<u64> = variants.iter().map(|v| v.bandwidth).collect();
-        let probe_plain = self.maybe_decrypt_aes128_probe(&fetch, media_sequence).await;
+        let probe_plain = self
+            .maybe_decrypt_aes128_probe(&fetch, media_sequence)
+            .await;
         self.post_segment_diagnostics(
             &fetch,
             segment.duration,

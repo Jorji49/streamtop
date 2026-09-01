@@ -271,7 +271,8 @@ pub fn update_metrics(snap: &mut MetricsSnapshot, event: &StreamEvent) {
                     .copied()
                     .unwrap_or(0)
                     .saturating_add(1);
-            } else if let Some(code) = crate::models::DiagnosticReasonCode::from_tr101290_rule(&f.rule)
+            } else if let Some(code) =
+                crate::models::DiagnosticReasonCode::from_tr101290_rule(&f.rule)
             {
                 let key = code.as_str().to_string();
                 *snap.stream_errors.entry(key.clone()).or_insert(0) = snap

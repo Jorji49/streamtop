@@ -91,10 +91,7 @@ pub fn build_sarif(findings: &[DiagnosticFinding], violations: &[SpecViolation])
 
 fn finding_to_result(f: &DiagnosticFinding) -> SarifResult {
     SarifResult {
-        rule_id: f
-            .reason
-            .clone()
-            .unwrap_or_else(|| f.rule.clone()),
+        rule_id: f.reason.clone().unwrap_or_else(|| f.rule.clone()),
         level: match f.severity {
             crate::models::DiagSeverity::Error => "error",
             crate::models::DiagSeverity::Warn => "warning",
@@ -118,7 +115,10 @@ fn sarif_level(severity: &str) -> &'static str {
     }
 }
 
-pub fn render_sarif_json(findings: &[DiagnosticFinding], violations: &[SpecViolation]) -> Result<String> {
+pub fn render_sarif_json(
+    findings: &[DiagnosticFinding],
+    violations: &[SpecViolation],
+) -> Result<String> {
     let log = build_sarif(findings, violations);
     Ok(serde_json::to_string_pretty(&log)?)
 }

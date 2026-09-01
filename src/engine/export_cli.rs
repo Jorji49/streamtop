@@ -118,17 +118,16 @@ impl ExportPlan {
     }
 
     pub fn push(&mut self, item: ResolvedExport) {
-        if !self.exports.iter().any(|e| e.format == item.format && e.path == item.path) {
+        if !self
+            .exports
+            .iter()
+            .any(|e| e.format == item.format && e.path == item.path)
+        {
             self.exports.push(item);
         }
     }
 
-    fn push_deprecated(
-        &mut self,
-        format: ExportFormat,
-        path: Option<PathBuf>,
-        flag: &'static str,
-    ) {
+    fn push_deprecated(&mut self, format: ExportFormat, path: Option<PathBuf>, flag: &'static str) {
         self.push(ResolvedExport {
             format,
             path,
@@ -141,9 +140,9 @@ impl ExportPlan {
     }
 
     pub fn wants_curl_or_har(&self) -> bool {
-        self.exports.iter().any(|e| {
-            matches!(e.format, ExportFormat::Curl | ExportFormat::Har)
-        })
+        self.exports
+            .iter()
+            .any(|e| matches!(e.format, ExportFormat::Curl | ExportFormat::Har))
     }
 }
 

@@ -41,9 +41,7 @@ impl Aes128KeyCache {
 
     fn get(&mut self, uri: &str) -> Option<[u8; KEY_BYTES]> {
         self.prune_expired();
-        self.entries
-            .get(uri)
-            .map(|e| e.key)
+        self.entries.get(uri).map(|e| e.key)
     }
 
     fn insert(&mut self, uri: String, key: [u8; KEY_BYTES]) {
@@ -113,7 +111,11 @@ pub fn parse_iv_hex(s: &str) -> Result<[u8; IV_BYTES]> {
     Ok(out)
 }
 
-pub async fn fetch_aes128_key(client: &Client, uri: &str, cache: &Mutex<Aes128KeyCache>) -> Result<[u8; KEY_BYTES]> {
+pub async fn fetch_aes128_key(
+    client: &Client,
+    uri: &str,
+    cache: &Mutex<Aes128KeyCache>,
+) -> Result<[u8; KEY_BYTES]> {
     if let Ok(mut guard) = cache.lock() {
         if let Some(key) = guard.get(uri) {
             return Ok(key);
@@ -148,7 +150,9 @@ pub fn decrypt_aes128_cbc_probe(
     ciphertext: &[u8],
 ) -> Result<Vec<u8>> {
     if ciphertext.is_empty() || !ciphertext.len().is_multiple_of(16) {
-        return Err(eyre!("AES-128 ciphertext length must be a positive multiple of 16"));
+        return Err(eyre!(
+            "AES-128 ciphertext length must be a positive multiple of 16"
+        ));
     }
     let mut buf = ciphertext.to_vec();
     let dec = Aes128CbcDec::new(key.into(), iv.into());
@@ -191,10 +195,7 @@ mod tests {
         let enc = Aes128CbcEnc::new((&key).into(), (&iv).into());
         let mut ct = vec![0u8; 48];
         ct[..32].copy_from_slice(&plain);
-        let ct_len = enc
-            .encrypt_padded_mut::<Pkcs7>(&mut ct, 32)
-            .unwrap()
-            .len();
+        let ct_len = enc.encrypt_padded_mut::<Pkcs7>(&mut ct, 32).unwrap().len();
         let out = decrypt_aes128_cbc_probe(&key, &iv, &ct[..ct_len]).unwrap();
         assert_eq!(&out[..32], &plain[..32]);
         assert_eq!(out[0], 0x47);

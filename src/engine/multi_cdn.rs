@@ -12,7 +12,7 @@ use crate::engine::metrics::{update_metrics, MetricsSnapshot};
 use crate::engine::poller::ManifestPoller;
 use crate::engine::session_poller::apply_session_doh;
 use crate::models::{
-    DiagnosticFinding, DiagnosticReasonCode, DiagCategory, DiagSeverity, MultiCdnEdgeSnapshot,
+    DiagCategory, DiagSeverity, DiagnosticFinding, DiagnosticReasonCode, MultiCdnEdgeSnapshot,
     MultiCdnSkewReport, PlaylistMeta, SegmentMetrics, StreamEvent, EVENT_CHANNEL_CAPACITY,
 };
 use crate::ui::app::SessionOpts;
@@ -40,7 +40,12 @@ struct EdgeState {
 /// Parse `--multi-cdn URL1,URL2,...` or `label=URL` pairs.
 pub fn parse_multi_cdn(raw: &str) -> Result<Vec<MultiCdnTarget>> {
     let mut out = Vec::new();
-    for (idx, part) in raw.split(',').map(str::trim).filter(|s| !s.is_empty()).enumerate() {
+    for (idx, part) in raw
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .enumerate()
+    {
         if let Some((label, url)) = part.split_once('=') {
             out.push(MultiCdnTarget {
                 label: label.trim().to_string(),
@@ -90,14 +95,16 @@ pub fn compute_skew_from_snapshots(snapshots: &[MultiCdnEdgeSnapshot]) -> MultiC
 
     let pdt_vals: Vec<i64> = snapshots.iter().filter_map(|e| e.pdt_offset_ms).collect();
     let pdt_skew = if pdt_vals.len() >= 2 {
-        pdt_vals.iter().max().copied().unwrap_or(0)
-            - pdt_vals.iter().min().copied().unwrap_or(0)
+        pdt_vals.iter().max().copied().unwrap_or(0) - pdt_vals.iter().min().copied().unwrap_or(0)
     } else {
         0
     };
     max_skew_ms = max_skew_ms.max(pdt_skew);
 
-    let delays: Vec<u64> = snapshots.iter().filter_map(|e| e.segment_delay_ms).collect();
+    let delays: Vec<u64> = snapshots
+        .iter()
+        .filter_map(|e| e.segment_delay_ms)
+        .collect();
     let propagation_latency_ms = if delays.len() >= 2 {
         let min = delays.iter().copied().min().unwrap_or(0);
         let max = delays.iter().copied().max().unwrap_or(0);
@@ -245,7 +252,8 @@ mod tests {
 
     #[test]
     fn parse_multi_cdn_labeled() {
-        let t = parse_multi_cdn("akamai=https://a.example/x,cloudflare=https://b.example/x").unwrap();
+        let t =
+            parse_multi_cdn("akamai=https://a.example/x,cloudflare=https://b.example/x").unwrap();
         assert_eq!(t[0].label, "akamai");
         assert_eq!(t[1].label, "cloudflare");
     }

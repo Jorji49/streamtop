@@ -15,9 +15,9 @@ use reqwest::Client;
 
 use streamtop::engine::audit::run_audit;
 use streamtop::engine::budget::{run_budget, BudgetOpts};
-use streamtop::engine::export_cli::{parse_export_spec, ExportFormat, ExportPlan};
 use streamtop::engine::config::session_from_profile;
 use streamtop::engine::export::{build_curl, capture_for_export, write_har};
+use streamtop::engine::export_cli::{parse_export_spec, ExportFormat, ExportPlan};
 use streamtop::engine::grafana::{export_grafana_dashboard, GRAFANA_DASHBOARD_FILENAME};
 use streamtop::engine::metrics::run_prometheus;
 use streamtop::engine::playlist_parser::{
@@ -383,10 +383,17 @@ async fn main() -> Result<ExitCode> {
     );
     for item in &export_plan.exports {
         if let Some(flag) = item.deprecated_via {
-            eprintln!("warning: {flag} is deprecated; use --export {}", item.format.as_str());
+            eprintln!(
+                "warning: {flag} is deprecated; use --export {}",
+                item.format.as_str()
+            );
         }
     }
-    if export_plan.exports.iter().any(|e| e.format == ExportFormat::Grafana) {
+    if export_plan
+        .exports
+        .iter()
+        .any(|e| e.format == ExportFormat::Grafana)
+    {
         export_grafana_dashboard(GRAFANA_DASHBOARD_FILENAME)?;
         eprintln!("Wrote {GRAFANA_DASHBOARD_FILENAME}");
         if cli.url.is_none() && cli.compare.is_none() && cli.vod.is_none() && cli.agent.is_none() {
@@ -548,14 +555,7 @@ async fn main() -> Result<ExitCode> {
         }
         ParsedInput::SingleStream { origin, url } => {
             if export_plan.wants_any() {
-                execute_export_plan(
-                    &export_plan,
-                    &url,
-                    &session,
-                    cli.timeout_secs,
-                    input_url,
-                )
-                .await
+                execute_export_plan(&export_plan, &url, &session, cli.timeout_secs, input_url).await
             } else if let Some(port) = metrics_port {
                 run_prometheus(url, session, port, metrics_bind, metrics_token).await
             } else if cli.audit {
@@ -662,11 +662,13 @@ async fn execute_export_plan(
         }
         match item.format {
             ExportFormat::Curl => {
-                let cap = capture_for_export(url.to_string(), session.clone(), timeout_secs).await?;
+                let cap =
+                    capture_for_export(url.to_string(), session.clone(), timeout_secs).await?;
                 println!("{}", build_curl(&cap));
             }
             ExportFormat::Har => {
-                let cap = capture_for_export(url.to_string(), session.clone(), timeout_secs).await?;
+                let cap =
+                    capture_for_export(url.to_string(), session.clone(), timeout_secs).await?;
                 let path = item
                     .path
                     .clone()
@@ -682,7 +684,8 @@ async fn execute_export_plan(
                         std::path::PathBuf::from("report.html")
                     }
                 });
-                let code = run_report_export(url.to_string(), session.clone(), &path, timeout_secs).await?;
+                let code = run_report_export(url.to_string(), session.clone(), &path, timeout_secs)
+                    .await?;
                 if code != ExitCode::SUCCESS {
                     exit = code;
                 }
@@ -699,14 +702,19 @@ async fn execute_export_plan(
                 App::run_diagnostics(input_label.to_string(), url.to_string(), s).await?;
             }
             ExportFormat::Sarif => {
-                let cap = capture_for_export(url.to_string(), session.clone(), timeout_secs).await?;
+                let cap =
+                    capture_for_export(url.to_string(), session.clone(), timeout_secs).await?;
                 let path = item
                     .path
                     .clone()
                     .unwrap_or_else(|| std::path::PathBuf::from("streamtop.sarif"));
                 let json = render_sarif_json(&cap.findings, &cap.spec_violations)?;
                 std::fs::write(&path, json)?;
-                eprintln!("Wrote SARIF {} (findings={})", path.display(), cap.findings.len());
+                eprintln!(
+                    "Wrote SARIF {} (findings={})",
+                    path.display(),
+                    cap.findings.len()
+                );
                 let _ = DIAGNOSTIC_DIR;
             }
             ExportFormat::Grafana => {}

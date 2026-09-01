@@ -4,9 +4,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Cell, Clear, Paragraph, Row, Sparkline, Table};
 use ratatui::Frame;
 
-use crate::models::{
-    DiagCategory, LatencyState, LogLevel,
-};
+use crate::models::{DiagCategory, LatencyState, LogLevel};
 use crate::ui::app::App;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

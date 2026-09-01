@@ -460,9 +460,9 @@ pub fn lint_variant_alignment(variants: &[AbrVariant]) -> Vec<DiagnosticFinding>
             .is_some_and(|c| c.contains("mp4a") && !c.contains("avc") && !c.contains("hvc"))
     });
     if has_video && !has_audio_only {
-        let any_audio_track = variants.iter().any(|v| {
-            v.codecs.as_deref().is_some_and(|c| c.contains("mp4a"))
-        });
+        let any_audio_track = variants
+            .iter()
+            .any(|v| v.codecs.as_deref().is_some_and(|c| c.contains("mp4a")));
         if !any_audio_track {
             out.push(DiagnosticFinding::with_reason_code(
                 DiagCategory::Abr,

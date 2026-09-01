@@ -222,7 +222,10 @@ fn draw_matrix(frame: &mut Frame, app: &MultiCdnApp) {
             };
             Row::new(vec![
                 Cell::from(e.label.as_str()),
-                Cell::from(e.media_sequence.map_or_else(|| "-".into(), |s| s.to_string())),
+                Cell::from(
+                    e.media_sequence
+                        .map_or_else(|| "-".into(), |s| s.to_string()),
+                ),
                 Cell::from(
                     e.pdt_offset_ms
                         .map_or_else(|| "-".into(), |ms| format!("{ms}ms")),
@@ -242,11 +245,10 @@ fn draw_matrix(frame: &mut Frame, app: &MultiCdnApp) {
             Constraint::Length(8),
         ],
     )
-    .header(Row::new(vec!["Edge", "Seq", "PDT", "TTFB", "Hit%"]).style(Style::default().fg(Color::Cyan)))
-    .block(
-        Block::default()
-            .borders(Borders::ALL)
-            .title(" CDN edges "),
-    );
+    .header(
+        Row::new(vec!["Edge", "Seq", "PDT", "TTFB", "Hit%"])
+            .style(Style::default().fg(Color::Cyan)),
+    )
+    .block(Block::default().borders(Borders::ALL).title(" CDN edges "));
     frame.render_widget(table, table_area);
 }

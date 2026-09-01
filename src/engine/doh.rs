@@ -29,9 +29,7 @@ impl DohProvider {
 
     fn endpoint(&self, host: &str) -> String {
         match self {
-            Self::Cloudflare => format!(
-                "https://cloudflare-dns.com/dns-query?name={host}&type=A"
-            ),
+            Self::Cloudflare => format!("https://cloudflare-dns.com/dns-query?name={host}&type=A"),
             Self::Google => format!("https://dns.google/resolve?name={host}&type=A"),
             Self::Custom(url) => {
                 if url.contains('?') {
@@ -80,10 +78,7 @@ pub async fn resolve_doh(client: &Client, host: &str, provider: &DohProvider) ->
     if !response.status().is_success() {
         return Err(eyre!("DoH HTTP {} for {host}", response.status()));
     }
-    let body: DohJsonResponse = response
-        .json()
-        .await
-        .wrap_err("DoH JSON parse failed")?;
+    let body: DohJsonResponse = response.json().await.wrap_err("DoH JSON parse failed")?;
     let doh_ms = started.elapsed().as_millis() as u64;
     let mut addresses = Vec::new();
     for ans in body.answer {

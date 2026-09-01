@@ -9,7 +9,7 @@ use serde::Serialize;
 use tokio::time::timeout;
 
 use crate::engine::poller::ManifestPoller;
-use crate::models::{DiagnosticReasonCode, DiagCategory, StreamEvent, EVENT_CHANNEL_CAPACITY};
+use crate::models::{DiagCategory, DiagnosticReasonCode, StreamEvent, EVENT_CHANNEL_CAPACITY};
 use crate::ui::app::SessionOpts;
 
 #[derive(Debug, Clone, Default)]

@@ -5,10 +5,10 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Paragraph, Wrap};
 
 use crate::engine::redact::redact_url;
+use crate::models::stream::NetworkTiming;
 use crate::models::{
     format_dvr_window, format_url_mid_ellipsis, DlToDurState, LatencyState, StreamStatusKind,
 };
-use crate::models::stream::NetworkTiming;
 use crate::ui::app::App;
 
 fn rounded_block(title: impl Into<String>) -> Block<'static> {
@@ -339,10 +339,7 @@ impl UiRenderCache {
                     || Span::raw(String::new()),
                     |p| {
                         Span::styled(
-                            format!(
-                                "  {}",
-                                format_dvr_window(p.window_segments, p.window_secs)
-                            ),
+                            format!("  {}", format_dvr_window(p.window_segments, p.window_secs)),
                             Style::default().fg(Color::DarkGray),
                         )
                     },
@@ -351,48 +348,63 @@ impl UiRenderCache {
         ];
 
         if !app.g2g.is_empty() {
-            lines.push(Line::from(vec![Span::raw(" "), Span::styled(
-                app.g2g.display(),
-                Style::default()
-                    .fg(Color::LightMagenta)
-                    .add_modifier(Modifier::BOLD),
-            )]));
+            lines.push(Line::from(vec![
+                Span::raw(" "),
+                Span::styled(
+                    app.g2g.display(),
+                    Style::default()
+                        .fg(Color::LightMagenta)
+                        .add_modifier(Modifier::BOLD),
+                ),
+            ]));
         }
         if let Some(ad) = &app.active_ad {
-            lines.push(Line::from(vec![Span::raw(" "), Span::styled(
-                format!(" AD {} ", ad.summary),
-                Style::default()
-                    .fg(Color::White)
-                    .bg(Color::Magenta)
-                    .add_modifier(Modifier::BOLD),
-            )]));
+            lines.push(Line::from(vec![
+                Span::raw(" "),
+                Span::styled(
+                    format!(" AD {} ", ad.summary),
+                    Style::default()
+                        .fg(Color::White)
+                        .bg(Color::Magenta)
+                        .add_modifier(Modifier::BOLD),
+                ),
+            ]));
         }
         if let Some(pat) = &app.log_filter {
-            lines.push(Line::from(vec![Span::raw(" "), Span::styled(
-                format!(" filter: /{pat}/ "),
-                Style::default()
-                    .fg(Color::Black)
-                    .bg(Color::LightGreen)
-                    .add_modifier(Modifier::BOLD),
-            )]));
+            lines.push(Line::from(vec![
+                Span::raw(" "),
+                Span::styled(
+                    format!(" filter: /{pat}/ "),
+                    Style::default()
+                        .fg(Color::Black)
+                        .bg(Color::LightGreen)
+                        .add_modifier(Modifier::BOLD),
+                ),
+            ]));
         }
         if let Some(ll_badge) = app.playlist.as_ref().and_then(|p| p.ll_hls.header_badge()) {
-            lines.push(Line::from(vec![Span::raw(" "), Span::styled(
-                format!(" {ll_badge} "),
-                Style::default()
-                    .fg(Color::Black)
-                    .bg(Color::LightCyan)
-                    .add_modifier(Modifier::BOLD),
-            )]));
+            lines.push(Line::from(vec![
+                Span::raw(" "),
+                Span::styled(
+                    format!(" {ll_badge} "),
+                    Style::default()
+                        .fg(Color::Black)
+                        .bg(Color::LightCyan)
+                        .add_modifier(Modifier::BOLD),
+                ),
+            ]));
         }
         if let Some(ver) = app.transport.http_version {
-            lines.push(Line::from(vec![Span::raw(" "), Span::styled(
-                format!(" HTTP {} ", ver.as_str()),
-                Style::default()
-                    .fg(Color::Black)
-                    .bg(Color::LightBlue)
-                    .add_modifier(Modifier::BOLD),
-            )]));
+            lines.push(Line::from(vec![
+                Span::raw(" "),
+                Span::styled(
+                    format!(" HTTP {} ", ver.as_str()),
+                    Style::default()
+                        .fg(Color::Black)
+                        .bg(Color::LightBlue)
+                        .add_modifier(Modifier::BOLD),
+                ),
+            ]));
         }
 
         self.footer_transport = app.transport.display_line();
@@ -499,13 +511,6 @@ fn build_segment_paragraph(app: &App) -> Paragraph<'static> {
     Paragraph::new(lines)
         .block(rounded_block(" Last Segment / Edge "))
         .wrap(Wrap { trim: true })
-}
-
-#[cfg(test)]
-pub fn rebuild_lines_for_test(app: &App) -> Vec<Line<'static>> {
-    let mut cache = UiRenderCache::default();
-    cache.rebuild(app, 80);
-    vec![Line::from("render cache rebuilt")]
 }
 
 #[cfg(test)]

@@ -16,9 +16,8 @@ use crate::engine::poller::DiagnosticOpts;
 use crate::engine::redact::redact_url;
 use crate::engine::ManifestPoller;
 use crate::models::{
-    CdnStats, DiagCategory, DiagSeverity, HealthReport, LatencyState, SeiProbeResult,
-    StreamEvent, StreamStatus, StreamStatusKind, SyntheticQoeSnapshot, Tr101290Report,
-    EVENT_CHANNEL_CAPACITY,
+    CdnStats, DiagCategory, DiagSeverity, HealthReport, LatencyState, SeiProbeResult, StreamEvent,
+    StreamStatus, StreamStatusKind, SyntheticQoeSnapshot, Tr101290Report, EVENT_CHANNEL_CAPACITY,
 };
 use crate::ui::app::SessionOpts;
 

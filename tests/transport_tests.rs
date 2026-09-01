@@ -1,4 +1,4 @@
-//! Transport, multi-CDN, and TUI cache tests for v1.4.0 pinnacle upgrade.
+//! Transport, multi-CDN, and TUI cache tests for v1.4.0.
 
 use streamtop::engine::multi_cdn::{compute_skew_from_snapshots, parse_multi_cdn};
 use streamtop::engine::redirect::RedirectLoopError;

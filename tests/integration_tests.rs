@@ -296,5 +296,8 @@ async fn whep_mock_handshake_parses_201_sdp_answer() {
     assert!(!report.video_codecs.is_empty());
     assert_eq!(report.stream_ids, vec!["cam1"]);
     assert!(report.ice_candidates >= 1);
-    assert!(report.location.as_deref().is_some_and(|l| l.contains("session1")));
+    assert!(report
+        .location
+        .as_deref()
+        .is_some_and(|l| l.contains("session1")));
 }
