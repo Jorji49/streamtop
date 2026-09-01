@@ -87,12 +87,18 @@ jobs:
               -f sha="${GITHUB_SHA}"
           fi
 
-      - name: Create GitHub release
+      - name: Create or update GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ inputs.version }}
         run: |
-          gh release create "v${VERSION}" release/* \
-            --title "streamtop v${VERSION}" \
-            --generate-notes \
-            --verify-tag
+          set -euo pipefail
+          TAG="v${VERSION}"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" release/* --clobber
+          else
+            gh release create "$TAG" release/* \
+              --title "streamtop v${VERSION}" \
+              --generate-notes \
+              --verify-tag
+          fi
