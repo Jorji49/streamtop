@@ -16,7 +16,8 @@ use crate::engine::redact::{
 };
 use crate::engine::ManifestPoller;
 use crate::models::{
-    StreamEvent, DEEP_WIRE_PROBE_BYTES, EVENT_CHANNEL_CAPACITY, RANGE_PROBE_BYTES,
+    DiagnosticFinding, SpecViolation, StreamEvent, DEEP_WIRE_PROBE_BYTES, EVENT_CHANNEL_CAPACITY,
+    RANGE_PROBE_BYTES,
 };
 use crate::ui::app::SessionOpts;
 
@@ -30,6 +31,8 @@ pub struct ExportCapture {
     pub last_http_status: Option<u16>,
     pub last_ttfb_ms: Option<u64>,
     pub last_size_bytes: Option<u64>,
+    pub findings: Vec<DiagnosticFinding>,
+    pub spec_violations: Vec<SpecViolation>,
 }
 
 /// Build a reproducible curl for the last segment (or manifest). Secrets are redacted.
@@ -182,14 +185,17 @@ pub async fn capture_for_export(
     timeout_secs: u64,
 ) -> Result<ExportCapture> {
     let (tx, mut rx) = mpsc::channel(EVENT_CHANNEL_CAPACITY);
-    let poller = ManifestPoller::new(
-        url.as_str(),
-        &session.headers,
-        session.user_agent.as_deref(),
-        session.interval_ms,
-        session.probe_headers,
-        session.probe_drm,
-        tx,
+    let poller = crate::engine::session_poller::apply_session_doh(
+        ManifestPoller::new(
+            url.as_str(),
+            &session.headers,
+            session.user_agent.as_deref(),
+            session.interval_ms,
+            session.probe_headers,
+            session.probe_drm,
+            tx,
+        )?,
+        &session,
     )?;
     let handle = tokio::spawn(async move {
         poller.run().await;
@@ -200,6 +206,8 @@ pub async fn capture_for_export(
         probe_headers: session.probe_headers,
         headers: session.headers,
         user_agent: session.user_agent,
+        findings: Vec::new(),
+        spec_violations: Vec::new(),
         ..Default::default()
     };
 
@@ -219,6 +227,10 @@ pub async fn capture_for_export(
                 if !m.url.is_empty() {
                     cap.manifest_url = m.url;
                 }
+            }
+            Ok(Some(StreamEvent::Finding(f))) => {
+                cap.spec_violations.push(SpecViolation::from_finding(&f));
+                cap.findings.push(f);
             }
             Ok(None) | Err(_) => break,
             _ => {}

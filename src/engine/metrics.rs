@@ -111,6 +111,9 @@ pub struct MetricsSnapshot {
     pub ad_mismatch_total: u64,
     pub inband_emsg_total: u64,
     pub clearkey_decrypt_ok: f64,
+    pub stream_errors: HashMap<String, u64>,
+    pub part_dl_duration_ratio: f64,
+    pub dns_doh_duration_secs: f64,
     pub segment_ttfb_hist: Hist,
     pub llhls_part_hist: Hist,
     pub drm_license_hist: Hist,
@@ -144,6 +147,9 @@ impl Default for MetricsSnapshot {
             ad_mismatch_total: 0,
             inband_emsg_total: 0,
             clearkey_decrypt_ok: 0.0,
+            stream_errors: HashMap::new(),
+            part_dl_duration_ratio: 0.0,
+            dns_doh_duration_secs: 0.0,
             segment_ttfb_hist: Hist::with_bucket_count(TTFB_BUCKETS.len()),
             llhls_part_hist: Hist::with_bucket_count(PART_BUCKETS.len()),
             drm_license_hist: Hist::with_bucket_count(DRM_BUCKETS.len()),
@@ -162,6 +168,11 @@ pub fn update_metrics(snap: &mut MetricsSnapshot, event: &StreamEvent) {
             if let Some(ratio) = s.dl_to_dur_ratio {
                 snap.segment_dl_duration_ratio = f64::from(ratio);
             }
+            if let Some(net) = &s.network {
+                if let Some(ms) = net.doh_ms {
+                    snap.dns_doh_duration_secs = ms as f64 / 1000.0;
+                }
+            }
             if let Some(ms) = s.latency_ms {
                 snap.latency_secs = ms as f64 / 1000.0;
             }
@@ -171,6 +182,11 @@ pub fn update_metrics(snap: &mut MetricsSnapshot, event: &StreamEvent) {
                         snap.bitstream_fps = fps;
                     }
                 }
+            }
+        }
+        StreamEvent::LlHlsPart(p) => {
+            if let Some(ratio) = p.part_dl_duration_ratio {
+                snap.part_dl_duration_ratio = f64::from(ratio);
             }
         }
         StreamEvent::Variants(variants) => {
@@ -230,6 +246,23 @@ pub fn update_metrics(snap: &mut MetricsSnapshot, event: &StreamEvent) {
         StreamEvent::Finding(f) => {
             if f.category == DiagCategory::Stalling {
                 snap.origin_stalls_total = snap.origin_stalls_total.saturating_add(1);
+            }
+            if let Some(reason) = &f.reason {
+                *snap.stream_errors.entry(reason.clone()).or_insert(0) = snap
+                    .stream_errors
+                    .get(reason)
+                    .copied()
+                    .unwrap_or(0)
+                    .saturating_add(1);
+            } else if let Some(code) = crate::models::DiagnosticReasonCode::from_tr101290_rule(&f.rule)
+            {
+                let key = code.as_str().to_string();
+                *snap.stream_errors.entry(key.clone()).or_insert(0) = snap
+                    .stream_errors
+                    .get(&key)
+                    .copied()
+                    .unwrap_or(0)
+                    .saturating_add(1);
             }
         }
         StreamEvent::Log {
@@ -346,6 +379,12 @@ streamtop_stream_health_score{{{labels}}} {health}
 # HELP streamtop_segment_dl_duration_ratio Download time divided by segment media duration (RTF)
 # TYPE streamtop_segment_dl_duration_ratio gauge
 streamtop_segment_dl_duration_ratio{{{labels}}} {dl_ratio:.4}
+# HELP streamtop_part_dl_duration_ratio LL-HLS part transfer duration divided by part target duration
+# TYPE streamtop_part_dl_duration_ratio gauge
+streamtop_part_dl_duration_ratio{{{labels}}} {part_ratio:.4}
+# HELP streamtop_dns_doh_duration_seconds DNS-over-HTTPS JSON lookup latency
+# TYPE streamtop_dns_doh_duration_seconds gauge
+streamtop_dns_doh_duration_seconds{{{labels}}} {doh_secs:.6}
 # HELP streamtop_latency_seconds Live-edge latency (PDT or estimated)
 # TYPE streamtop_latency_seconds gauge
 streamtop_latency_seconds{{{labels}}} {latency:.6}
@@ -408,6 +447,8 @@ streamtop_channel_dropped_total{{{labels}}} {drops}
 "#,
         health = snap.health_score,
         dl_ratio = snap.segment_dl_duration_ratio,
+        part_ratio = snap.part_dl_duration_ratio,
+        doh_secs = snap.dns_doh_duration_secs,
         latency = snap.latency_secs,
         fps = snap.bitstream_fps,
         hits = snap.cdn_hits,
@@ -442,6 +483,24 @@ streamtop_channel_dropped_total{{{labels}}} {drops}
             let _ = writeln!(
                 out,
                 "streamtop_http_errors_total{{{labels},status=\"{status}\"}} {n}"
+            );
+        }
+    }
+
+    if snap.stream_errors.is_empty() {
+        let _ = writeln!(
+            out,
+            "streamtop_stream_errors_total{{{labels},reason=\"none\"}} 0"
+        );
+    } else {
+        let mut keys: Vec<_> = snap.stream_errors.keys().cloned().collect();
+        keys.sort();
+        for reason in keys {
+            let n = snap.stream_errors[&reason];
+            let reason = label_escape(&reason);
+            let _ = writeln!(
+                out,
+                "streamtop_stream_errors_total{{{labels},reason=\"{reason}\"}} {n}"
             );
         }
     }
@@ -578,6 +637,7 @@ pub async fn run_prometheus(
         throttle_kbps: session.throttle_kbps,
         simulated_rtt_ms: session.simulated_rtt_ms,
     });
+    poller = crate::engine::session_poller::apply_session_doh(poller, &session)?;
     if let Some(hook_url) = session.webhook_url.clone() {
         let alerts = crate::engine::webhook::AlertKind::parse_list(&session.alert_on)?;
         let (hook_tx, hook_rx) = mpsc::channel(EVENT_CHANNEL_CAPACITY);

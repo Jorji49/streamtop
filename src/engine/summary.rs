@@ -30,6 +30,7 @@ pub const SUMMARY_SCHEMA_VERSION: u32 = 4;
 pub enum SummaryFormat {
     Text,
     Json,
+    Sarif,
 }
 
 /// Documented stable JSON shape for CI gates (`schemas/summary.v1.json`).
@@ -74,6 +75,10 @@ pub struct SummaryJson {
     pub ingest_stats: Option<IngestStats>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub spec_violations: Option<Vec<crate::models::SpecViolation>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub doh_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub part_dl_duration_ratio: Option<f32>,
 }
 
 pub fn build_summary_json(
@@ -101,6 +106,8 @@ pub fn build_summary_json(
     sei_metadata: Option<SeiProbeResult>,
     ingest_stats: Option<IngestStats>,
     spec_violations: Option<Vec<crate::models::SpecViolation>>,
+    doh_ms: Option<u64>,
+    part_dl_duration_ratio: Option<f32>,
 ) -> SummaryJson {
     SummaryJson {
         schema: SUMMARY_SCHEMA,
@@ -131,6 +138,8 @@ pub fn build_summary_json(
         sei_metadata,
         ingest_stats,
         spec_violations,
+        doh_ms,
+        part_dl_duration_ratio,
     }
 }
 
@@ -139,6 +148,7 @@ pub async fn run_summary(
     session: SessionOpts,
     timeout_secs: u64,
     format: SummaryFormat,
+    github_summary: Option<&std::path::Path>,
 ) -> Result<ExitCode> {
     let otel = if let Some(ep) = &session.otel_endpoint {
         Some(crate::engine::otel::OtelExporter::new(
@@ -174,6 +184,7 @@ pub async fn run_summary(
     if let Some(exporter) = otel.clone() {
         poller = poller.with_otel(exporter);
     }
+    poller = crate::engine::session_poller::apply_session_doh(poller, &session)?;
     if let Some(hook_url) = session.webhook_url.clone() {
         let alerts = crate::engine::webhook::AlertKind::parse_list(&session.alert_on)?;
         let (hook_tx, hook_rx) = mpsc::channel(EVENT_CHANNEL_CAPACITY);
@@ -213,6 +224,9 @@ pub async fn run_summary(
     let mut sei_metadata: Option<SeiProbeResult> = None;
     let mut ingest_stats: Option<IngestStats> = None;
     let mut spec_findings: Vec<crate::models::DiagnosticFinding> = Vec::new();
+    let mut abr_health = crate::models::AbrHealth::default();
+    let mut last_doh_ms: Option<u64> = None;
+    let mut last_part_rtf: Option<f32> = None;
 
     let deadline = Instant::now() + Duration::from_secs(timeout_secs.max(1));
     while Instant::now() < deadline {
@@ -241,10 +255,17 @@ pub async fn run_summary(
                     saw_segment = true;
                     last_ttfb = Some(s.ttfb_ms);
                     last_dl_to_dur_ratio = s.dl_to_dur_ratio;
+                    if let Some(net) = &s.network {
+                        last_doh_ms = net.doh_ms.or(last_doh_ms);
+                    }
                     if s.http_status > 0 {
                         last_http_status = Some(s.http_status);
                     }
                 }
+                StreamEvent::LlHlsPart(p) => {
+                    last_part_rtf = p.part_dl_duration_ratio;
+                }
+                StreamEvent::AbrHealth(a) => abr_health = a,
                 StreamEvent::Tr101290(r) => tr101290 = Some(r),
                 StreamEvent::SyntheticQoe(q) => synthetic_qoe = Some(q),
                 StreamEvent::SeiProbe(s) => sei_metadata = Some(s),
@@ -345,11 +366,13 @@ pub async fn run_summary(
                 rebuffer_probability_pct,
                 subtitle_drift_ms,
                 pssh_systems,
-                tr101290,
+                tr101290.clone(),
                 synthetic_qoe,
                 sei_metadata,
                 ingest_stats,
                 spec_violations,
+                last_doh_ms,
+                last_part_rtf,
             );
             println!("{}", serde_json::to_string(&payload)?);
         }
@@ -374,7 +397,24 @@ pub async fn run_summary(
                 redact_url(&url)
             );
         }
+        SummaryFormat::Sarif => {
+            let violations = spec_violations.unwrap_or_default();
+            let json = crate::engine::sarif::render_sarif_json(&spec_findings, &violations)?;
+            println!("{json}");
+        }
     }
+
+    let gh_input = crate::engine::github_summary::GithubSummaryInput {
+        url: &url,
+        health: &health,
+        abr: &abr_health,
+        budget: None,
+        rtf: last_dl_to_dur_ratio,
+        part_rtf: last_part_rtf,
+        tr101290: tr101290.as_ref(),
+        doh_ms: last_doh_ms,
+    };
+    crate::engine::github_summary::maybe_write_github_summary(&gh_input, github_summary)?;
 
     Ok(if ok {
         ExitCode::SUCCESS
@@ -451,6 +491,8 @@ pub async fn run_ingest_summary(
                 None,
                 ingest_stats,
                 None,
+                None,
+                None,
             );
             println!("{}", serde_json::to_string(&payload)?);
         }
@@ -464,6 +506,10 @@ pub async fn run_ingest_summary(
                 );
             }
         }
+        SummaryFormat::Sarif => {
+            let json = crate::engine::sarif::render_sarif_json(&[], &[])?;
+            println!("{json}");
+        }
     }
 
     Ok(if ok {
@@ -473,7 +519,7 @@ pub async fn run_ingest_summary(
     })
 }
 
-fn parse_subtitle_drift_ms(message: &str) -> Option<i64> {
+pub fn parse_subtitle_drift_ms(message: &str) -> Option<i64> {
     let rest = message
         .strip_prefix("Subtitle drift ")
         .or_else(|| message.strip_prefix("Subtitle PTS drift "))?;
@@ -516,6 +562,8 @@ mod tests {
             None,
             None,
             None,
+            None,
+            None,
         );
         let v = serde_json::to_value(&payload).unwrap();
         assert_eq!(v["schema"], SUMMARY_SCHEMA);
@@ -552,6 +600,8 @@ mod tests {
             0,
             true,
             0,
+            None,
+            None,
             None,
             None,
             None,

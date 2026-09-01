@@ -103,11 +103,17 @@ pub async fn run_vod(url: String, session: SessionOpts, format: SummaryFormat) -
                 None,
                 None,
                 None,
+                None,
+                None,
             );
             println!("{}", serde_json::to_string_pretty(&doc)?);
         }
         SummaryFormat::Text => {
             print_vod_text(&url, ok, &report, status_label);
+        }
+        SummaryFormat::Sarif => {
+            let json = crate::engine::sarif::render_sarif_json(&[], &[])?;
+            println!("{json}");
         }
     }
 

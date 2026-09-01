@@ -196,6 +196,7 @@ impl PaneState {
             last_http_status: self.last_segment.as_ref().map(|s| s.http_status),
             last_ttfb_ms: self.last_segment.as_ref().map(|s| s.ttfb_ms),
             last_size_bytes: self.last_segment.as_ref().map(|s| s.size_bytes),
+            ..Default::default()
         }
     }
 }
@@ -231,28 +232,34 @@ impl CompareApp {
             throttle_kbps: session.throttle_kbps,
             simulated_rtt_ms: session.simulated_rtt_ms,
         };
-        let left_poller = ManifestPoller::new(
-            url1.as_str(),
-            &session.headers,
-            session.user_agent.as_deref(),
-            session.interval_ms,
-            session.probe_headers,
-            session.probe_drm,
-            l_tx,
-        )
-        .wrap_err("failed to start primary poller")?
-        .with_diagnostics(&diag);
-        let right_poller = ManifestPoller::new(
-            url2.as_str(),
-            &session.headers,
-            session.user_agent.as_deref(),
-            session.interval_ms,
-            session.probe_headers,
-            session.probe_drm,
-            r_tx,
-        )
-        .wrap_err("failed to start backup poller")?
-        .with_diagnostics(&diag);
+        let left_poller = crate::engine::session_poller::apply_session_doh(
+            ManifestPoller::new(
+                url1.as_str(),
+                &session.headers,
+                session.user_agent.as_deref(),
+                session.interval_ms,
+                session.probe_headers,
+                session.probe_drm,
+                l_tx,
+            )
+            .wrap_err("failed to start primary poller")?
+            .with_diagnostics(&diag),
+            &session,
+        )?;
+        let right_poller = crate::engine::session_poller::apply_session_doh(
+            ManifestPoller::new(
+                url2.as_str(),
+                &session.headers,
+                session.user_agent.as_deref(),
+                session.interval_ms,
+                session.probe_headers,
+                session.probe_drm,
+                r_tx,
+            )
+            .wrap_err("failed to start backup poller")?
+            .with_diagnostics(&diag),
+            &session,
+        )?;
 
         let mut app = Self {
             left: PaneState::new("Primary / Origin", url1),

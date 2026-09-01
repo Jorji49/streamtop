@@ -236,6 +236,7 @@ fn spawn_agent_stream(
         simulate_player: false,
         throttle_kbps: None,
         simulated_rtt_ms: None,
+        doh_provider: None,
     };
 
     let mut poller = ManifestPoller::new(

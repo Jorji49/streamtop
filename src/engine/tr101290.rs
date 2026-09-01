@@ -8,6 +8,7 @@ pub const TS_PACKET_SIZE: usize = 188;
 pub const SYNC_BYTE: u8 = 0x47;
 pub const PAT_PID: u16 = 0x0000;
 pub const PCR_MAX_GAP_MS: f64 = 40.0;
+pub const PCR_JITTER_ALARM_MS: f64 = 100.0;
 pub const PAT_PMT_TIMEOUT_MS: u64 = 500;
 pub const MAX_VIOLATIONS: usize = 32;
 
@@ -85,6 +86,12 @@ impl Tr101290Engine {
         }
         let pid = packet_pid(pkt);
         self.seen_pids.insert(pid);
+        if pkt[1] & 0x80 != 0 {
+            self.add_p2(
+                "P2_TEI",
+                format!("PID 0x{pid:04X}: transport error indicator set"),
+            );
+        }
         let adaptation = (pkt[3] >> 4) & 0x3;
         self.track_cc(pid, pkt, adaptation);
         if let Some(payload) = ts_payload(pkt) {
@@ -194,10 +201,12 @@ impl Tr101290Engine {
                     / self.pcr_intervals_ms.len() as f64;
                 let jitter = var.sqrt();
                 self.report.pcr_jitter_ms = Some(jitter);
-                if jitter > 10.0 {
+                if jitter > PCR_JITTER_ALARM_MS {
                     self.add_p2(
                         "P2_PCR_JITTER",
-                        format!("PCR jitter {jitter:.2}ms against nominal clock"),
+                        format!(
+                            "PCR jitter {jitter:.2}ms exceeds {PCR_JITTER_ALARM_MS}ms threshold"
+                        ),
                     );
                 }
             }

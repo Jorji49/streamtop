@@ -94,6 +94,25 @@ impl SyntheticQoeEngine {
             simulated_rtt_ms: self.simulated_rtt_ms,
         }
     }
+
+    /// Simulate an abrupt bandwidth drop to the next lower ladder rung.
+    pub fn simulate_bandwidth_drop(
+        &mut self,
+        duration_secs: f32,
+        ladder_bps: &[u64],
+        current_bps: u64,
+    ) -> u8 {
+        let mut sorted: Vec<u64> = ladder_bps.iter().copied().filter(|&b| b > 0).collect();
+        sorted.sort_by_key(|b| std::cmp::Reverse(*b));
+        let lower = sorted
+            .iter()
+            .copied()
+            .find(|&b| b < current_bps)
+            .unwrap_or(current_bps / 2);
+        let cap_kbps = lower / 1000;
+        let snap = self.observe_segment(duration_secs, 5000, Some(cap_kbps), ladder_bps);
+        snap.rebuffer_risk_score
+    }
 }
 
 #[allow(clippy::trivially_copy_pass_by_ref)] // QoE score helper; f64 copy not worth API churn
@@ -149,5 +168,12 @@ mod tests {
             select_abr_ladder(Some(3000), &[800_000, 2_000_000, 5_000_000]),
             Some(2_000_000)
         );
+    }
+
+    #[test]
+    fn bandwidth_drop_raises_rebuffer_risk() {
+        let mut engine = SyntheticQoeEngine::new(None, None);
+        let risk = engine.simulate_bandwidth_drop(2.0, &[500_000, 2_000_000, 5_000_000], 5_000_000);
+        assert!(risk > 0);
     }
 }

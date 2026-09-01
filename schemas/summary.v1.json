@@ -166,7 +166,9 @@
           "standard": { "type": "string" }
         }
       }
-    }
+    },
+    "doh_ms": { "type": ["integer", "null"], "minimum": 0 },
+    "part_dl_duration_ratio": { "type": ["number", "null"], "minimum": 0 }
   },
   "additionalProperties": false
 }

@@ -14,6 +14,8 @@ use crossterm::terminal::{disable_raw_mode, LeaveAlternateScreen};
 use reqwest::Client;
 
 use streamtop::engine::audit::run_audit;
+use streamtop::engine::budget::{run_budget, BudgetOpts};
+use streamtop::engine::export_cli::{parse_export_spec, ExportFormat, ExportPlan};
 use streamtop::engine::config::session_from_profile;
 use streamtop::engine::export::{build_curl, capture_for_export, write_har};
 use streamtop::engine::grafana::{export_grafana_dashboard, GRAFANA_DASHBOARD_FILENAME};
@@ -22,7 +24,6 @@ use streamtop::engine::playlist_parser::{
     detect_and_parse, looks_like_remote_url, path_to_file_url, ParsedInput,
 };
 use streamtop::engine::poller::build_http_client;
-use streamtop::engine::report_export::run_report_export;
 use streamtop::engine::summary::{run_summary, SummaryFormat};
 use streamtop::engine::vod::run_vod;
 use streamtop::models::ChannelEntry;
@@ -34,6 +35,7 @@ enum SummaryFormatArg {
     #[default]
     Text,
     Json,
+    Sarif,
 }
 
 impl From<SummaryFormatArg> for SummaryFormat {
@@ -41,6 +43,7 @@ impl From<SummaryFormatArg> for SummaryFormat {
         match v {
             SummaryFormatArg::Text => Self::Text,
             SummaryFormatArg::Json => Self::Json,
+            SummaryFormatArg::Sarif => Self::Sarif,
         }
     }
 }
@@ -54,31 +57,35 @@ impl From<SummaryFormatArg> for SummaryFormat {
 #[allow(clippy::struct_excessive_bools)] // clap CLI flags
 struct Cli {
     /// Stream URL, local playlist/MPD, or channel lineup (M3U / JSON / YAML)
-    #[arg(required_unless_present_any = ["compare", "export_grafana", "vod", "agent"])]
+    #[arg(required_unless_present_any = ["compare", "export_grafana", "export", "vod", "agent"])]
     url: Option<String>,
+
+    /// Unified export: `report-html[:PATH]`, `report-json`, `curl`, `har[:PATH]`, `incident[:PATH]`, `grafana`, `sarif[:PATH]`
+    #[arg(long = "export", value_name = "FORMAT[:FILE]")]
+    export: Vec<String>,
 
     /// Multi-stream headless agent (TOML config with [[streams]])
     #[arg(long = "agent", value_name = "CONFIG.toml")]
     agent: Option<PathBufArg>,
 
-    /// Export HTML or JSON compliance report and exit
-    #[arg(long = "export-report", value_name = "PATH")]
+    /// Export HTML or JSON compliance report and exit (deprecated: use --export)
+    #[arg(long = "export-report", value_name = "PATH", hide = true)]
     export_report: Option<PathBufArg>,
 
     /// Compare two live streams side by side
     #[arg(long = "compare", num_args = 2, value_names = ["URL_1", "URL_2"])]
     compare: Option<Vec<String>>,
 
-    /// Write streamtop-grafana.json for Prometheus and exit
-    #[arg(long = "export-grafana")]
+    /// Write streamtop-grafana.json for Prometheus and exit (deprecated: use --export grafana)
+    #[arg(long = "export-grafana", hide = true)]
     export_grafana: bool,
 
-    /// Print a curl command for the last segment after a short poll
-    #[arg(long = "export-curl")]
+    /// Print a curl command for the last segment after a short poll (deprecated: use --export curl)
+    #[arg(long = "export-curl", hide = true)]
     export_curl: bool,
 
-    /// Write HAR 1.2 for manifest + last segment after a short poll
-    #[arg(long = "export-har", value_name = "FILE")]
+    /// Write HAR 1.2 for manifest + last segment after a short poll (deprecated: use --export har)
+    #[arg(long = "export-har", value_name = "FILE", hide = true)]
     export_har: Option<PathBufArg>,
 
     /// Named profile from ~/.config/streamtop/config.toml
@@ -109,8 +116,8 @@ struct Cli {
     #[arg(long = "clearkey", value_name = "KID:KEY")]
     clearkey: Option<String>,
 
-    /// Export incident bundle to PATH (or diagnostics/incident_<time>.json) and exit after --timeout
-    #[arg(long = "export-incident", value_name = "PATH", num_args = 0..=1, default_missing_value = "")]
+    /// Export incident bundle to PATH (deprecated: use --export incident)
+    #[arg(long = "export-incident", value_name = "PATH", num_args = 0..=1, default_missing_value = "", hide = true)]
     export_incident: Option<String>,
 
     /// Probe DRM license / EXT-X-KEY / DASH `LA_URL` `ClearKey` TTFB
@@ -133,9 +140,13 @@ struct Cli {
     #[arg(long = "otel-endpoint", value_name = "URL")]
     otel_endpoint: Option<String>,
 
-    /// Summary format: text or json (streamtop.summary.v1)
+    /// Summary format: text, json, or sarif (streamtop.summary.v1 / SARIF 2.1.0)
     #[arg(long = "summary-format", value_enum, default_value_t = SummaryFormatArg::Text)]
     summary_format: SummaryFormatArg,
+
+    /// Write GitHub Actions step summary markdown (SHI, ABR, budget table)
+    #[arg(long = "github-step-summary", value_name = "FILE")]
+    github_step_summary: Option<PathBufArg>,
 
     /// Listen seconds for --summary / export modes (default: 8)
     #[arg(long = "timeout", value_name = "SECS", default_value_t = 8)]
@@ -206,6 +217,30 @@ struct Cli {
     /// Simulated RTT added to segment fetch time (ms)
     #[arg(long = "simulated-rtt-ms", value_name = "MS")]
     simulated_rtt_ms: Option<u64>,
+
+    /// Stream budget: max download-to-duration ratio (CI assertion mode)
+    #[arg(long = "budget-max-rtf", value_name = "RATIO")]
+    budget_max_rtf: Option<f32>,
+
+    /// Stream budget: max segment TTFB (e.g. 250ms, 2s)
+    #[arg(long = "budget-max-ttfb", value_name = "DURATION")]
+    budget_max_ttfb: Option<String>,
+
+    /// Stream budget: max TR 101 290 continuity counter errors
+    #[arg(long = "budget-max-cc-errors", value_name = "N")]
+    budget_max_cc_errors: Option<u32>,
+
+    /// Stream budget: max A/V or subtitle drift (e.g. 2000ms)
+    #[arg(long = "budget-max-drift", value_name = "DURATION")]
+    budget_max_drift: Option<String>,
+
+    /// Stream budget probe window (default 30s when any budget flag is set)
+    #[arg(long = "budget-duration", value_name = "SECS")]
+    budget_duration: Option<u64>,
+
+    /// DNS-over-HTTPS provider for resolution timing: cloudflare, google, or custom URL
+    #[arg(long = "doh-provider", value_name = "PROVIDER")]
+    doh_provider: Option<String>,
 }
 
 /// Path argument for clap.
@@ -228,12 +263,6 @@ async fn main() -> Result<ExitCode> {
     install_panic_hook();
 
     let cli = Cli::parse();
-
-    if cli.export_grafana {
-        export_grafana_dashboard(GRAFANA_DASHBOARD_FILENAME)?;
-        eprintln!("Wrote {GRAFANA_DASHBOARD_FILENAME}");
-        return Ok(ExitCode::SUCCESS);
-    }
 
     if let Some(PathBufArg(config)) = &cli.agent {
         let path = config
@@ -263,6 +292,7 @@ async fn main() -> Result<ExitCode> {
             simulate_player: false,
             throttle_kbps: None,
             simulated_rtt_ms: None,
+            doh_provider: None,
         },
     )?;
 
@@ -335,6 +365,50 @@ async fn main() -> Result<ExitCode> {
     if cli.simulated_rtt_ms.is_some() {
         session.simulated_rtt_ms = cli.simulated_rtt_ms;
     }
+    if let Some(doh) = &cli.doh_provider {
+        session.doh_provider = Some(doh.clone());
+    }
+
+    let mut export_plan = ExportPlan::default();
+    for spec in &cli.export {
+        export_plan.push(parse_export_spec(spec)?);
+    }
+    export_plan = export_plan.merge_legacy(
+        cli.export_report.as_ref().map(|p| &p.0),
+        cli.export_curl,
+        cli.export_har.as_ref().map(|p| &p.0),
+        cli.export_incident.as_deref(),
+        cli.export_grafana,
+    );
+    for item in &export_plan.exports {
+        if let Some(flag) = item.deprecated_via {
+            eprintln!("warning: {flag} is deprecated; use --export {}", item.format.as_str());
+        }
+    }
+    if export_plan.exports.iter().any(|e| e.format == ExportFormat::Grafana) {
+        export_grafana_dashboard(GRAFANA_DASHBOARD_FILENAME)?;
+        eprintln!("Wrote {GRAFANA_DASHBOARD_FILENAME}");
+        if cli.url.is_none() && cli.compare.is_none() && cli.vod.is_none() && cli.agent.is_none() {
+            return Ok(ExitCode::SUCCESS);
+        }
+    }
+
+    let budget = BudgetOpts {
+        max_rtf: cli.budget_max_rtf,
+        max_ttfb_ms: cli
+            .budget_max_ttfb
+            .as_deref()
+            .map(parse_budget_duration_ms)
+            .transpose()?,
+        max_cc_errors: cli.budget_max_cc_errors,
+        max_drift_ms: cli
+            .budget_max_drift
+            .as_deref()
+            .map(parse_budget_duration_ms)
+            .transpose()?
+            .map(u64::cast_signed),
+        duration_secs: cli.budget_duration.unwrap_or(30),
+    };
 
     if let Some(vod_url) = &cli.vod {
         let exit = run_vod(vod_url.clone(), session, cli.summary_format.into()).await?;
@@ -381,6 +455,47 @@ async fn main() -> Result<ExitCode> {
         .as_deref()
         .ok_or_else(|| eyre!("missing stream URL (or use --compare)"))?;
 
+    if streamtop::engine::whep::is_whep_url(input_url) {
+        let report = streamtop::engine::whep::probe_whep(&client, input_url).await?;
+        println!("{}", serde_json::to_string_pretty(&report)?);
+        restore_terminal_global();
+        return Ok(if report.ready {
+            ExitCode::SUCCESS
+        } else {
+            ExitCode::from(1)
+        });
+    }
+
+    if streamtop::engine::whep::is_legacy_ingest_url(input_url) {
+        eprintln!(
+            "warning: srt:// and rtmp:// ingest probes are deprecated; prefer WHEP HTTP endpoints"
+        );
+        if metrics_port.is_some() {
+            restore_terminal_global();
+            return Err(eyre!(
+                "Prometheus mode for legacy ingest URLs is not supported; use the TUI or --summary"
+            ));
+        }
+        if export_plan.wants_curl_or_har() {
+            restore_terminal_global();
+            return Err(eyre!("--export curl/har are not supported for legacy ingest URLs"));
+        }
+        let exit = if cli.summary {
+            streamtop::engine::summary::run_ingest_summary(
+                input_url.to_string(),
+                cli.timeout_secs,
+                cli.summary_format.into(),
+                session.allow_insecure_ingest,
+            )
+            .await?
+        } else {
+            App::run_diagnostics(input_url.to_string(), input_url.to_string(), session).await?;
+            ExitCode::SUCCESS
+        };
+        restore_terminal_global();
+        return Ok(exit);
+    }
+
     if streamtop::engine::ingest_probe::is_ingest_url(input_url) {
         if metrics_port.is_some() {
             restore_terminal_global();
@@ -414,7 +529,7 @@ async fn main() -> Result<ExitCode> {
     let parsed = detect_and_parse(&origin, &body, content_type.as_deref())
         .wrap_err("failed to detect input type (HLS / DASH / IPTV / catalog)")?;
 
-    let want_export = cli.export_curl || cli.export_har.is_some();
+    let want_export = export_plan.wants_curl_or_har();
 
     let exit = match parsed {
         ParsedInput::IptvChannels { origin, channels } => {
@@ -454,17 +569,15 @@ async fn main() -> Result<ExitCode> {
             }
         }
         ParsedInput::SingleStream { origin, url } => {
-            if want_export {
-                let cap =
-                    capture_for_export(url.clone(), session.clone(), cli.timeout_secs).await?;
-                if cli.export_curl {
-                    println!("{}", build_curl(&cap));
-                }
-                if let Some(PathBufArg(path)) = &cli.export_har {
-                    write_har(path, &cap)?;
-                    eprintln!("Wrote HAR {}", path.display());
-                }
-                Ok(ExitCode::SUCCESS)
+            if export_plan.wants_any() {
+                execute_export_plan(
+                    &export_plan,
+                    &url,
+                    &session,
+                    cli.timeout_secs,
+                    input_url,
+                )
+                .await
             } else if let Some(port) = metrics_port {
                 run_prometheus(url, session, port, metrics_bind, metrics_token).await
             } else if cli.audit {
@@ -492,10 +605,23 @@ async fn main() -> Result<ExitCode> {
                 } else {
                     ExitCode::from(1)
                 })
+            } else if budget.active() {
+                run_budget(
+                    url,
+                    session,
+                    budget,
+                    cli.github_step_summary.as_ref().map(|p| p.0.as_path()),
+                )
+                .await
             } else if cli.summary {
-                run_summary(url, session, cli.timeout_secs, cli.summary_format.into()).await
-            } else if let Some(PathBufArg(report_path)) = &cli.export_report {
-                run_report_export(url, session, report_path.as_path(), cli.timeout_secs).await
+                run_summary(
+                    url,
+                    session,
+                    cli.timeout_secs,
+                    cli.summary_format.into(),
+                    cli.github_step_summary.as_ref().map(|p| p.0.as_path()),
+                )
+                .await
             } else {
                 App::run_diagnostics(origin, url, session).await?;
                 Ok(ExitCode::SUCCESS)
@@ -537,6 +663,97 @@ async fn load_input(client: &Client, input: &str) -> Result<(String, Vec<u8>, Op
         .await
         .wrap_err_with(|| format!("failed to read {}", path.display()))?;
     Ok((origin, body, None))
+}
+
+async fn execute_export_plan(
+    plan: &ExportPlan,
+    url: &str,
+    session: &SessionOpts,
+    timeout_secs: u64,
+    input_label: &str,
+) -> Result<ExitCode> {
+    use streamtop::engine::export_cli::ExportFormat;
+    use streamtop::engine::report_export::run_report_export;
+    use streamtop::engine::sarif::render_sarif_json;
+    use streamtop::models::DIAGNOSTIC_DIR;
+
+    let mut exit = ExitCode::SUCCESS;
+    for item in &plan.exports {
+        if item.format == ExportFormat::Grafana {
+            continue;
+        }
+        match item.format {
+            ExportFormat::Curl => {
+                let cap = capture_for_export(url.to_string(), session.clone(), timeout_secs).await?;
+                println!("{}", build_curl(&cap));
+            }
+            ExportFormat::Har => {
+                let cap = capture_for_export(url.to_string(), session.clone(), timeout_secs).await?;
+                let path = item
+                    .path
+                    .clone()
+                    .unwrap_or_else(|| std::path::PathBuf::from("incident.har"));
+                write_har(&path, &cap)?;
+                eprintln!("Wrote HAR {}", path.display());
+            }
+            ExportFormat::ReportHtml | ExportFormat::ReportJson => {
+                let path = item.path.clone().unwrap_or_else(|| {
+                    if item.format == ExportFormat::ReportJson {
+                        std::path::PathBuf::from("report.json")
+                    } else {
+                        std::path::PathBuf::from("report.html")
+                    }
+                });
+                let code = run_report_export(url.to_string(), session.clone(), &path, timeout_secs).await?;
+                if code != ExitCode::SUCCESS {
+                    exit = code;
+                }
+            }
+            ExportFormat::Incident => {
+                let mut s = session.clone();
+                s.export_incident = Some(
+                    item.path
+                        .as_ref()
+                        .and_then(|p| p.to_str())
+                        .unwrap_or("")
+                        .to_string(),
+                );
+                App::run_diagnostics(input_label.to_string(), url.to_string(), s).await?;
+            }
+            ExportFormat::Sarif => {
+                let cap = capture_for_export(url.to_string(), session.clone(), timeout_secs).await?;
+                let path = item
+                    .path
+                    .clone()
+                    .unwrap_or_else(|| std::path::PathBuf::from("streamtop.sarif"));
+                let json = render_sarif_json(&cap.findings, &cap.spec_violations)?;
+                std::fs::write(&path, json)?;
+                eprintln!("Wrote SARIF {} (findings={})", path.display(), cap.findings.len());
+                let _ = DIAGNOSTIC_DIR;
+            }
+            ExportFormat::Grafana => {}
+        }
+    }
+    Ok(exit)
+}
+
+fn parse_budget_duration_ms(s: &str) -> Result<u64> {
+    let s = s.trim();
+    if let Some(raw) = s.strip_suffix("ms") {
+        return raw
+            .trim()
+            .parse::<u64>()
+            .wrap_err_with(|| format!("invalid duration: {s}"));
+    }
+    if let Some(raw) = s.strip_suffix('s') {
+        let secs: u64 = raw
+            .trim()
+            .parse()
+            .wrap_err_with(|| format!("invalid duration: {s}"))?;
+        return Ok(secs.saturating_mul(1000));
+    }
+    s.parse::<u64>()
+        .wrap_err_with(|| format!("invalid duration (use 250ms or 2s): {s}"))
 }
 
 fn install_panic_hook() {

@@ -22,6 +22,10 @@ pub const AUDIT_REPORT_CSV: &str = "audit_report.csv";
 pub const AUDIT_CONCURRENCY: usize = 25;
 pub const AUDIT_CONNECT_TIMEOUT_SECS: u64 = 3;
 pub const AUDIT_REQUEST_TIMEOUT_SECS: u64 = 5;
+/// Manifest/segment probe connect timeout.
+pub const PROBE_CONNECT_TIMEOUT_SECS: u64 = 3;
+/// Per-request read timeout for manifest and segment probes.
+pub const PROBE_READ_TIMEOUT_SECS: u64 = 4;
 pub const STALL_TTFB_MS: u64 = 2500;
 /// Download-to-duration ratio below this is normal buffer fill.
 pub const DL_TO_DUR_NORMAL_MAX: f32 = 0.70;
@@ -445,17 +449,22 @@ pub struct NetworkTiming {
     pub tls_ms: Option<u64>,
     /// Time until first response header byte.
     pub ttfb_ms: u64,
+    /// DoH JSON lookup latency when `--doh-provider` is active.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub doh_ms: Option<u64>,
 }
 
 impl NetworkTiming {
     pub fn display_line(&self) -> String {
         let fmt = |v: Option<u64>| v.map_or_else(|| "-".into(), |ms| format!("{ms}ms"));
         format!(
-            "DNS: {} | TCP: {} | TLS: {} | TTFB: {}ms",
+            "DNS: {} | TCP: {} | TLS: {} | TTFB: {}ms{}",
             fmt(self.dns_ms),
             fmt(self.tcp_ms),
             fmt(self.tls_ms),
-            self.ttfb_ms
+            self.ttfb_ms,
+            self.doh_ms
+                .map_or_else(String::new, |ms| format!(" | DoH: {ms}ms"))
         )
     }
 }
@@ -831,6 +840,26 @@ pub struct DiagnosticFinding {
     pub severity: DiagSeverity,
     pub rule: String,
     pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+impl DiagnosticFinding {
+    pub fn with_reason_code(
+        category: DiagCategory,
+        severity: DiagSeverity,
+        rule: impl Into<String>,
+        message: impl Into<String>,
+        code: crate::models::DiagnosticReasonCode,
+    ) -> Self {
+        Self {
+            category,
+            severity,
+            rule: rule.into(),
+            message: message.into(),
+            reason: Some(code.as_str().to_string()),
+        }
+    }
 }
 
 /// Summary schema spec violation row (`spec_violations` in summary v4).
@@ -1174,6 +1203,9 @@ pub struct DrmInfo {
     /// Absolute or relative URI from `#EXT-X-KEY:URI=…` (license / key server).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub key_uri: Option<String>,
+    /// `#EXT-X-KEY` IV attribute when present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key_iv: Option<String>,
     /// RTT / TTFB to the key/license URI when probed (ms).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub license_ttfb_ms: Option<u64>,
@@ -1288,6 +1320,42 @@ impl LlHlsInfo {
             .unwrap_or(0.33);
         let ms = (secs * 1000.0).round() as u64;
         ms.clamp(200, 330)
+    }
+}
+
+/// Per-part LL-HLS wire metrics from PRELOAD-HINT / `#EXT-X-PART` probe.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct LlHlsPartMetrics {
+    pub part_sequence: u32,
+    pub ttfb_ms: u64,
+    pub download_ms: u64,
+    pub part_duration_secs: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub part_dl_duration_ratio: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub transfer_kbps: Option<f64>,
+}
+
+impl LlHlsPartMetrics {
+    pub fn compute_part_rtf(download_ms: u64, part_duration_secs: f64) -> Option<f32> {
+        if part_duration_secs > 0.0 {
+            Some((download_ms as f32 / 1000.0) / part_duration_secs as f32)
+        } else {
+            None
+        }
+    }
+}
+
+#[cfg(test)]
+mod ll_hls_part_tests {
+    use super::LlHlsPartMetrics;
+
+    #[test]
+    fn part_rtf_ratio_for_partial_segment() {
+        let ratio = LlHlsPartMetrics::compute_part_rtf(330, 0.33).expect("ratio");
+        assert!((ratio - 1.0).abs() < 0.01);
+        let stall = LlHlsPartMetrics::compute_part_rtf(500, 0.33).expect("stall");
+        assert!(stall > 1.0);
     }
 }
 
@@ -1457,6 +1525,7 @@ pub enum StreamEvent {
     Variants(Vec<AbrVariant>),
     PlaylistMeta(PlaylistMeta),
     Segment(SegmentMetrics),
+    LlHlsPart(LlHlsPartMetrics),
     Latency(LatencyState),
     Health(HealthReport),
     CdnStats(CdnStats),

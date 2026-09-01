@@ -136,6 +136,7 @@ pub async fn traced_get(
             tcp_ms: Some(tcp_ms),
             tls_ms,
             ttfb_ms,
+            doh_ms: None,
         },
         download_ms: download_ms.max(1),
         chunked_transfer,
@@ -260,6 +261,7 @@ pub fn timing_from_ttfb(ttfb_ms: u64) -> NetworkTiming {
         tcp_ms: None,
         tls_ms: None,
         ttfb_ms,
+        doh_ms: None,
     }
 }
 
@@ -410,6 +412,7 @@ mod tests {
             tcp_ms: Some(18),
             tls_ms: Some(22),
             ttfb_ms: 45,
+            doh_ms: None,
         };
         let s = t.display_line();
         assert!(s.contains("DNS: 4ms"));

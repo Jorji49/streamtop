@@ -166,6 +166,7 @@ mod tests {
             simulate_player: false,
             throttle_kbps: None,
             simulated_rtt_ms: None,
+            doh_provider: None,
         };
         apply_section(
             &mut s,

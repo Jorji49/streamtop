@@ -221,6 +221,7 @@ async fn vod_scans_mock_hls_playlist() {
         simulate_player: false,
         throttle_kbps: None,
         simulated_rtt_ms: None,
+        doh_provider: None,
     };
     let exit = run_vod(url, session, SummaryFormat::Json)
         .await
@@ -249,4 +250,51 @@ fn sei_fixture_captions_and_hdr() {
     let r = probe_sei(&bytes, ContainerKind::Ts);
     assert!(r.cea608_present, "cea608: {r:?}");
     assert!(r.hdr10_present, "hdr10: {r:?}");
+}
+
+#[tokio::test]
+async fn whep_mock_handshake_parses_201_sdp_answer() {
+    use std::time::Duration;
+
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind whep mock");
+    let addr = listener.local_addr().expect("local addr");
+    let endpoint = format!("http://{addr}/whep/feed");
+    tokio::spawn(async move {
+        let Ok((mut stream, _)) = listener.accept().await else {
+            return;
+        };
+        let mut buf = vec![0u8; 8192];
+        let Ok(n) = stream.read(&mut buf).await else {
+            return;
+        };
+        let req = String::from_utf8_lossy(&buf[..n]);
+        if !req.contains("POST") {
+            return;
+        }
+        let sdp = "v=0\r\no=- 0 0 IN IP4 127.0.0.1\r\ns=whep\r\nt=0 0\r\nm=video 9 UDP/TLS/RTP/SAVPF 96\r\na=rtpmap:96 H264/90000\r\na=msid:cam1 vtrack\r\na=candidate:1 1 udp 2130706431 192.0.2.1 49152 typ host\r\n";
+        let body = format!(
+            "HTTP/1.1 201 Created\r\nContent-Type: application/sdp\r\nContent-Length: {}\r\nLocation: /whep/feed/session1\r\nConnection: close\r\n\r\n{sdp}",
+            sdp.len()
+        );
+        let _ = stream.write_all(body.as_bytes()).await;
+    });
+
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(5))
+        .build()
+        .expect("client");
+    let report = streamtop::engine::whep::probe_whep(&client, &endpoint)
+        .await
+        .expect("whep probe");
+    assert!(report.ready);
+    assert_eq!(report.http_status, 201);
+    assert!(!report.video_codecs.is_empty());
+    assert_eq!(report.stream_ids, vec!["cam1"]);
+    assert!(report.ice_candidates >= 1);
+    assert!(report.location.as_deref().is_some_and(|l| l.contains("session1")));
 }

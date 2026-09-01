@@ -90,6 +90,7 @@ async fn collect_report_data(
             poller = poller.with_clearkey(Some(spec));
         }
     }
+    poller = crate::engine::session_poller::apply_session_doh(poller, &session)?;
     let handle = tokio::spawn(async move {
         poller.run().await;
     });

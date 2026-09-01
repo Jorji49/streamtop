@@ -8,6 +8,8 @@
 /.cursor/
 /.vscode/
 /.idea/
+/.claude/
+.cursorrules
 *.tmp
 *.bak
 /.release-artifacts/

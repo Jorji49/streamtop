@@ -63,6 +63,7 @@ impl SpecLinter {
             severity,
             rule: rule.into(),
             message: message.into(),
+            reason: None,
         };
         match category {
             DiagCategory::Rfc => self.flags.rfc_violation = true,
@@ -278,12 +279,13 @@ impl SpecLinter {
                     .server_timing_origin_ms
                     .map(|ms| format!(" origin={ms}ms"))
                     .unwrap_or_default();
-                self.push(
+                self.ingest_finding(DiagnosticFinding::with_reason_code(
                     DiagCategory::Cdn,
                     DiagSeverity::Warn,
                     "CACHE_MISS",
                     format!("seq={seq} {}{st}", info.badge()),
-                );
+                    crate::models::DiagnosticReasonCode::ErrCdnCacheMiss,
+                ));
             }
             CacheVerdict::Hit => {
                 let age = info.age.map_or_else(String::new, |a| format!(" age={a}s"));
@@ -442,6 +444,50 @@ pub fn analyze_abr_ladder(variants: &[AbrVariant]) -> AbrHealth {
         warnings,
         score_penalty: penalty.min(20),
     }
+}
+
+/// Flag master-playlist variant misalignment (audio missing, bandwidth vs resolution).
+pub fn lint_variant_alignment(variants: &[AbrVariant]) -> Vec<DiagnosticFinding> {
+    let mut out = Vec::new();
+    let has_video = variants.iter().any(|v| {
+        v.codecs
+            .as_deref()
+            .is_some_and(|c| c.contains("avc") || c.contains("hvc") || c.contains("hev"))
+    });
+    let has_audio_only = variants.iter().any(|v| {
+        v.codecs
+            .as_deref()
+            .is_some_and(|c| c.contains("mp4a") && !c.contains("avc") && !c.contains("hvc"))
+    });
+    if has_video && !has_audio_only {
+        let any_audio_track = variants.iter().any(|v| {
+            v.codecs.as_deref().is_some_and(|c| c.contains("mp4a"))
+        });
+        if !any_audio_track {
+            out.push(DiagnosticFinding::with_reason_code(
+                DiagCategory::Abr,
+                DiagSeverity::Warn,
+                "ABR_AUDIO_MISSING",
+                "Master playlist variants lack an audio rendition",
+                crate::models::DiagnosticReasonCode::ErrAbrVariantMisalignment,
+            ));
+        }
+    }
+    for v in variants {
+        if let Some(h) = parse_height(v.resolution.as_deref()) {
+            let kbps = v.bandwidth / 1000;
+            if h >= 1080 && kbps > 0 && kbps < 1500 {
+                out.push(DiagnosticFinding::with_reason_code(
+                    DiagCategory::Abr,
+                    DiagSeverity::Warn,
+                    "ABR_BW_RES_MISMATCH",
+                    format!("{h}p declared at {kbps} kbps (resolution/bandwidth mismatch)"),
+                    crate::models::DiagnosticReasonCode::ErrAbrVariantMisalignment,
+                ));
+            }
+        }
+    }
+    out
 }
 
 fn parse_height(res: Option<&str>) -> Option<u64> {
@@ -803,6 +849,7 @@ pub fn scan_drm_keys(raw: &str) -> crate::models::DrmInfo {
         info.method.clone_from(&method);
         info.key_format.clone_from(&key_format);
         info.key_uri = key_uri;
+        info.key_iv = attr_quoted(t, "IV");
 
         let upper_m = method.as_deref().unwrap_or("").to_ascii_uppercase();
         let upper_k = key_format.as_deref().unwrap_or("").to_ascii_lowercase();

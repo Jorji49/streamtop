@@ -22,7 +22,7 @@ use crate::engine::quick_play::{launch_quick_play, QuickPlayResult};
 use crate::engine::ManifestPoller;
 use crate::models::{
     format_dvr_window, AbrHealth, AbrVariant, AdBreakInfo, CdnStats, ChannelEntry, DiagCategory,
-    DiagnosticFinding, DiagnosticSummary, DlDurHud, G2gMetrics, HealthReport, IngestStats,
+    DiagSeverity, DiagnosticFinding, DiagnosticSummary, DlDurHud, G2gMetrics, HealthReport, IngestStats,
     LatencyState, LogEntry, LogLevel, PlaylistMeta, RingBuffer, SegmentMetrics, SeiProbeResult,
     StreamEvent, StreamSnapshot, StreamStatus, SyntheticQoeSnapshot, Tr101290Report, VirtualBuffer,
     DIAGNOSTIC_DIR, EVENT_CHANNEL_CAPACITY, HISTORY_CAPACITY, LOG_CAPACITY,
@@ -98,6 +98,8 @@ pub struct SessionOpts {
     pub simulate_player: bool,
     pub throttle_kbps: Option<u64>,
     pub simulated_rtt_ms: Option<u64>,
+    /// Optional DNS-over-HTTPS provider (`--doh-provider`).
+    pub doh_provider: Option<String>,
 }
 
 pub struct App {
@@ -295,6 +297,7 @@ impl App {
                 poller = poller.with_clearkey(Some(spec));
             }
         }
+        poller = crate::engine::session_poller::apply_session_doh(poller, &self.session)?;
 
         if let Some(hook_url) = self.session.webhook_url.clone() {
             let alerts = crate::engine::webhook::AlertKind::parse_list(&self.session.alert_on)?;
@@ -687,6 +690,7 @@ impl App {
             last_http_status: self.last_segment.as_ref().map(|s| s.http_status),
             last_ttfb_ms: self.last_segment.as_ref().map(|s| s.ttfb_ms),
             last_size_bytes: self.last_segment.as_ref().map(|s| s.size_bytes),
+            ..Default::default()
         })
     }
 
@@ -769,6 +773,15 @@ impl App {
                 }
                 self.last_segment = Some(metrics);
             }
+            StreamEvent::LlHlsPart(p) => {
+                if let Some(ratio) = p.part_dl_duration_ratio {
+                    self.push_log(
+                        LogLevel::Info,
+                        DiagCategory::LlHls,
+                        format!("part seq={} rtf={ratio:.2}", p.part_sequence),
+                    );
+                }
+            }
             StreamEvent::Latency(state) => {
                 if let LatencyState::Measured(ms) = state {
                     self.latency_history.push(ms);
@@ -796,6 +809,7 @@ impl App {
                     severity: crate::models::DiagSeverity::Error,
                     rule: m.rule.clone(),
                     message: m.message,
+                    reason: None,
                 });
             }
             StreamEvent::InbandAdEvent(ev) => {
@@ -808,6 +822,18 @@ impl App {
             StreamEvent::G2g(g) => self.g2g = g,
             StreamEvent::ProbeMode(on) => self.probe_mode = on,
             StreamEvent::Finding(f) => {
+                if let Some(reason) = &f.reason {
+                    let level = match f.severity {
+                        DiagSeverity::Info => LogLevel::Info,
+                        DiagSeverity::Warn => LogLevel::Warn,
+                        DiagSeverity::Error => LogLevel::Error,
+                    };
+                    self.push_log(
+                        level,
+                        f.category,
+                        format!("[{reason}] {}", f.message),
+                    );
+                }
                 self.findings.push(f);
                 if self.findings.len() > 100 {
                     let drain = self.findings.len() - 100;

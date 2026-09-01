@@ -675,6 +675,7 @@ pub fn audit_dash_iop(xml: &str, summary: &DashSummary) -> Vec<DiagnosticFinding
                 severity: DiagSeverity::Warn,
                 rule: "DASH_TIMELINE_GAP".into(),
                 message: "SegmentTimeline may contain zero-repeat gaps".into(),
+                reason: None,
             });
         }
     }
@@ -686,6 +687,7 @@ pub fn audit_dash_iop(xml: &str, summary: &DashSummary) -> Vec<DiagnosticFinding
                 severity: DiagSeverity::Error,
                 rule: "DASH_AVAIL_START".into(),
                 message: "Dynamic MPD missing availabilityStartTime".into(),
+                reason: None,
             });
         }
         if let (Some(spd), Some(mup)) = (
@@ -700,6 +702,7 @@ pub fn audit_dash_iop(xml: &str, summary: &DashSummary) -> Vec<DiagnosticFinding
                     message: format!(
                         "suggestedPresentationDelay ({spd}s) < minimumUpdatePeriod ({mup}s)"
                     ),
+                    reason: None,
                 });
             }
         }
@@ -711,6 +714,7 @@ pub fn audit_dash_iop(xml: &str, summary: &DashSummary) -> Vec<DiagnosticFinding
             severity: DiagSeverity::Warn,
             rule: "DASH_TIMESCALE".into(),
             message: "No Representation timescale found in MPD".into(),
+            reason: None,
         });
     }
 

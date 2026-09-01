@@ -12,7 +12,13 @@ use tokio::sync::mpsc::Sender;
 use tokio::time::sleep;
 use url::Url;
 
-use crate::engine::abr_model::{simulate_segment_fetch, AbrLadderState};
+use crate::engine::aes128_probe::{
+    decrypt_aes128_cbc_probe, derive_iv, fetch_aes128_key, parse_iv_hex, Aes128KeyCache,
+};
+use crate::engine::doh::{resolve_doh, DohProvider};
+use crate::engine::abr_model::{
+    simulate_segment_fetch, AbrLadderState,
+};
 use crate::engine::agent::AgentMetricsRegistry;
 use crate::engine::channel_stats::record_channel_drop;
 use crate::engine::container_probe::{
@@ -32,7 +38,7 @@ use crate::engine::gop_tracker::GopCadenceTracker;
 use crate::engine::linter::{
     ad_log_key, analyze_abr_ladder, apply_abr_penalty, apply_hls_blocking_params,
     extract_ad_signals_near_live_edge, inspect_container, lint_abr_player, lint_subtitle_drift,
-    ll_hls_probe_range, next_blocking_targets, parse_cdn_headers, scan_drm_keys, scan_ll_hls,
+    lint_variant_alignment, ll_hls_probe_range, next_blocking_targets, parse_cdn_headers, scan_drm_keys, scan_ll_hls,
     scan_media_renditions, SpecLinter,
 };
 use crate::engine::metrics::{update_metrics, MetricsSnapshot};
@@ -47,7 +53,8 @@ use crate::engine::synthetic_qoe::SyntheticQoeEngine;
 use crate::engine::tr101290::{probe_container_tr101290, Tr101290Engine};
 use crate::engine::wire_timing::WireTimingTracker;
 use crate::models::{
-    AbrVariant, CdnEdgeInfo, ContainerKind, DiagCategory, DiagSeverity, LatencyState, LlDashInfo,
+    AbrVariant, CdnEdgeInfo, ContainerKind, DiagCategory, DiagSeverity, DiagnosticFinding,
+    DiagnosticReasonCode, LatencyState, LlDashInfo,
     LlHlsInfo, LogLevel, MediaRenditions, NetworkTiming, PlaylistMeta, SegmentMetrics, StreamEvent,
     StreamProtocol, StreamStatus, VirtualBuffer, WireProbeInfo, AD_SCAN_LIVE_EDGE_SEGMENTS,
     DEEP_WIRE_PROBE_BYTES, HLS_LIVE_EDGE_SEGMENTS, MAX_MANIFEST_BYTES, MAX_PLAYLIST_DEPTH,
@@ -97,7 +104,11 @@ pub struct ManifestPoller {
     sei_acc: Arc<Mutex<SeiProbeAccumulator>>,
     qoe: Arc<Mutex<SyntheticQoeEngine>>,
     segment_wall_ms: Arc<Mutex<u64>>,
-    ladder_scratch: Arc<Mutex<Vec<u64>>>,
+    aes_key_cache: Arc<Mutex<Aes128KeyCache>>,
+    last_drm: Arc<Mutex<crate::models::DrmInfo>>,
+    doh_provider: Option<DohProvider>,
+    doh_cache: Arc<Mutex<Option<u64>>>,
+    doh_failed: Arc<Mutex<bool>>,
 }
 
 struct SegmentFetch {
@@ -153,7 +164,11 @@ impl ManifestPoller {
             sei_acc: Arc::new(Mutex::new(SeiProbeAccumulator::new())),
             qoe: Arc::new(Mutex::new(SyntheticQoeEngine::new(None, None))),
             segment_wall_ms: Arc::new(Mutex::new(0)),
-            ladder_scratch: Arc::new(Mutex::new(Vec::with_capacity(16))),
+            aes_key_cache: Arc::new(Mutex::new(Aes128KeyCache::new())),
+            last_drm: Arc::new(Mutex::new(crate::models::DrmInfo::default())),
+            doh_provider: None,
+            doh_cache: Arc::new(Mutex::new(None)),
+            doh_failed: Arc::new(Mutex::new(false)),
         })
     }
 
@@ -191,6 +206,12 @@ impl ManifestPoller {
         stream_id: String,
     ) -> Self {
         self.agent_metrics = Some((registry, stream_id));
+        self
+    }
+
+    #[must_use]
+    pub fn with_doh_provider(mut self, provider: Option<DohProvider>) -> Self {
+        self.doh_provider = provider;
         self
     }
 
@@ -236,6 +257,54 @@ impl ManifestPoller {
         self.otel.as_ref().map(|o| o.traceparent())
     }
 
+    async fn apply_doh_timing(&self, url: &str, network: &mut NetworkTiming) {
+        let Some(ref provider) = self.doh_provider else {
+            return;
+        };
+        if let Ok(cache) = self.doh_cache.lock() {
+            if let Some(ms) = *cache {
+                network.doh_ms = Some(ms);
+                return;
+            }
+        }
+        let host = Url::parse(url)
+            .ok()
+            .and_then(|u| u.host_str().map(str::to_string));
+        let Some(host) = host else {
+            return;
+        };
+        match resolve_doh(&self.client, &host, provider).await {
+            Ok(result) => {
+                network.doh_ms = Some(result.doh_ms);
+                if let Ok(mut cache) = self.doh_cache.lock() {
+                    *cache = Some(result.doh_ms);
+                }
+                if let Some(m) = &self.metrics {
+                    if let Ok(mut snap) = m.write() {
+                        snap.dns_doh_duration_secs = result.doh_ms as f64 / 1000.0;
+                    }
+                }
+            }
+            Err(err) => {
+                let already = self.doh_failed.lock().is_ok_and(|f| *f);
+                if !already {
+                    if let Ok(mut failed) = self.doh_failed.lock() {
+                        *failed = true;
+                    }
+                    self.send_event(StreamEvent::Finding(
+                        DiagnosticFinding::with_reason_code(
+                            DiagCategory::Info,
+                            DiagSeverity::Warn,
+                            "DOH_RESOLVE",
+                            format!("DoH failed for {host}: {err}"),
+                            DiagnosticReasonCode::ErrDohResolutionFailed,
+                        ),
+                    ));
+                }
+            }
+        }
+    }
+
     fn emit_g2g(
         &self,
         wire: &WireProbeInfo,
@@ -275,12 +344,13 @@ impl ManifestPoller {
         duration_secs: f32,
         download_kbps: Option<u64>,
         ladder_bps: &[u64],
+        probe_bytes: &[u8],
     ) {
         let d = &self.diagnostics;
         if !d.tr101290 && !d.probe_sei && !d.simulate_player {
             return;
         }
-        if fetch.probe_bytes.is_empty() {
+        if probe_bytes.is_empty() {
             return;
         }
         let wall_ms = self.segment_wall_ms.lock().map_or(0, |mut w| {
@@ -290,15 +360,33 @@ impl ManifestPoller {
         if d.tr101290 {
             if let Ok(mut eng) = self.tr101290.lock() {
                 if let Some(report) =
-                    probe_container_tr101290(&mut eng, &fetch.probe_bytes, fetch.container, wall_ms)
+                    probe_container_tr101290(&mut eng, probe_bytes, fetch.container, wall_ms)
                 {
+                    for check in &report.checks {
+                        if let Some(code) = DiagnosticReasonCode::from_tr101290_rule(&check.code)
+                        {
+                            self.send_event(StreamEvent::Finding(
+                                DiagnosticFinding::with_reason_code(
+                                    DiagCategory::Info,
+                                    if check.priority == 1 {
+                                        DiagSeverity::Error
+                                    } else {
+                                        DiagSeverity::Warn
+                                    },
+                                    check.code.clone(),
+                                    check.message.clone(),
+                                    code,
+                                ),
+                            ));
+                        }
+                    }
                     self.send_event(StreamEvent::Tr101290(report));
                 }
             }
         }
         if d.probe_sei {
             if let Ok(mut acc) = self.sei_acc.lock() {
-                let sei = acc.ingest(&fetch.probe_bytes, fetch.container);
+                let sei = acc.ingest(probe_bytes, fetch.container);
                 if sei.nal_units_scanned > 0
                     || sei.cea608_present
                     || sei.cea708_present
@@ -317,6 +405,55 @@ impl ManifestPoller {
                     ladder_bps,
                 );
                 self.send_event(StreamEvent::SyntheticQoe(snap));
+            }
+        }
+    }
+
+    async fn maybe_decrypt_aes128_probe(
+        &self,
+        fetch: &SegmentFetch,
+        media_sequence: u64,
+    ) -> Vec<u8> {
+        let drm = self.last_drm.lock().ok().map(|g| g.clone());
+        let Some(drm) = drm else {
+            return fetch.probe_bytes.clone();
+        };
+        let Some(method) = drm.method.as_deref() else {
+            return fetch.probe_bytes.clone();
+        };
+        if !method.eq_ignore_ascii_case("AES-128") {
+            return fetch.probe_bytes.clone();
+        }
+        let Some(uri) = drm.key_uri.as_deref() else {
+            return fetch.probe_bytes.clone();
+        };
+        let explicit_iv = drm
+            .key_iv
+            .as_deref()
+            .and_then(|s| parse_iv_hex(s).ok());
+        let iv = derive_iv(media_sequence, explicit_iv);
+        let key = match fetch_aes128_key(&self.client, uri, &self.aes_key_cache).await {
+            Ok(k) => k,
+            Err(e) => {
+                self.send_event(StreamEvent::Finding(DiagnosticFinding::with_reason_code(
+                    DiagCategory::Drm,
+                    DiagSeverity::Warn,
+                    "AES128_KEY_FETCH",
+                    format!("AES-128 key fetch failed: {e:#}"),
+                    DiagnosticReasonCode::ErrAesKeyFetchFailed,
+                )));
+                return fetch.probe_bytes.clone();
+            }
+        };
+        match decrypt_aes128_cbc_probe(&key, &iv, &fetch.probe_bytes) {
+            Ok(plain) => plain,
+            Err(e) => {
+                self.emit_log(
+                    LogLevel::Warn,
+                    DiagCategory::Drm,
+                    format!("AES-128 probe decrypt failed: {e:#}"),
+                );
+                fetch.probe_bytes.clone()
             }
         }
     }
@@ -614,6 +751,9 @@ impl ManifestPoller {
         for w in &abr_health.warnings {
             self.emit_log(LogLevel::Warn, DiagCategory::Abr, w.clone());
         }
+        for finding in lint_variant_alignment(&summary.variants) {
+            self.send_event(StreamEvent::Finding(finding));
+        }
 
         let mut variants = summary.variants.clone();
         self.send_event(StreamEvent::Variants(variants.clone()));
@@ -814,11 +954,14 @@ impl ManifestPoller {
             let mut wire = fetch.wire.clone();
             self.post_wire_extras(&fetch, &mut wire);
 
-            if let Ok(mut ladder) = self.ladder_scratch.lock() {
-                ladder.clear();
-                ladder.extend(variants.iter().map(|v| v.bandwidth));
-                self.post_segment_diagnostics(&fetch, seg_hint, kbps, ladder.as_slice());
-            }
+            let ladder_bps: Vec<u64> = variants.iter().map(|v| v.bandwidth).collect();
+            self.post_segment_diagnostics(
+                &fetch,
+                seg_hint,
+                kbps,
+                &ladder_bps,
+                &fetch.probe_bytes,
+            );
 
             let metrics = SegmentMetrics {
                 media_sequence: seq,
@@ -1011,7 +1154,12 @@ impl ManifestPoller {
                 DiagSeverity::Warn => LogLevel::Warn,
                 DiagSeverity::Error => LogLevel::Error,
             };
-            self.emit_log(level, finding.category, finding.message.clone());
+            let log_msg = if let Some(reason) = &finding.reason {
+                format!("[{reason}] {}", finding.message)
+            } else {
+                finding.message.clone()
+            };
+            self.emit_log(level, finding.category, log_msg);
             self.send_event(StreamEvent::Finding(finding));
         }
     }
@@ -1094,6 +1242,9 @@ impl ManifestPoller {
                 self.send_event(StreamEvent::AbrHealth(abr_health.clone()));
                 for w in &abr_health.warnings {
                     self.emit_log(LogLevel::Warn, DiagCategory::Abr, w.clone());
+                }
+                for finding in lint_variant_alignment(&marked) {
+                    self.send_event(StreamEvent::Finding(finding));
                 }
 
                 cached_variants.clone_from(&marked);
@@ -1197,6 +1348,9 @@ impl ManifestPoller {
         announced: &mut bool,
     ) -> crate::models::DrmInfo {
         let mut drm = scan_drm_keys(text);
+        if let Ok(mut slot) = self.last_drm.lock() {
+            *slot = drm.clone();
+        }
         let rends = scan_media_renditions(text);
         if *announced {
             return drm;
@@ -1441,13 +1595,49 @@ impl ManifestPoller {
                     Ok(probe) => {
                         ll_meta.preload_hint_fetched = true;
                         ll_meta.last_part_transfer_kbps = Some(probe.transfer_kbps);
+                        let part_dur = ll
+                            .last_part_duration_secs
+                            .or(ll.part_target_secs)
+                            .unwrap_or(0.33);
+                        let part_metrics = crate::models::LlHlsPartMetrics {
+                            part_sequence: ll_meta.last_part_sequence.unwrap_or(0),
+                            ttfb_ms: probe.ttfb_ms,
+                            download_ms: probe.download_ms,
+                            part_duration_secs: part_dur,
+                            part_dl_duration_ratio: crate::models::LlHlsPartMetrics::compute_part_rtf(
+                                probe.download_ms,
+                                part_dur,
+                            ),
+                            transfer_kbps: Some(probe.transfer_kbps),
+                        };
+                        let rtf_line = part_metrics
+                            .part_dl_duration_ratio
+                            .map_or_else(|| "-".into(), |r| format!("{r:.2}"));
+                        if let Some(ratio) = part_metrics.part_dl_duration_ratio {
+                            if ratio > 1.0 {
+                                self.send_event(StreamEvent::Finding(
+                                    DiagnosticFinding::with_reason_code(
+                                        DiagCategory::LlHls,
+                                        DiagSeverity::Warn,
+                                        "PART_RTF_STALL",
+                                        format!(
+                                            "LL-HLS part RTF {ratio:.2} > 1.0 (part seq={})",
+                                            part_metrics.part_sequence
+                                        ),
+                                        DiagnosticReasonCode::ErrPartRtfStall,
+                                    ),
+                                ));
+                            }
+                        }
+                        self.send_event(StreamEvent::LlHlsPart(part_metrics));
                         self.emit_log(
                             LogLevel::Info,
                             DiagCategory::LlHls,
                             format!(
-                                "PART/HINT probe | seq={} | {}ms | {:.0} kbps | {}",
+                                "PART/HINT probe | seq={} | ttfb={}ms | dl={}ms | rtf={rtf_line} | {:.0} kbps | {}",
                                 ll_meta.last_part_sequence.unwrap_or(0),
-                                ll_meta.part_latency_ms().unwrap_or(0),
+                                probe.ttfb_ms,
+                                probe.download_ms,
                                 probe.transfer_kbps,
                                 ll_hls_probe_range(
                                     ll.preload_byterange_offset,
@@ -1817,16 +2007,15 @@ impl ManifestPoller {
             }
         }
 
-        if let Ok(mut ladder) = self.ladder_scratch.lock() {
-            ladder.clear();
-            ladder.extend(variants.iter().map(|v| v.bandwidth));
-            self.post_segment_diagnostics(
-                &fetch,
-                segment.duration,
-                download_kbps,
-                ladder.as_slice(),
-            );
-        }
+        let ladder_bps: Vec<u64> = variants.iter().map(|v| v.bandwidth).collect();
+        let probe_plain = self.maybe_decrypt_aes128_probe(&fetch, media_sequence).await;
+        self.post_segment_diagnostics(
+            &fetch,
+            segment.duration,
+            download_kbps,
+            &ladder_bps,
+            &probe_plain,
+        );
 
         let metrics = SegmentMetrics {
             media_sequence,
@@ -1856,10 +2045,22 @@ impl ManifestPoller {
             .dl_to_dur_ratio
             .map_or_else(String::new, |r| format!(" | dl_to_dur_ratio={r:.2}"));
         self.send_event(StreamEvent::WireProbe(wire));
-        self.send_event(StreamEvent::Segment(metrics));
+        self.send_event(StreamEvent::Segment(metrics.clone()));
         self.send_event(StreamEvent::Latency(latency));
         self.send_event(StreamEvent::Buffer(*vbuf));
         self.send_event(StreamEvent::Variants(variants.clone()));
+
+        if metrics.dl_to_dur_state() == Some(crate::models::DlToDurState::Draining) {
+            if let Some(ratio) = metrics.dl_to_dur_ratio {
+                self.send_event(StreamEvent::Finding(DiagnosticFinding::with_reason_code(
+                    DiagCategory::Stalling,
+                    DiagSeverity::Warn,
+                    "RTF_STALL",
+                    format!("dl_to_dur_ratio {ratio:.2} indicates buffer drain risk"),
+                    DiagnosticReasonCode::ErrRtfStallRisk,
+                )));
+            }
+        }
 
         let mode = if fetch.probed { "probe" } else { "full" };
         self.emit_log(
@@ -1925,12 +2126,14 @@ impl ManifestPoller {
                 .wrap_err_with(|| format!("failed to read {}", path.display()))?;
             return Ok((body, None));
         }
-        let response = self
-            .client
-            .get(url)
-            .send()
-            .await
-            .wrap_err_with(|| format!("GET failed: {url}"))?;
+        let response = with_probe_read_timeout(async {
+            self.client
+                .get(url)
+                .send()
+                .await
+                .wrap_err_with(|| format!("GET failed: {url}"))
+        })
+        .await?;
         let status = response.status();
         if !status.is_success() {
             return Err(eyre!("HTTP {status} - {url}"));
@@ -1985,9 +2188,11 @@ impl ManifestPoller {
 
     async fn download_segment(&self, url: &str) -> Result<SegmentFetch> {
         if let Some(path) = local_path_from_url(url) {
-            return read_local_segment(&path, false).await;
+            let mut fetch = read_local_segment(&path, false).await?;
+            self.apply_doh_timing(url, &mut fetch.network).await;
+            return Ok(fetch);
         }
-        match traced_get(
+        if let Ok(resp) = traced_get(
             url,
             &self.extra_headers,
             None,
@@ -1996,39 +2201,42 @@ impl ManifestPoller {
         )
         .await
         {
-            Ok(resp) => {
-                let code = resp.status;
-                if !((200..300).contains(&code)) {
-                    return Err(eyre!("segment HTTP {code} - {url}"));
-                }
-                let cdn = parse_cdn_headers_http(&resp.headers);
-                let total = resp.body.len() as u64;
-                let head_len = (DEEP_WIRE_PROBE_BYTES as usize + 1).min(resp.body.len());
-                let head = resp.body[..head_len].to_vec();
-                let mut wire = deep_wire_probe(&head);
-                self.finalize_wire(&mut wire);
-                let container = if wire.container == ContainerKind::Unknown {
-                    inspect_container(&head)
-                } else {
-                    wire.container
-                };
-                Ok(SegmentFetch {
-                    size_bytes: total,
-                    transferred_bytes: total,
-                    ttfb_ms: resp.timing.ttfb_ms,
-                    download_ms: resp.download_ms,
-                    cdn,
-                    container,
-                    probed: false,
-                    http_status: code,
-                    network: resp.timing,
-                    wire,
-                    chunked_transfer: resp.chunked_transfer,
-                    segment_url: url.to_string(),
-                    probe_bytes: probe_slice(&head),
-                })
+            let code = resp.status;
+            if !((200..300).contains(&code)) {
+                return Err(eyre!("segment HTTP {code} - {url}"));
             }
-            Err(_) => self.download_segment_reqwest(url).await,
+            let cdn = parse_cdn_headers_http(&resp.headers);
+            let total = resp.body.len() as u64;
+            let head_len = (DEEP_WIRE_PROBE_BYTES as usize + 1).min(resp.body.len());
+            let head = resp.body[..head_len].to_vec();
+            let mut wire = deep_wire_probe(&head);
+            self.finalize_wire(&mut wire);
+            let container = if wire.container == ContainerKind::Unknown {
+                inspect_container(&head)
+            } else {
+                wire.container
+            };
+            let mut fetch = SegmentFetch {
+                size_bytes: total,
+                transferred_bytes: total,
+                ttfb_ms: resp.timing.ttfb_ms,
+                download_ms: resp.download_ms,
+                cdn,
+                container,
+                probed: false,
+                http_status: code,
+                network: resp.timing,
+                wire,
+                chunked_transfer: resp.chunked_transfer,
+                segment_url: url.to_string(),
+                probe_bytes: probe_slice(&head),
+            };
+            self.apply_doh_timing(url, &mut fetch.network).await;
+            Ok(fetch)
+        } else {
+            let mut fetch = self.download_segment_reqwest(url).await?;
+            self.apply_doh_timing(url, &mut fetch.network).await;
+            Ok(fetch)
         }
     }
 
@@ -2048,21 +2256,26 @@ impl ManifestPoller {
         let cdn = parse_cdn_headers(response.headers());
         let chunked = reqwest_headers_chunked(response.headers());
         let ttfb_ms = started.elapsed().as_millis() as u64;
+        let content_length = response.content_length();
         let mut stream = response.bytes_stream();
         let mut total: u64 = 0;
         let mut head: Vec<u8> = Vec::new();
         let max = MAX_SEGMENT_BYTES;
+        let probe_cap = DEEP_WIRE_PROBE_BYTES as usize + 1;
 
         while let Some(chunk) = stream.next().await {
             let chunk = chunk.wrap_err("segment stream read error")?;
             if total.saturating_add(chunk.len() as u64) > max as u64 {
                 return Err(eyre!("segment exceeds {max} byte limit"));
             }
-            if head.len() < DEEP_WIRE_PROBE_BYTES as usize + 1 {
-                let take = ((DEEP_WIRE_PROBE_BYTES as usize + 1) - head.len()).min(chunk.len());
+            if head.len() < probe_cap {
+                let take = (probe_cap - head.len()).min(chunk.len());
                 head.extend_from_slice(&chunk[..take]);
             }
             total = total.saturating_add(chunk.len() as u64);
+            if content_length.is_none() && head.len() >= probe_cap {
+                break;
+            }
         }
 
         let download_ms = started.elapsed().as_millis() as u64;
@@ -2092,10 +2305,12 @@ impl ManifestPoller {
 
     async fn probe_segment(&self, url: &str) -> Result<SegmentFetch> {
         if let Some(path) = local_path_from_url(url) {
-            return read_local_segment(&path, true).await;
+            let mut fetch = read_local_segment(&path, true).await?;
+            self.apply_doh_timing(url, &mut fetch.network).await;
+            return Ok(fetch);
         }
         let range = format!("bytes=0-{DEEP_WIRE_PROBE_BYTES}");
-        match traced_get(
+        if let Ok(resp) = traced_get(
             url,
             &self.extra_headers,
             Some(&range),
@@ -2104,45 +2319,48 @@ impl ManifestPoller {
         )
         .await
         {
-            Ok(resp) => {
-                let code = resp.status;
-                if !(code == 200 || code == 206) {
-                    return Err(eyre!("probe HTTP {code} - {url}"));
-                }
-                let cdn = parse_cdn_headers_http(&resp.headers);
-                let declared = resp
-                    .headers
-                    .get("content-range")
-                    .and_then(|v| v.to_str().ok())
-                    .and_then(|s| s.split('/').next_back())
-                    .and_then(|n| n.parse::<u64>().ok())
-                    .unwrap_or(0);
-                let transferred = resp.body.len() as u64;
-                let size_bytes = if declared > 0 { declared } else { transferred };
-                let mut wire = deep_wire_probe(&resp.body);
-                self.finalize_wire(&mut wire);
-                let container = if wire.container == ContainerKind::Unknown {
-                    inspect_container(&resp.body)
-                } else {
-                    wire.container
-                };
-                Ok(SegmentFetch {
-                    size_bytes,
-                    transferred_bytes: transferred,
-                    ttfb_ms: resp.timing.ttfb_ms,
-                    download_ms: resp.download_ms,
-                    cdn,
-                    container,
-                    probed: true,
-                    http_status: code,
-                    network: resp.timing,
-                    wire,
-                    chunked_transfer: resp.chunked_transfer,
-                    segment_url: url.to_string(),
-                    probe_bytes: probe_slice(&resp.body),
-                })
+            let code = resp.status;
+            if !(code == 200 || code == 206) {
+                return Err(eyre!("probe HTTP {code} - {url}"));
             }
-            Err(_) => self.probe_segment_reqwest(url).await,
+            let cdn = parse_cdn_headers_http(&resp.headers);
+            let declared = resp
+                .headers
+                .get("content-range")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|s| s.split('/').next_back())
+                .and_then(|n| n.parse::<u64>().ok())
+                .unwrap_or(0);
+            let transferred = resp.body.len() as u64;
+            let size_bytes = if declared > 0 { declared } else { transferred };
+            let mut wire = deep_wire_probe(&resp.body);
+            self.finalize_wire(&mut wire);
+            let container = if wire.container == ContainerKind::Unknown {
+                inspect_container(&resp.body)
+            } else {
+                wire.container
+            };
+            let mut fetch = SegmentFetch {
+                size_bytes,
+                transferred_bytes: transferred,
+                ttfb_ms: resp.timing.ttfb_ms,
+                download_ms: resp.download_ms,
+                cdn,
+                container,
+                probed: true,
+                http_status: code,
+                network: resp.timing,
+                wire,
+                chunked_transfer: resp.chunked_transfer,
+                segment_url: url.to_string(),
+                probe_bytes: probe_slice(&resp.body),
+            };
+            self.apply_doh_timing(url, &mut fetch.network).await;
+            Ok(fetch)
+        } else {
+            let mut fetch = self.probe_segment_reqwest(url).await?;
+            self.apply_doh_timing(url, &mut fetch.network).await;
+            Ok(fetch)
         }
     }
 
@@ -2221,7 +2439,7 @@ impl ManifestPoller {
         })
     }
 
-    /// Range-probe a PRELOAD-HINT / PART URI; returns measured transfer rate.
+    /// Range-probe a PRELOAD-HINT / PART URI; returns measured transfer rate and TTFB.
     async fn probe_ll_hls_hint(
         &self,
         url: &str,
@@ -2229,7 +2447,7 @@ impl ManifestPoller {
         length: Option<u64>,
     ) -> Result<LlHlsProbeStats> {
         if local_path_from_url(url).is_some() {
-            return Ok(LlHlsProbeStats { transfer_kbps: 0.0 });
+            return Ok(LlHlsProbeStats::default());
         }
         let range = ll_hls_probe_range(offset, length);
         let started = Instant::now();
@@ -2245,21 +2463,59 @@ impl ManifestPoller {
         if !(status.is_success() || code == 206) {
             return Err(eyre!("LL-HLS hint HTTP {status} - {url}"));
         }
-        let body = response.bytes().await?;
-        let elapsed_ms = started.elapsed().as_millis().max(1) as u64;
-        let bytes = body.len() as u64;
-        let transfer_kbps = (bytes as f64 * 8.0) / elapsed_ms as f64;
-        Ok(LlHlsProbeStats { transfer_kbps })
+        let max_read = length.map_or(65536, |l| l as usize).clamp(512, 65536);
+        let mut stream = response.bytes_stream();
+        let mut buf = Vec::new();
+        let mut ttfb_ms = None::<u64>;
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.wrap_err("LL-HLS part stream read error")?;
+            if ttfb_ms.is_none() {
+                ttfb_ms = Some(started.elapsed().as_millis() as u64);
+            }
+            if buf.len().saturating_add(chunk.len()) > max_read {
+                break;
+            }
+            buf.extend_from_slice(&chunk);
+        }
+        let download_ms = started.elapsed().as_millis().max(1) as u64;
+        let bytes = buf.len() as u64;
+        let transfer_kbps = (bytes as f64 * 8.0) / download_ms as f64;
+        Ok(LlHlsProbeStats {
+            transfer_kbps,
+            ttfb_ms: ttfb_ms.unwrap_or(download_ms),
+            download_ms,
+            transferred_bytes: bytes,
+        })
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 struct LlHlsProbeStats {
     transfer_kbps: f64,
+    ttfb_ms: u64,
+    download_ms: u64,
+    #[allow(dead_code)]
+    transferred_bytes: u64,
 }
 
 pub fn build_http_client(headers: &[String], user_agent: Option<&str>) -> Result<Client> {
-    build_http_client_with_timeouts(headers, user_agent, 10, 30)
+    use crate::models::{PROBE_CONNECT_TIMEOUT_SECS, PROBE_READ_TIMEOUT_SECS};
+    build_http_client_with_timeouts(
+        headers,
+        user_agent,
+        PROBE_CONNECT_TIMEOUT_SECS,
+        PROBE_READ_TIMEOUT_SECS,
+    )
+}
+
+async fn with_probe_read_timeout<F, T>(future: F) -> Result<T>
+where
+    F: std::future::Future<Output = Result<T>>,
+{
+    use crate::models::PROBE_READ_TIMEOUT_SECS;
+    tokio::time::timeout(Duration::from_secs(PROBE_READ_TIMEOUT_SECS), future)
+        .await
+        .unwrap_or_else(|_| Err(eyre!("probe read timeout after {PROBE_READ_TIMEOUT_SECS}s")))
 }
 
 async fn read_response_bytes_limited(response: reqwest::Response, max: usize) -> Result<Vec<u8>> {
@@ -2296,7 +2552,7 @@ fn build_http_client_with_timeouts(
         .user_agent(user_agent.unwrap_or(DEFAULT_UA))
         .gzip(true)
         .brotli(true)
-        .redirect(reqwest::redirect::Policy::none())
+        .redirect(reqwest::redirect::Policy::limited(10))
         .timeout(Duration::from_secs(timeout_secs))
         .connect_timeout(Duration::from_secs(connect_secs))
         .pool_idle_timeout(Duration::from_secs(90));

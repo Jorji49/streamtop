@@ -77,6 +77,7 @@ pub fn build_incident_report(
             last_http_status: Some(seg.http_status),
             last_ttfb_ms: Some(seg.ttfb_ms),
             last_size_bytes: Some(seg.transferred_bytes),
+            ..Default::default()
         }));
     } else if let Some(pl) = &snapshot.playlist {
         curl_commands.push(build_curl(&ExportCapture {
@@ -88,6 +89,7 @@ pub fn build_incident_report(
             last_http_status: None,
             last_ttfb_ms: None,
             last_size_bytes: None,
+            ..Default::default()
         }));
     }
 
@@ -143,6 +145,7 @@ mod tests {
             severity: DiagSeverity::Error,
             rule: "TARGET_DURATION".into(),
             message: "too long".into(),
+            reason: None,
         };
         let v = SpecViolation::from_finding(&f);
         assert_eq!(v.severity, "ERROR");
