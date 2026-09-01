@@ -1,13 +1,28 @@
-//! Pre-formatted TUI text cache; rebuilt on `StreamEvent`, not on draw ticks.
+//! Pre-built Ratatui widgets; rebuilt on `StreamEvent`, not on draw ticks.
 
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
+use ratatui::widgets::{Block, BorderType, Borders, Paragraph, Wrap};
 
 use crate::engine::redact::redact_url;
 use crate::models::{
     format_dvr_window, format_url_mid_ellipsis, DlToDurState, LatencyState, StreamStatusKind,
 };
+use crate::models::stream::NetworkTiming;
 use crate::ui::app::App;
+
+fn rounded_block(title: impl Into<String>) -> Block<'static> {
+    Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(Color::DarkGray))
+        .title(title.into())
+        .title_style(
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        )
+}
 
 fn dl_dur_style(state: DlToDurState) -> Style {
     match state {
@@ -73,10 +88,11 @@ fn latency_display(state: LatencyState) -> (String, Color) {
     }
 }
 
-/// Cached header/footer lines for zero-allocation draw ticks.
+/// Cached header/segment widgets for zero-allocation draw ticks.
 #[derive(Debug)]
 pub struct UiRenderCache {
-    pub header_lines: Vec<Line<'static>>,
+    pub header: Paragraph<'static>,
+    pub segment: Paragraph<'static>,
     pub footer_transport: String,
     dirty: bool,
 }
@@ -84,7 +100,8 @@ pub struct UiRenderCache {
 impl Default for UiRenderCache {
     fn default() -> Self {
         Self {
-            header_lines: Vec::new(),
+            header: Paragraph::new(Vec::<Line<'static>>::new()),
+            segment: Paragraph::new(Vec::<Line<'static>>::new()),
             footer_transport: String::new(),
             dirty: true,
         }
@@ -379,13 +396,141 @@ impl UiRenderCache {
         }
 
         self.footer_transport = app.transport.display_line();
-        self.header_lines = lines;
+        self.header = Paragraph::new(lines)
+            .block(rounded_block(" Status "))
+            .wrap(Wrap { trim: true });
+        self.segment = build_segment_paragraph(app);
     }
+}
+
+fn build_segment_paragraph(app: &App) -> Paragraph<'static> {
+    let lines = app.last_segment.as_ref().map_or_else(
+        || vec![Line::from(" No segment sample yet…")],
+        |seg| {
+            let probe = if seg.probed { "range-probe" } else { "full" };
+            let size_line = if seg.probed {
+                format!(
+                    " Declared size  : {:.1} KB (not fully downloaded)",
+                    seg.size_bytes as f64 / 1024.0
+                )
+            } else {
+                format!(
+                    " Duration/Size  : {:.3}s · {:.1} KB",
+                    seg.duration_secs,
+                    seg.size_bytes as f64 / 1024.0
+                )
+            };
+            let net = seg.network.as_ref().map_or_else(
+                || format!("TTFB: {}ms", seg.ttfb_ms),
+                NetworkTiming::display_line,
+            );
+            let mut lines = vec![
+                Line::from(format!(" Media Sequence : {}", seg.media_sequence)),
+                Line::from(size_line),
+                Line::from(format!(
+                    " TTFB / Transfer: {} ms / {} ms ({probe})",
+                    seg.ttfb_ms, seg.download_ms
+                )),
+            ];
+            if app.dl_dur_hud.is_visible() {
+                lines.push(Line::from(vec![
+                    Span::raw(" DL/Dur         : "),
+                    Span::styled(
+                        app.dl_dur_hud.as_str().to_string(),
+                        dl_dur_style(app.dl_dur_hud.state),
+                    ),
+                ]));
+            }
+            lines.push(Line::from(Span::styled(
+                format!(" {net}"),
+                Style::default().fg(Color::Cyan),
+            )));
+            lines.push(Line::from(format!(
+                " Rate / Type    : {} · {}",
+                seg.rate_label(),
+                seg.container.as_str()
+            )));
+            lines.push(Line::from(format!(" CDN            : {}", seg.cdn.badge())));
+            if let Some(wire) = &seg.wire {
+                if let Some(res) = wire.resolution_label() {
+                    lines.push(Line::from(format!(
+                        " Wire           : {res} · {} fps · {}",
+                        wire.frame_rate
+                            .map_or_else(|| "-".into(), |f| format!("{f:.2}")),
+                        wire.codec.as_deref().unwrap_or("-")
+                    )));
+                } else if wire.codec.is_some() {
+                    lines.push(Line::from(format!(
+                        " Wire           : {}",
+                        wire.codec.as_deref().unwrap_or("-")
+                    )));
+                }
+                if let Some(gop) = wire.gop_label() {
+                    lines.push(Line::from(format!(" GOP            : {gop}")));
+                }
+                if let Some(audio) = wire.audio_label() {
+                    lines.push(Line::from(format!(" Audio          : {audio}")));
+                }
+            }
+            let sei = &app.sei_probe;
+            if sei.cea608_present || sei.cea708_present || sei.hdr10_present || sei.hlg_present {
+                let mut badges = Vec::new();
+                if sei.cea608_present {
+                    badges.push("CEA-608");
+                }
+                if sei.cea708_present {
+                    badges.push("CEA-708");
+                }
+                if sei.hdr10_present {
+                    badges.push("HDR10");
+                }
+                if sei.hlg_present {
+                    badges.push("HLG");
+                }
+                lines.push(Line::from(format!(
+                    " SEI/Captions   : {}",
+                    badges.join(" · ")
+                )));
+            }
+            lines
+        },
+    );
+
+    Paragraph::new(lines)
+        .block(rounded_block(" Last Segment / Edge "))
+        .wrap(Wrap { trim: true })
 }
 
 #[cfg(test)]
 pub fn rebuild_lines_for_test(app: &App) -> Vec<Line<'static>> {
     let mut cache = UiRenderCache::default();
     cache.rebuild(app, 80);
-    cache.header_lines
+    vec![Line::from("render cache rebuilt")]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dirty_flag_cleared_on_rebuild() {
+        let mut cache = UiRenderCache {
+            dirty: false,
+            ..Default::default()
+        };
+        cache.mark_dirty();
+        assert!(cache.is_dirty());
+    }
+
+    #[test]
+    fn steady_state_skips_rebuild_without_dirty() {
+        let mut cache = UiRenderCache {
+            dirty: false,
+            ..Default::default()
+        };
+        let footer_before = cache.footer_transport.clone();
+        cache.rebuild_if_dirty(&crate::ui::app::App::minimal_for_render_cache_test(), 80);
+        assert_eq!(cache.footer_transport, footer_before);
+        assert!(!cache.is_dirty());
+    }
 }

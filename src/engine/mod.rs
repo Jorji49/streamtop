@@ -20,7 +20,6 @@ pub mod g2g;
 pub mod gop_tracker;
 pub mod grafana;
 pub mod incident;
-pub mod ingest_probe;
 pub mod ip_pin;
 pub mod linter;
 pub mod metrics;

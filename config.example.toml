@@ -18,7 +18,6 @@
 # otel_endpoint = "https://otel.example.com/v1/traces"
 # allow_insecure_webhooks = false
 # allow_insecure_otel = false
-# allow_insecure_ingest = false
 
 [profiles.cdn]
 headers = ["X-CDN-Bypass: 1"]

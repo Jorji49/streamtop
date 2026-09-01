@@ -194,10 +194,6 @@ struct Cli {
     #[arg(long = "allow-insecure-otel")]
     allow_insecure_otel: bool,
 
-    /// Allow ingest targets on private/link-local/metadata hosts (tests only)
-    #[arg(long = "allow-insecure-ingest")]
-    allow_insecure_ingest: bool,
-
     /// ETSI TR 101 290 P1/P2 MPEG-TS compliance probe
     #[arg(long = "tr101290")]
     tr101290: bool,
@@ -297,7 +293,6 @@ async fn main() -> Result<ExitCode> {
             alert_on: "stall,shi_below_70,http_5xx".into(),
             allow_insecure_webhooks: false,
             allow_insecure_otel: false,
-            allow_insecure_ingest: false,
             otel_endpoint: None,
             tr101290: false,
             probe_sei: false,
@@ -351,12 +346,6 @@ async fn main() -> Result<ExitCode> {
         session.allow_insecure_otel = true;
         eprintln!(
             "warning: --allow-insecure-otel enables private/link-local/metadata OTLP targets"
-        );
-    }
-    if cli.allow_insecure_ingest {
-        session.allow_insecure_ingest = true;
-        eprintln!(
-            "warning: --allow-insecure-ingest enables private/link-local/metadata ingest targets"
         );
     }
     if cli.otel_endpoint.is_some() {
@@ -496,6 +485,13 @@ async fn main() -> Result<ExitCode> {
         .as_deref()
         .ok_or_else(|| eyre!("missing stream URL (or use --compare)"))?;
 
+    if input_url.starts_with("srt://") || input_url.starts_with("rtmp://") {
+        restore_terminal_global();
+        return Err(eyre!(
+            "srt:// and rtmp:// are not supported; use WHEP HTTP endpoints (https://host/.../whep)"
+        ));
+    }
+
     if streamtop::engine::whep::is_whep_url(input_url) {
         let report = streamtop::engine::whep::probe_whep(&client, input_url).await?;
         println!("{}", serde_json::to_string_pretty(&report)?);
@@ -505,65 +501,6 @@ async fn main() -> Result<ExitCode> {
         } else {
             ExitCode::from(1)
         });
-    }
-
-    if streamtop::engine::whep::is_legacy_ingest_url(input_url) {
-        eprintln!(
-            "warning: srt:// and rtmp:// ingest probes are deprecated; prefer WHEP HTTP endpoints"
-        );
-        if metrics_port.is_some() {
-            restore_terminal_global();
-            return Err(eyre!(
-                "Prometheus mode for legacy ingest URLs is not supported; use the TUI or --summary"
-            ));
-        }
-        if export_plan.wants_curl_or_har() {
-            restore_terminal_global();
-            return Err(eyre!("--export curl/har are not supported for legacy ingest URLs"));
-        }
-        let exit = if cli.summary {
-            streamtop::engine::summary::run_ingest_summary(
-                input_url.to_string(),
-                cli.timeout_secs,
-                cli.summary_format.into(),
-                session.allow_insecure_ingest,
-            )
-            .await?
-        } else {
-            App::run_diagnostics(input_url.to_string(), input_url.to_string(), session).await?;
-            ExitCode::SUCCESS
-        };
-        restore_terminal_global();
-        return Ok(exit);
-    }
-
-    if streamtop::engine::ingest_probe::is_ingest_url(input_url) {
-        if metrics_port.is_some() {
-            restore_terminal_global();
-            return Err(eyre!(
-                "Prometheus mode for ingest URLs is not supported; use the TUI or --summary"
-            ));
-        }
-        if cli.export_curl || cli.export_har.is_some() {
-            restore_terminal_global();
-            return Err(eyre!(
-                "--export-curl/--export-har are not supported for ingest URLs"
-            ));
-        }
-        let exit = if cli.summary {
-            streamtop::engine::summary::run_ingest_summary(
-                input_url.to_string(),
-                cli.timeout_secs,
-                cli.summary_format.into(),
-                session.allow_insecure_ingest,
-            )
-            .await?
-        } else {
-            App::run_diagnostics(input_url.to_string(), input_url.to_string(), session).await?;
-            ExitCode::SUCCESS
-        };
-        restore_terminal_global();
-        return Ok(exit);
     }
 
     let (origin, body, content_type) = load_input(&client, input_url).await?;

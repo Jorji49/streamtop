@@ -34,10 +34,6 @@ pub fn is_whep_url(url: &str) -> bool {
     lower.contains("/whep") || lower.ends_with("whep")
 }
 
-pub fn is_legacy_ingest_url(url: &str) -> bool {
-    url.starts_with("srt://") || url.starts_with("rtmp://")
-}
-
 /// POST SDP Offer to WHEP endpoint; inspect SDP Answer metadata only.
 pub async fn probe_whep(client: &Client, endpoint: &str) -> Result<WhepProbeReport> {
     let started = Instant::now();

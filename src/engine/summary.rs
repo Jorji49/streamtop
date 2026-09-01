@@ -16,7 +16,7 @@ use crate::engine::poller::DiagnosticOpts;
 use crate::engine::redact::redact_url;
 use crate::engine::ManifestPoller;
 use crate::models::{
-    CdnStats, DiagCategory, DiagSeverity, HealthReport, IngestStats, LatencyState, SeiProbeResult,
+    CdnStats, DiagCategory, DiagSeverity, HealthReport, LatencyState, SeiProbeResult,
     StreamEvent, StreamStatus, StreamStatusKind, SyntheticQoeSnapshot, Tr101290Report,
     EVENT_CHANNEL_CAPACITY,
 };
@@ -72,8 +72,6 @@ pub struct SummaryJson {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sei_metadata: Option<SeiProbeResult>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub ingest_stats: Option<IngestStats>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub spec_violations: Option<Vec<crate::models::SpecViolation>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub doh_ms: Option<u64>,
@@ -104,7 +102,6 @@ pub fn build_summary_json(
     tr101290: Option<Tr101290Report>,
     synthetic_qoe: Option<SyntheticQoeSnapshot>,
     sei_metadata: Option<SeiProbeResult>,
-    ingest_stats: Option<IngestStats>,
     spec_violations: Option<Vec<crate::models::SpecViolation>>,
     doh_ms: Option<u64>,
     part_dl_duration_ratio: Option<f32>,
@@ -136,7 +133,6 @@ pub fn build_summary_json(
         tr101290,
         synthetic_qoe,
         sei_metadata,
-        ingest_stats,
         spec_violations,
         doh_ms,
         part_dl_duration_ratio,
@@ -222,7 +218,6 @@ pub async fn run_summary(
     let mut tr101290: Option<Tr101290Report> = None;
     let mut synthetic_qoe: Option<SyntheticQoeSnapshot> = None;
     let mut sei_metadata: Option<SeiProbeResult> = None;
-    let mut ingest_stats: Option<IngestStats> = None;
     let mut spec_findings: Vec<crate::models::DiagnosticFinding> = Vec::new();
     let mut abr_health = crate::models::AbrHealth::default();
     let mut last_doh_ms: Option<u64> = None;
@@ -269,7 +264,6 @@ pub async fn run_summary(
                 StreamEvent::Tr101290(r) => tr101290 = Some(r),
                 StreamEvent::SyntheticQoe(q) => synthetic_qoe = Some(q),
                 StreamEvent::SeiProbe(s) => sei_metadata = Some(s),
-                StreamEvent::Ingest(s) => ingest_stats = Some(s),
                 StreamEvent::Finding(f) => {
                     spec_findings.push(f.clone());
                     if f.category == DiagCategory::Stalling {
@@ -369,7 +363,6 @@ pub async fn run_summary(
                 tr101290.clone(),
                 synthetic_qoe,
                 sei_metadata,
-                ingest_stats,
                 spec_violations,
                 last_doh_ms,
                 last_part_rtf,
@@ -423,102 +416,6 @@ pub async fn run_summary(
     })
 }
 
-pub async fn run_ingest_summary(
-    url: String,
-    timeout_secs: u64,
-    format: SummaryFormat,
-    allow_insecure: bool,
-) -> Result<ExitCode> {
-    let (tx, mut rx) = mpsc::channel(EVENT_CHANNEL_CAPACITY);
-    let url_clone = url.clone();
-    let handle = tokio::spawn(async move {
-        crate::engine::ingest_probe::run_ingest_poller(url_clone, allow_insecure, tx).await;
-    });
-
-    let mut ingest_stats: Option<IngestStats> = None;
-    let mut errors = 0u32;
-    let deadline = Instant::now() + Duration::from_secs(timeout_secs.max(1));
-    while Instant::now() < deadline {
-        let left = deadline.saturating_duration_since(Instant::now());
-        match timeout(left, rx.recv()).await {
-            Ok(Some(StreamEvent::Ingest(s))) => ingest_stats = Some(s),
-            Ok(Some(StreamEvent::Error(_))) => errors = errors.saturating_add(1),
-            Ok(Some(_)) => {}
-            Ok(None) | Err(_) => break,
-        }
-    }
-    handle.abort();
-
-    let ok = ingest_stats
-        .as_ref()
-        .and_then(|s| s.connected)
-        .unwrap_or(false)
-        && errors == 0;
-
-    match format {
-        SummaryFormat::Json => {
-            let health = if ok {
-                HealthReport::perfect()
-            } else {
-                HealthReport {
-                    score: 40,
-                    label: "Poor".into(),
-                    deductions: vec!["Ingest probe failed".into()],
-                }
-            };
-            let payload = build_summary_json(
-                url.as_str(),
-                ok,
-                &health,
-                if ok { "LIVE" } else { "ERROR" },
-                &LatencyState::Unknown,
-                "INGEST".into(),
-                None,
-                None,
-                None,
-                0,
-                0,
-                errors,
-                false,
-                channel_dropped_total(),
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                ingest_stats,
-                None,
-                None,
-                None,
-            );
-            println!("{}", serde_json::to_string(&payload)?);
-        }
-        SummaryFormat::Text => {
-            let verdict = if ok { "PASS" } else { "FAIL" };
-            println!("{verdict}  ingest  url={}", redact_url(&url));
-            if let Some(s) = &ingest_stats {
-                println!(
-                    "  protocol={} rtt={:?}ms loss={:?}% bw={:?}Mbps",
-                    s.protocol, s.rtt_ms, s.packet_loss_pct, s.bandwidth_mbps
-                );
-            }
-        }
-        SummaryFormat::Sarif => {
-            let json = crate::engine::sarif::render_sarif_json(&[], &[])?;
-            println!("{json}");
-        }
-    }
-
-    Ok(if ok {
-        ExitCode::SUCCESS
-    } else {
-        ExitCode::from(1)
-    })
-}
-
 pub fn parse_subtitle_drift_ms(message: &str) -> Option<i64> {
     let rest = message
         .strip_prefix("Subtitle drift ")
@@ -563,7 +460,6 @@ mod tests {
             None,
             None,
             None,
-            None,
         );
         let v = serde_json::to_value(&payload).unwrap();
         assert_eq!(v["schema"], SUMMARY_SCHEMA);
@@ -600,7 +496,6 @@ mod tests {
             0,
             true,
             0,
-            None,
             None,
             None,
             None,

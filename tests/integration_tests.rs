@@ -40,7 +40,8 @@ fn cli_help_lists_supported_operational_flags() {
         "--probe-sei",
         "--simulate-player",
         "--allow-insecure-otel",
-        "--allow-insecure-ingest",
+        "--multi-cdn",
+        "--prefer-http2",
     ] {
         assert!(help.contains(flag), "missing help flag: {flag}");
     }
@@ -214,7 +215,6 @@ async fn vod_scans_mock_hls_playlist() {
         alert_on: String::new(),
         allow_insecure_webhooks: false,
         allow_insecure_otel: false,
-        allow_insecure_ingest: false,
         otel_endpoint: None,
         tr101290: false,
         probe_sei: false,

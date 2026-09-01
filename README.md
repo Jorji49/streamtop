@@ -23,7 +23,7 @@
 
 Use it to debug CDN issues, validate encoder output, compare origin vs edge, run CI smoke tests on manifests, or watch production feeds with Prometheus and OpenTelemetry hooks.
 
-Legacy `srt://` and `rtmp://` ingest URLs still route to a passive probe but emit a deprecation warning; prefer WHEP for WebRTC egress diagnostics.
+WHEP HTTP endpoints are the supported path for WebRTC egress signaling probes. Legacy `srt://` and `rtmp://` URLs are rejected at startup.
 
 ## Use cases
 
@@ -42,7 +42,6 @@ Legacy `srt://` and `rtmp://` ingest URLs still route to a passive probe but emi
 * **MPEG-DASH** (`.mpd`): live and VOD, ServiceDescription latency, UTCTiming, ContentProtection / PSSH
 * **IPTV / catalogs** (`.m3u`, `.json`, `.yaml`): channel picker, search, playlist audit to JSON/CSV
 * **WHEP**: HTTP POST SDP offer, parse 200/201 answer (signaling TTFB, codecs, ICE candidates, stream IDs)
-* **Ingest (deprecated)**: `srt://` and `rtmp://` passive probes; use WHEP where possible
 
 ### Wire and container probes
 
@@ -308,7 +307,6 @@ These hidden aliases still work but log a warning; migrate to `--export`:
 | `--export-grafana` | `--export grafana` |
 | `--export-incident [PATH]` | `--export incident[:PATH]` |
 
-`srt://` and `rtmp://` URLs log a deprecation notice; prefer WHEP HTTP endpoints for WebRTC egress checks.
 
 ## Keyboard shortcuts
 
@@ -326,11 +324,11 @@ These hidden aliases still work but log a warning; migrate to `--export`:
 | `j` / `k` | Scroll log or channel list |
 
 Compare mode: `Space` pause/resume, `d` detail, `l` log focus, `c` curl, `h` HAR, `Tab` switch pane.
-`e` also exports HAR in compare mode. Prometheus mode is not available for legacy SRT/RTMP ingest URLs; use the TUI or `--summary`.
+`e` also exports HAR in compare mode.
 
 ## Headless verdict
 
-`--summary` returns PASS only when the stream is LIVE, SHI is at least 85, no critical RFC errors or origin stalls were observed, the last HTTP status is 200/206, and at least one segment was fetched. Any failed condition returns FAIL and a non-zero exit code. The schema file is `schemas/summary.v1.json`; `schema_version` is currently `4`.
+`--summary` returns PASS only when the stream is LIVE, SHI is at least 85, no critical RFC errors or origin stalls were observed, the last HTTP status is 200/206, and at least one segment was fetched. Any failed condition returns FAIL and a non-zero exit code. The schema file is `schemas/summary.v1.json`; `schema_version` is currently `5`.
 
 ## FAQ
 
@@ -341,7 +339,7 @@ ffprobe inspects a single file or URL snapshot. streamtop polls live playlists, 
 Yes. Use `--summary --summary-format json --timeout N` for PASS/FAIL output, `--summary-format sarif` or `--export sarif:FILE` for Code Scanning, and `--budget-max-*` for threshold gates. Hermetic E2E tests live in `tests/e2e_verify.sh` and `tests/e2e_verify.ps1`.
 
 **Which streaming protocols are supported?**  
-HLS (including LL-HLS parts), MPEG-DASH, IPTV M3U lists, and WHEP HTTP egress. Legacy `srt://` and `rtmp://` ingest probes remain but are deprecated. Wire probes cover fMP4, MPEG-TS, ADTS, and elementary H.264/H.265 without invoking full decoders.
+HLS (including LL-HLS parts), MPEG-DASH, IPTV M3U lists, and WHEP HTTP egress. Wire probes cover fMP4, MPEG-TS, ADTS, and elementary H.264/H.265 without invoking full decoders.
 
 **Is it safe to expose Prometheus metrics?**  
 Bind to loopback by default. For remote scrape targets, set `--metrics-token` or `STREAMTOP_METRICS_TOKEN`; Bearer auth is required on non-loopback binds.

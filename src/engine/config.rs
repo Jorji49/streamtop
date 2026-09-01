@@ -30,7 +30,6 @@ pub struct ProfileSection {
     pub allow_insecure_webhooks: Option<bool>,
     pub otel_endpoint: Option<String>,
     pub allow_insecure_otel: Option<bool>,
-    pub allow_insecure_ingest: Option<bool>,
     pub tr101290: Option<bool>,
     pub probe_sei: Option<bool>,
     pub simulate_player: Option<bool>,
@@ -121,9 +120,6 @@ fn apply_section(session: &mut SessionOpts, section: &ProfileSection) {
     if let Some(v) = section.allow_insecure_otel {
         session.allow_insecure_otel = v;
     }
-    if let Some(v) = section.allow_insecure_ingest {
-        session.allow_insecure_ingest = v;
-    }
     if let Some(v) = section.tr101290 {
         session.tr101290 = v;
     }
@@ -159,7 +155,6 @@ mod tests {
             alert_on: "stall".into(),
             allow_insecure_webhooks: false,
             allow_insecure_otel: false,
-            allow_insecure_ingest: false,
             otel_endpoint: None,
             tr101290: false,
             probe_sei: false,
@@ -181,7 +176,6 @@ mod tests {
                 allow_insecure_webhooks: Some(true),
                 otel_endpoint: Some("http://127.0.0.1:4318".into()),
                 allow_insecure_otel: Some(true),
-                allow_insecure_ingest: Some(true),
                 tr101290: Some(true),
                 probe_sei: Some(true),
                 simulate_player: Some(true),
@@ -197,7 +191,6 @@ mod tests {
         assert_eq!(s.alert_on, "http_5xx");
         assert!(s.allow_insecure_webhooks);
         assert!(s.allow_insecure_otel);
-        assert!(s.allow_insecure_ingest);
         assert_eq!(s.otel_endpoint.as_deref(), Some("http://127.0.0.1:4318"));
         assert!(s.tr101290);
         assert!(s.probe_sei);

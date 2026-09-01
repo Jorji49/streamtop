@@ -2315,6 +2315,9 @@ impl ManifestPoller {
         let download_ms = started.elapsed().as_millis() as u64;
         let mut network = timing_from_reqwest_version(version, started, ttfb_ms);
         network.transfer_ms = Some(download_ms.saturating_sub(ttfb_ms));
+        if version == reqwest::Version::HTTP_3 {
+            crate::engine::transport::apply_quic_handshake(&mut network, ttfb_ms, false);
+        }
         self.apply_doh_timing(url, &mut network).await;
         self.send_event(StreamEvent::Transport(network.clone()));
         let mut wire = deep_wire_probe(&head);
@@ -2457,6 +2460,9 @@ impl ManifestPoller {
         };
         let mut network = timing_from_reqwest_version(version, started, ttfb_ms);
         network.transfer_ms = Some(download_ms.saturating_sub(ttfb_ms));
+        if version == reqwest::Version::HTTP_3 {
+            crate::engine::transport::apply_quic_handshake(&mut network, ttfb_ms, false);
+        }
         self.send_event(StreamEvent::Transport(network.clone()));
         let mut wire = deep_wire_probe(&buf);
         self.finalize_wire(&mut wire);

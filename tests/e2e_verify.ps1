@@ -172,29 +172,28 @@ try {
         }
     }
 
-    Log 'SRT ingest summary'
-    $Out = Run-Summary $SrtUrl @()
-    if ($Out) {
-        $Proto = Get-JsonField $Out 'ingest_stats.protocol'
-        $Rtt = Get-JsonField $Out 'ingest_stats.rtt_ms'
-        if ($Proto -eq 'srt' -and $Rtt -and $Rtt -ne 'null') {
-            Pass "SRT ingest_stats protocol=$Proto rtt_ms=$Rtt"
-        } else {
-            Fail "SRT ingest_stats missing (protocol=$Proto rtt=$Rtt)"
-        }
+    Log 'Legacy SRT URL rejection'
+    $ErrFile = Join-Path $Tmp 'srt_err.txt'
+    & $Streamtop $SrtUrl '--summary' 2>$ErrFile | Out-Null
+    if ($LASTEXITCODE -eq 0) {
+        Fail 'expected srt:// to fail'
+    } elseif (Select-String -Path $ErrFile -Pattern 'not supported' -Quiet) {
+        Pass 'srt:// rejected with clear error'
+    } else {
+        Fail 'srt:// error message missing'
+        Get-Content $ErrFile | Write-Host
     }
 
-    Log 'RTMP ingest summary'
-    $Out = Run-Summary $RtmpUrl @()
-    if ($Out) {
-        $Proto = Get-JsonField $Out 'ingest_stats.protocol'
-        $Conn = Get-JsonField $Out 'ingest_stats.connected'
-        $connOk = ($Conn -eq 'True' -or $Conn -eq 'true')
-        if ($Proto -eq 'rtmp' -and $connOk) {
-            Pass 'RTMP ingest connected'
-        } else {
-            Fail "RTMP ingest_stats (protocol=$Proto connected=$Conn)"
-        }
+    Log 'Legacy RTMP URL rejection'
+    $ErrFile = Join-Path $Tmp 'rtmp_err.txt'
+    & $Streamtop $RtmpUrl '--summary' 2>$ErrFile | Out-Null
+    if ($LASTEXITCODE -eq 0) {
+        Fail 'expected rtmp:// to fail'
+    } elseif (Select-String -Path $ErrFile -Pattern 'not supported' -Quiet) {
+        Pass 'rtmp:// rejected with clear error'
+    } else {
+        Fail 'rtmp:// error message missing'
+        Get-Content $ErrFile | Write-Host
     }
 
     Log 'LL-HLS fMP4 smoke'
@@ -213,7 +212,7 @@ try {
     if ($Out) {
         Pass 'DASH summary schema valid'
         $Sv = Get-JsonField $Out 'schema_version'
-        if ($Sv -eq '4') { Pass 'summary schema v4' } else { Fail "expected schema_version 4, got $Sv" }
+        if ($Sv -eq '5') { Pass 'summary schema v5' } else { Fail "expected schema_version 5, got $Sv" }
     }
 
     Log 'ClearKey cbcs staging smoke'

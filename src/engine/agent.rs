@@ -229,7 +229,6 @@ fn spawn_agent_stream(
             .unwrap_or_else(|| "stall,shi_below_70,http_5xx".into()),
         allow_insecure_webhooks: agent.allow_insecure_webhooks,
         allow_insecure_otel: agent.allow_insecure_otel,
-        allow_insecure_ingest: false,
         otel_endpoint: agent.otel_endpoint.clone(),
         tr101290: stream.tr101290,
         probe_sei: stream.probe_sei,

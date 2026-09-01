@@ -22,7 +22,7 @@ use crate::engine::quick_play::{launch_quick_play, QuickPlayResult};
 use crate::engine::ManifestPoller;
 use crate::models::{
     format_dvr_window, AbrHealth, AbrVariant, AdBreakInfo, CdnStats, ChannelEntry, DiagCategory,
-    DiagSeverity, DiagnosticFinding, DiagnosticSummary, DlDurHud, G2gMetrics, HealthReport, IngestStats,
+    DiagSeverity, DiagnosticFinding, DiagnosticSummary, DlDurHud, G2gMetrics, HealthReport,
     LatencyState, LogEntry, LogLevel, MultiCdnSkewReport, NetworkTiming, PlaylistMeta, RingBuffer,
     SegmentMetrics, SeiProbeResult, StreamEvent, StreamSnapshot, StreamStatus, SyntheticQoeSnapshot,
     Tr101290Report, VirtualBuffer, DIAGNOSTIC_DIR, EVENT_CHANNEL_CAPACITY, HISTORY_CAPACITY, LOG_CAPACITY,
@@ -87,8 +87,6 @@ pub struct SessionOpts {
     pub allow_insecure_webhooks: bool,
     /// Bypass OTLP destination checks (local tests only).
     pub allow_insecure_otel: bool,
-    /// Bypass ingest destination checks (local tests only).
-    pub allow_insecure_ingest: bool,
     /// OTLP trace export endpoint (e.g. http://127.0.0.1:4318).
     pub otel_endpoint: Option<String>,
     /// ETSI TR 101 290 P1/P2 MPEG-TS compliance (`--tr101290`).
@@ -134,7 +132,6 @@ pub struct App {
     pub tr101290: Tr101290Report,
     pub sei_probe: SeiProbeResult,
     pub synthetic_qoe: SyntheticQoeSnapshot,
-    pub ingest_stats: Option<IngestStats>,
     pub show_help: bool,
     /// Active regex filter for event log (`/` modal).
     pub log_filter: Option<String>,
@@ -232,7 +229,6 @@ impl App {
             tr101290: Tr101290Report::default(),
             sei_probe: SeiProbeResult::default(),
             synthetic_qoe: SyntheticQoeSnapshot::default(),
-            ingest_stats: None,
             show_help: false,
             log_filter: None,
             log_filter_regex: None,
@@ -273,14 +269,6 @@ impl App {
         self.rx = rx;
         self.source_url.clone_from(&url);
         self.active_url.clone_from(&url);
-
-        if crate::engine::ingest_probe::is_ingest_url(&url) {
-            let allow_insecure = self.session.allow_insecure_ingest;
-            self.poller = Some(tokio::spawn(async move {
-                crate::engine::ingest_probe::run_ingest_poller(url, allow_insecure, tx).await;
-            }));
-            return Ok(());
-        }
 
         let mut poller = ManifestPoller::new(
             url.as_str(),
@@ -854,7 +842,6 @@ impl App {
             StreamEvent::Tr101290(r) => self.tr101290 = r,
             StreamEvent::SeiProbe(s) => self.sei_probe = s,
             StreamEvent::SyntheticQoe(q) => self.synthetic_qoe = q,
-            StreamEvent::Ingest(s) => self.ingest_stats = Some(s),
             StreamEvent::Log {
                 level,
                 category,
@@ -1135,6 +1122,80 @@ pub fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<Stdout>>) {
     let _ = disable_raw_mode();
     let _ = execute!(terminal.backend_mut(), LeaveAlternateScreen);
     let _ = terminal.show_cursor();
+}
+
+#[cfg(test)]
+impl App {
+    pub(crate) fn minimal_for_render_cache_test() -> Self {
+        let (tx, rx) = mpsc::channel(EVENT_CHANNEL_CAPACITY);
+        Self {
+            source_url: "https://example.com/live.m3u8".into(),
+            active_url: "https://example.com/live.m3u8".into(),
+            channel_name: None,
+            status: StreamStatus::live("test"),
+            latency: LatencyState::Unknown,
+            playlist: None,
+            variants: Vec::new(),
+            last_segment: None,
+            dl_dur_hud: DlDurHud::default(),
+            health: HealthReport::perfect(),
+            cdn: CdnStats::default(),
+            abr_health: AbrHealth::default(),
+            active_ad: None,
+            buffer: VirtualBuffer::default(),
+            g2g: G2gMetrics::default(),
+            probe_mode: false,
+            findings: Vec::new(),
+            latency_history: RingBuffer::new(HISTORY_CAPACITY),
+            ttfb_history: RingBuffer::new(HISTORY_CAPACITY),
+            bitrate_history: RingBuffer::new(HISTORY_CAPACITY),
+            transfer_history: RingBuffer::new(HISTORY_CAPACITY),
+            log: Vec::new(),
+            log_scroll: 0,
+            should_quit: false,
+            mode: UiMode::Diagnostic,
+            overlay: false,
+            diagnostic_panel: DiagnosticPanel::None,
+            tr101290: Tr101290Report::default(),
+            sei_probe: SeiProbeResult::default(),
+            synthetic_qoe: SyntheticQoeSnapshot::default(),
+            show_help: false,
+            log_filter: None,
+            log_filter_regex: None,
+            log_filter_edit: false,
+            log_filter_draft: String::new(),
+            manifest_history: Vec::new(),
+            http_log: Vec::new(),
+            toast: None,
+            picker: None,
+            session: SessionOpts {
+                headers: vec![],
+                user_agent: None,
+                interval_ms: None,
+                probe_headers: false,
+                probe_drm: false,
+                clearkey: None,
+                export_incident: None,
+                webhook_url: None,
+                alert_on: String::new(),
+                allow_insecure_webhooks: false,
+                allow_insecure_otel: false,
+                otel_endpoint: None,
+                tr101290: false,
+                probe_sei: false,
+                simulate_player: false,
+                throttle_kbps: None,
+                simulated_rtt_ms: None,
+                doh_provider: None,
+            },
+            render_cache: UiRenderCache::default(),
+            transport: NetworkTiming::default(),
+            multi_cdn: None,
+            rx,
+            tx,
+            poller: None,
+        }
+    }
 }
 
 #[cfg(test)]

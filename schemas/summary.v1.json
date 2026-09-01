@@ -136,23 +136,6 @@
         "nal_units_scanned": { "type": "integer", "minimum": 0 }
       }
     },
-    "ingest_stats": {
-      "type": ["object", "null"],
-      "additionalProperties": false,
-      "required": ["protocol"],
-      "properties": {
-        "protocol": { "type": "string" },
-        "rtt_ms": { "type": ["integer", "null"], "minimum": 0 },
-        "packet_loss_pct": { "type": ["number", "null"] },
-        "nak_count": { "type": ["integer", "null"], "minimum": 0 },
-        "flight_buffer_depth": { "type": ["integer", "null"], "minimum": 0 },
-        "bandwidth_mbps": { "type": ["number", "null"] },
-        "video_codec": { "type": ["string", "null"] },
-        "audio_codec": { "type": ["string", "null"] },
-        "keyframe_interval_ms": { "type": ["integer", "null"], "minimum": 0 },
-        "connected": { "type": ["boolean", "null"] }
-      }
-    },
     "spec_violations": {
       "type": ["array", "null"],
       "items": {

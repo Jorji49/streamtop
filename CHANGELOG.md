@@ -13,10 +13,10 @@
 - Unified export CLI: `--export FORMAT[:FILE]` for `report-html`, `report-json`, `curl`, `har`, `incident`, `grafana`, `sarif` (repeatable)
 - Stream budget mode: `--budget-max-rtf`, `--budget-max-ttfb`, `--budget-max-cc-errors`, `--budget-max-drift`, `--budget-duration`
 - Summary JSON v5 optional fields: `http_version`, `transfer_ms`, `quic_handshake_ms`, `multi_cdn_skew`
-- HTTP/2 ALPN transport telemetry via reqwest; `NetworkTiming` adds `transfer_ms`, `http_version`, QUIC fields
+- HTTP/3 (QUIC) ALPN via reqwest `http3` feature; handshake timing on negotiated h3 responses
 - Prometheus: `streamtop_http_version{version}`, `streamtop_quic_handshake_seconds`, `streamtop_quic_stream_resets_total`
 - Multi-CDN skew matrix: `--multi-cdn URL1,URL2,...`, `--max-cdn-skew-ms`, reason code `ERR_CDN_SYNC_SKEW`
-- Zero-alloc TUI header path: `UiRenderCache` rebuilt on events, not draw ticks
+- Zero-heap TUI draw path: `UiRenderCache` stores pre-built `Paragraph` widgets for header and segment panels
 - Middlebox heuristics wired: `ERR_DPI_TCP_RESET`, redirect cycle/limit via `ERR_HTTP_REDIRECT_LOOP`
 
 ### Changed
@@ -27,14 +27,14 @@
 - ABR ladder alignment linter (`ERR_ABR_VARIANT_MISALIGNMENT`)
 - Summary JSON schema version 5 (was v4 in pre-release notes)
 
+### Removed
+
+- Raw `srt://` and `rtmp://` ingest probes and `ingest_stats` summary field; use WHEP HTTP endpoints
+- Experimental active `--anti-dpi` raw socket stub; `middlebox.rs` retained as passive heuristics only
+
 ### Deprecated
 
 - Legacy export flags: `--export-curl`, `--export-har`, `--export-report`, `--export-grafana`, `--export-incident`
-- Raw `srt://` and `rtmp://` ingest probes (warning logged; WHEP preferred)
-
-### Removed
-
-- Experimental active `--anti-dpi` raw socket stub; `middlebox.rs` retained as passive heuristics only
 
 ## [1.3.2] - 2026-08-30
 

@@ -65,7 +65,7 @@ streamtop "https://origin.example/whep/feed"
 ## Deprecated
 
 - `--export-curl`, `--export-har`, `--export-report`, `--export-grafana`, `--export-incident` -> use `--export`
-- `srt://` / `rtmp://` ingest URLs -> prefer WHEP
+- `srt://` / `rtmp://` URLs are rejected at startup; use WHEP HTTP endpoints
 
 ## Removed
 

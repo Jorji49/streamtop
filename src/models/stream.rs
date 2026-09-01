@@ -1569,29 +1569,6 @@ pub struct SeiProbeResult {
     pub nal_units_scanned: u32,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct IngestStats {
-    pub protocol: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub rtt_ms: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub packet_loss_pct: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub nak_count: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub flight_buffer_depth: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub bandwidth_mbps: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub video_codec: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub audio_codec: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub keyframe_interval_ms: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub connected: Option<bool>,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HealthReport {
     pub score: u8,
@@ -1638,7 +1615,6 @@ pub enum StreamEvent {
     Tr101290(Tr101290Report),
     SyntheticQoe(SyntheticQoeSnapshot),
     SeiProbe(SeiProbeResult),
-    Ingest(IngestStats),
     Log {
         level: LogLevel,
         category: DiagCategory,

@@ -5,7 +5,7 @@ use ratatui::widgets::{Block, BorderType, Borders, Cell, Clear, Paragraph, Row, 
 use ratatui::Frame;
 
 use crate::models::{
-    DiagCategory, DlToDurState, LatencyState, LogLevel,
+    DiagCategory, LatencyState, LogLevel,
 };
 use crate::ui::app::App;
 
@@ -105,19 +105,8 @@ pub fn draw_regex_modal(frame: &mut Frame, area: Rect, app: &App) {
     );
 }
 
-fn dl_dur_style(state: DlToDurState) -> Style {
-    match state {
-        DlToDurState::Normal => Style::default().fg(Color::LightGreen),
-        DlToDurState::Elevated => Style::default().fg(Color::Yellow),
-        DlToDurState::Draining => Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
-    }
-}
-
 fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
-    frame.render_widget(
-        Paragraph::new(app.render_cache.header_lines.clone()).block(rounded(" Status ")),
-        area,
-    );
+    frame.render_widget(&app.render_cache.header, area);
 }
 
 fn draw_left(frame: &mut Frame, app: &App, area: Rect) {
@@ -131,99 +120,7 @@ fn draw_left(frame: &mut Frame, app: &App, area: Rect) {
 }
 
 fn draw_segment_panel(frame: &mut Frame, app: &App, area: Rect) {
-    let lines = app.last_segment.as_ref().map_or_else(
-        || vec![Line::from(" No segment sample yet…")],
-        |seg| {
-            let probe = if seg.probed { "range-probe" } else { "full" };
-            let size_line = if seg.probed {
-                format!(
-                    " Declared size  : {:.1} KB (not fully downloaded)",
-                    seg.size_bytes as f64 / 1024.0
-                )
-            } else {
-                format!(
-                    " Duration/Size  : {:.3}s · {:.1} KB",
-                    seg.duration_secs,
-                    seg.size_bytes as f64 / 1024.0
-                )
-            };
-            let net = seg.network.as_ref().map_or_else(
-                || format!("TTFB: {}ms", seg.ttfb_ms),
-                super::super::models::stream::NetworkTiming::display_line,
-            );
-            let mut lines = vec![
-                Line::from(format!(" Media Sequence : {}", seg.media_sequence)),
-                Line::from(size_line),
-                Line::from(format!(
-                    " TTFB / Transfer: {} ms / {} ms ({probe})",
-                    seg.ttfb_ms, seg.download_ms
-                )),
-            ];
-            if app.dl_dur_hud.is_visible() {
-                lines.push(Line::from(vec![
-                    Span::raw(" DL/Dur         : "),
-                    Span::styled(app.dl_dur_hud.as_str(), dl_dur_style(app.dl_dur_hud.state)),
-                ]));
-            }
-            lines.push(Line::from(Span::styled(
-                format!(" {net}"),
-                Style::default().fg(Color::Cyan),
-            )));
-            lines.push(Line::from(format!(
-                " Rate / Type    : {} · {}",
-                seg.rate_label(),
-                seg.container.as_str()
-            )));
-            lines.push(Line::from(format!(" CDN            : {}", seg.cdn.badge())));
-            if let Some(wire) = &seg.wire {
-                if let Some(res) = wire.resolution_label() {
-                    lines.push(Line::from(format!(
-                        " Wire           : {res} · {} fps · {}",
-                        wire.frame_rate
-                            .map_or_else(|| "-".into(), |f| format!("{f:.2}")),
-                        wire.codec.as_deref().unwrap_or("-")
-                    )));
-                } else if wire.codec.is_some() {
-                    lines.push(Line::from(format!(
-                        " Wire           : {}",
-                        wire.codec.as_deref().unwrap_or("-")
-                    )));
-                }
-                if let Some(gop) = wire.gop_label() {
-                    lines.push(Line::from(format!(" GOP            : {gop}")));
-                }
-                if let Some(audio) = wire.audio_label() {
-                    lines.push(Line::from(format!(" Audio          : {audio}")));
-                }
-            }
-            let sei = &app.sei_probe;
-            if sei.cea608_present || sei.cea708_present || sei.hdr10_present || sei.hlg_present {
-                let mut badges = Vec::new();
-                if sei.cea608_present {
-                    badges.push("CEA-608");
-                }
-                if sei.cea708_present {
-                    badges.push("CEA-708");
-                }
-                if sei.hdr10_present {
-                    badges.push("HDR10");
-                }
-                if sei.hlg_present {
-                    badges.push("HLG");
-                }
-                lines.push(Line::from(format!(
-                    " SEI/Captions   : {}",
-                    badges.join(" · ")
-                )));
-            }
-            lines
-        },
-    );
-
-    frame.render_widget(
-        Paragraph::new(lines).block(rounded(" Last Segment / Edge ")),
-        area,
-    );
+    frame.render_widget(&app.render_cache.segment, area);
 }
 
 fn draw_abr_panel(frame: &mut Frame, app: &App, area: Rect) {

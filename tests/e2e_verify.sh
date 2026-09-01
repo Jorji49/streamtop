@@ -165,29 +165,25 @@ if [[ -f "${OUT:-}" ]]; then
   fi
 fi
 
-# --- 4. Ingest routing ---
-log "SRT ingest summary"
-OUT=$(run_summary "$SRT_URL") || true
-if [[ -f "${OUT:-}" ]]; then
-  PROTO=$(json_get ".ingest_stats.protocol" "$OUT")
-  RTT=$(json_get ".ingest_stats.rtt_ms" "$OUT")
-  if [[ "$PROTO" == "srt" ]] && [[ "$RTT" != "null" && -n "$RTT" ]]; then
-    pass "SRT ingest_stats protocol=$PROTO rtt_ms=$RTT"
-  else
-    fail "SRT ingest_stats missing (protocol=$PROTO rtt=$RTT)"
-  fi
+# --- 4. Legacy ingest URLs rejected ---
+log "Legacy SRT URL rejection"
+if "$STREAMTOP" "$SRT_URL" --summary 2>"$TMP/srt_err.txt"; then
+  fail "expected srt:// to fail"
+elif grep -qi "not supported" "$TMP/srt_err.txt"; then
+  pass "srt:// rejected with clear error"
+else
+  fail "srt:// error message missing"
+  cat "$TMP/srt_err.txt" >&2 || true
 fi
 
-log "RTMP ingest summary"
-OUT=$(run_summary "$RTMP_URL") || true
-if [[ -f "${OUT:-}" ]]; then
-  PROTO=$(json_get ".ingest_stats.protocol" "$OUT")
-  CONN=$(json_get ".ingest_stats.connected" "$OUT")
-  if [[ "$PROTO" == "rtmp" ]] && [[ "$CONN" == "True" || "$CONN" == "true" ]]; then
-    pass "RTMP ingest connected"
-  else
-    fail "RTMP ingest_stats (protocol=$PROTO connected=$CONN)"
-  fi
+log "Legacy RTMP URL rejection"
+if "$STREAMTOP" "$RTMP_URL" --summary 2>"$TMP/rtmp_err.txt"; then
+  fail "expected rtmp:// to fail"
+elif grep -qi "not supported" "$TMP/rtmp_err.txt"; then
+  pass "rtmp:// rejected with clear error"
+else
+  fail "rtmp:// error message missing"
+  cat "$TMP/rtmp_err.txt" >&2 || true
 fi
 
 # --- 5. LL-HLS + DASH smoke (schema only) ---
@@ -207,10 +203,10 @@ OUT=$(run_summary "$DASH_URL" --probe-headers --probe-drm) || true
 if [[ -f "${OUT:-}" ]]; then
   pass "DASH summary schema valid"
   SV=$(json_get ".schema_version" "$OUT")
-  if [[ "$SV" == "4" ]]; then
-    pass "summary schema v4"
+  if [[ "$SV" == "5" ]]; then
+    pass "summary schema v5"
   else
-    fail "expected schema_version 4, got $SV"
+    fail "expected schema_version 5, got $SV"
   fi
 fi
 
