@@ -28,7 +28,7 @@ use streamtop::engine::summary::{run_summary, SummaryFormat};
 use streamtop::engine::vod::run_vod;
 use streamtop::models::ChannelEntry;
 use streamtop::ui::app::{restore_terminal_global, SessionOpts};
-use streamtop::ui::{App, CompareApp};
+use streamtop::ui::{App, CompareApp, MultiCdnApp};
 
 #[derive(Debug, Clone, Copy, clap::ValueEnum, Default)]
 enum SummaryFormatArg {
@@ -57,7 +57,7 @@ impl From<SummaryFormatArg> for SummaryFormat {
 #[allow(clippy::struct_excessive_bools)] // clap CLI flags
 struct Cli {
     /// Stream URL, local playlist/MPD, or channel lineup (M3U / JSON / YAML)
-    #[arg(required_unless_present_any = ["compare", "export_grafana", "export", "vod", "agent"])]
+    #[arg(required_unless_present_any = ["compare", "export_grafana", "export", "vod", "agent", "multi_cdn"])]
     url: Option<String>,
 
     /// Unified export: `report-html[:PATH]`, `report-json`, `curl`, `har[:PATH]`, `incident[:PATH]`, `grafana`, `sarif[:PATH]`
@@ -241,6 +241,18 @@ struct Cli {
     /// DNS-over-HTTPS provider for resolution timing: cloudflare, google, or custom URL
     #[arg(long = "doh-provider", value_name = "PROVIDER")]
     doh_provider: Option<String>,
+
+    /// Concurrent multi-CDN edge skew analysis (comma-separated URLs or label=URL pairs)
+    #[arg(long = "multi-cdn", value_name = "URL1,URL2,...")]
+    multi_cdn: Option<String>,
+
+    /// Max live-edge skew across CDN edges before `ERR_CDN_SYNC_SKEW` (default 3000ms)
+    #[arg(long = "max-cdn-skew-ms", value_name = "MS", default_value_t = 3000)]
+    max_cdn_skew_ms: i64,
+
+    /// Prefer HTTP/2 ALPN when available (reqwest default stack)
+    #[arg(long = "prefer-http2")]
+    prefer_http2: bool,
 }
 
 /// Path argument for clap.
@@ -439,6 +451,35 @@ async fn main() -> Result<ExitCode> {
             metrics_token.as_deref(),
         )
         .wrap_err("metrics bind security check failed")?;
+    }
+
+    if let Some(raw) = &cli.multi_cdn {
+        let targets = streamtop::engine::multi_cdn::parse_multi_cdn(raw)?;
+        if cli.summary {
+            let duration = Duration::from_secs(cli.timeout_secs.max(8));
+            let (report, findings) = streamtop::engine::multi_cdn::analyze_multi_cdn(
+                &targets,
+                &session,
+                duration,
+                cli.max_cdn_skew_ms,
+            )
+            .await?;
+            println!("{}", serde_json::to_string_pretty(&report)?);
+            if !findings.is_empty() {
+                eprintln!("findings: {}", findings.len());
+            }
+            restore_terminal_global();
+            return Ok(if report.max_skew_ms > cli.max_cdn_skew_ms {
+                ExitCode::from(1)
+            } else {
+                ExitCode::SUCCESS
+            });
+        }
+        MultiCdnApp::new(targets, session, cli.max_cdn_skew_ms)
+            .run()
+            .await?;
+        restore_terminal_global();
+        return Ok(ExitCode::SUCCESS);
     }
 
     if let Some(urls) = &cli.compare {

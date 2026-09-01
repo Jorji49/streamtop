@@ -24,7 +24,7 @@ use crate::ui::app::SessionOpts;
 
 /// Stable machine-readable schema id for `--summary --summary-format json`.
 pub const SUMMARY_SCHEMA: &str = "streamtop.summary.v1";
-pub const SUMMARY_SCHEMA_VERSION: u32 = 4;
+pub const SUMMARY_SCHEMA_VERSION: u32 = 5;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SummaryFormat {
@@ -582,7 +582,7 @@ mod tests {
         let schema: serde_json::Value =
             serde_json::from_str(include_str!("../../schemas/summary.v1.json")).unwrap();
         assert_eq!(schema["title"], SUMMARY_SCHEMA);
-        assert_eq!(schema["properties"]["schema_version"]["const"], 4);
+        assert_eq!(schema["properties"]["schema_version"]["const"], 5);
 
         let health = HealthReport::perfect();
         let payload = build_summary_json(

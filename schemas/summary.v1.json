@@ -24,7 +24,7 @@
   ],
   "properties": {
     "schema": { "const": "streamtop.summary.v1" },
-    "schema_version": { "const": 4 },
+    "schema_version": { "const": 5 },
     "verdict": { "enum": ["PASS", "FAIL"] },
     "ok": { "type": "boolean" },
     "health_score": { "type": "integer", "minimum": 0, "maximum": 100 },
@@ -168,7 +168,31 @@
       }
     },
     "doh_ms": { "type": ["integer", "null"], "minimum": 0 },
-    "part_dl_duration_ratio": { "type": ["number", "null"], "minimum": 0 }
+    "part_dl_duration_ratio": { "type": ["number", "null"], "minimum": 0 },
+    "http_version": { "type": ["string", "null"], "enum": ["h1.1", "h2", "h3", null] },
+    "transfer_ms": { "type": ["integer", "null"], "minimum": 0 },
+    "quic_handshake_ms": { "type": ["integer", "null"], "minimum": 0 },
+    "multi_cdn_skew": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "properties": {
+        "max_skew_ms": { "type": "integer" },
+        "propagation_latency_ms": { "type": ["integer", "null"] },
+        "edges": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "label": { "type": "string" },
+              "url": { "type": "string" },
+              "media_sequence": { "type": ["integer", "null"] },
+              "ttfb_ms": { "type": ["integer", "null"] }
+            }
+          }
+        }
+      }
+    }
   },
   "additionalProperties": false
 }

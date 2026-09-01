@@ -1,5 +1,41 @@
 # Changelog
 
+## [1.4.0] - 2026-09-01
+
+### Added
+
+- DNS-over-HTTPS resolver (`--doh-provider cloudflare|google|<URL>`): pure-Rust JSON API lookup, `doh_ms` wire timing, Prometheus `streamtop_dns_doh_duration_seconds`, reason code `ERR_DOH_RESOLUTION_FAILED`
+- WHEP signaling probe: HTTP POST SDP offer, parse 200/201 answer (TTFB, codecs, ICE candidates, `a=msid` stream IDs); no media decode
+- SARIF v2.1.0 export: `--summary-format sarif` and `--export sarif[:FILE]` with `ruleId` mapped to `DiagnosticReasonCode`
+- GitHub Actions step summary: `--github-step-summary FILE` or auto-write via `GITHUB_STEP_SUMMARY` on `--summary` and budget runs (SHI, RTF, Part RTF, TR 101 290 P1/P2, ABR ladder, budget verdict)
+- LL-HLS part telemetry: `#EXT-X-PART` / `PRELOAD-HINT` part TTFB, download ms, Part RTF; Prometheus `streamtop_part_dl_duration_ratio`; `ERR_PART_RTF_STALL` on stall
+- In-memory AES-128-CBC probe decryption for `#EXT-X-KEY` segments (TR 101 290 and SCTE-35 wire analysis without H.264/AAC decoders)
+- Unified export CLI: `--export FORMAT[:FILE]` for `report-html`, `report-json`, `curl`, `har`, `incident`, `grafana`, `sarif` (repeatable)
+- Stream budget mode: `--budget-max-rtf`, `--budget-max-ttfb`, `--budget-max-cc-errors`, `--budget-max-drift`, `--budget-duration`
+- Summary JSON v5 optional fields: `http_version`, `transfer_ms`, `quic_handshake_ms`, `multi_cdn_skew`
+- HTTP/2 ALPN transport telemetry via reqwest; `NetworkTiming` adds `transfer_ms`, `http_version`, QUIC fields
+- Prometheus: `streamtop_http_version{version}`, `streamtop_quic_handshake_seconds`, `streamtop_quic_stream_resets_total`
+- Multi-CDN skew matrix: `--multi-cdn URL1,URL2,...`, `--max-cdn-skew-ms`, reason code `ERR_CDN_SYNC_SKEW`
+- Zero-alloc TUI header path: `UiRenderCache` rebuilt on events, not draw ticks
+- Middlebox heuristics wired: `ERR_DPI_TCP_RESET`, redirect cycle/limit via `ERR_HTTP_REDIRECT_LOOP`
+
+### Changed
+
+- Export flags consolidated under `--export`; legacy `--export-*` aliases hidden and emit deprecation warnings
+- Bounded stream reader hardening for infinite chunked MPEG-TS responses (`PROBE_READ_TIMEOUT_SECS`)
+- HTTP redirect policy detects cycles and hop limits; auth headers preserved on valid hops
+- ABR ladder alignment linter (`ERR_ABR_VARIANT_MISALIGNMENT`)
+- Summary JSON schema version 5 (was v4 in pre-release notes)
+
+### Deprecated
+
+- Legacy export flags: `--export-curl`, `--export-har`, `--export-report`, `--export-grafana`, `--export-incident`
+- Raw `srt://` and `rtmp://` ingest probes (warning logged; WHEP preferred)
+
+### Removed
+
+- Experimental active `--anti-dpi` raw socket stub; `middlebox.rs` retained as passive heuristics only
+
 ## [1.3.2] - 2026-08-30
 
 - Real-Time Factor (RTF): download-to-duration ratio on each segment (`dl_to_dur_ratio`)

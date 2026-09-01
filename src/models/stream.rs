@@ -437,6 +437,54 @@ impl WireProbeInfo {
     }
 }
 
+/// Negotiated HTTP version (ALPN / wire).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum HttpVersion {
+    #[default]
+    H1,
+    #[serde(rename = "h2")]
+    H2,
+    #[serde(rename = "h3")]
+    H3,
+}
+
+impl HttpVersion {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::H1 => "h1.1",
+            Self::H2 => "h2",
+            Self::H3 => "h3",
+        }
+    }
+
+    pub fn as_metric_label(self) -> &'static str {
+        self.as_str()
+    }
+
+    pub fn from_reqwest(version: reqwest::Version) -> Self {
+        match version {
+            reqwest::Version::HTTP_2 => Self::H2,
+            reqwest::Version::HTTP_3 => Self::H3,
+            _ => Self::H1,
+        }
+    }
+}
+
+/// QUIC-specific transport telemetry when HTTP/3 is active.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default)]
+pub struct QuicTelemetry {
+    /// QUIC handshake duration (0-RTT or 1-RTT).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub handshake_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub used_0rtt: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stream_resets: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub packet_loss_pct: Option<f32>,
+}
+
 /// Socket-level timing breakdown for a single HTTP fetch.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[allow(clippy::struct_field_names)] // OpenMetrics: dns_ms, tcp_ms, tls_ms, ttfb_ms
@@ -449,24 +497,73 @@ pub struct NetworkTiming {
     pub tls_ms: Option<u64>,
     /// Time until first response header byte.
     pub ttfb_ms: u64,
+    /// Response body transfer after TTFB.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub transfer_ms: Option<u64>,
     /// DoH JSON lookup latency when `--doh-provider` is active.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub doh_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub http_version: Option<HttpVersion>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub quic: Option<QuicTelemetry>,
 }
 
 impl NetworkTiming {
     pub fn display_line(&self) -> String {
         let fmt = |v: Option<u64>| v.map_or_else(|| "-".into(), |ms| format!("{ms}ms"));
+        let ver = self
+            .http_version
+            .map_or_else(|| "-".into(), |v| v.as_str().to_string());
+        let xfer = self
+            .transfer_ms
+            .map_or_else(|| "-".into(), |ms| format!("{ms}ms"));
         format!(
-            "DNS: {} | TCP: {} | TLS: {} | TTFB: {}ms{}",
+            "DNS: {} | TCP: {} | TLS: {} | TTFB: {}ms | Xfer: {} | HTTP: {ver}{}",
             fmt(self.dns_ms),
             fmt(self.tcp_ms),
             fmt(self.tls_ms),
             self.ttfb_ms,
+            xfer,
             self.doh_ms
                 .map_or_else(String::new, |ms| format!(" | DoH: {ms}ms"))
         )
     }
+
+    #[must_use]
+    pub fn with_transfer(mut self, download_ms: u64) -> Self {
+        self.transfer_ms = Some(download_ms.saturating_sub(self.ttfb_ms));
+        self
+    }
+}
+
+/// Multi-CDN edge snapshot for skew matrix.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct MultiCdnEdgeSnapshot {
+    pub label: String,
+    pub url: String,
+    pub media_sequence: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pdt_offset_ms: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub segment_delay_ms: Option<u64>,
+    pub cdn_hits: u64,
+    pub cdn_misses: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ttfb_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub http_version: Option<HttpVersion>,
+}
+
+/// Aggregated multi-CDN skew report.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct MultiCdnSkewReport {
+    pub edges: Vec<MultiCdnEdgeSnapshot>,
+    pub max_skew_ms: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub propagation_latency_ms: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub manifest_desync: Option<String>,
 }
 
 /// Parse DASH/HLS frame-rate strings (`25`, `30`, `30000/1001`).
@@ -1548,6 +1645,10 @@ pub enum StreamEvent {
         message: String,
     },
     Error(String),
+    /// Multi-CDN skew matrix update (`--multi-cdn`).
+    MultiCdnSkew(MultiCdnSkewReport),
+    /// Active transport / ALPN snapshot for TUI status bar.
+    Transport(NetworkTiming),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

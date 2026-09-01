@@ -41,7 +41,10 @@ use crate::engine::linter::{
     lint_variant_alignment, ll_hls_probe_range, next_blocking_targets, parse_cdn_headers, scan_drm_keys, scan_ll_hls,
     scan_media_renditions, SpecLinter,
 };
+use crate::engine::middlebox::classify_transport_failure;
 use crate::engine::metrics::{update_metrics, MetricsSnapshot};
+use crate::engine::redirect::RedirectLoopError;
+use crate::engine::transport::timing_from_reqwest_version;
 use crate::engine::network_trace::{
     parse_header_pairs, reqwest_headers_chunked, timing_from_ttfb, traced_get,
 };
@@ -1139,6 +1142,34 @@ impl ManifestPoller {
         }
     }
 
+    fn emit_transport_failure(&self, err: &reqwest::Error) {
+        if err.is_redirect() {
+            let reason = if err.to_string().contains("cycle") {
+                RedirectLoopError::CycleDetected
+            } else {
+                RedirectLoopError::LimitExceeded
+            };
+            self.send_event(StreamEvent::Finding(DiagnosticFinding::with_reason_code(
+                DiagCategory::Rfc,
+                DiagSeverity::Error,
+                "redirect_loop",
+                reason.message(),
+                RedirectLoopError::reason_code(),
+            )));
+        }
+        let io_error = err.is_connect() || err.is_request() || err.is_timeout();
+        let hints = classify_transport_failure(true, 0, io_error);
+        if hints.tcp_reset_suspected {
+            self.send_event(StreamEvent::Finding(DiagnosticFinding::with_reason_code(
+                DiagCategory::Rfc,
+                DiagSeverity::Error,
+                "dpi_tcp_reset",
+                "TCP reset suspected after TLS ClientHello (passive heuristic)",
+                DiagnosticReasonCode::ErrDpiTcpReset,
+            )));
+        }
+    }
+
     fn emit_log(&self, level: LogLevel, category: DiagCategory, message: impl Into<String>) {
         self.send_event(StreamEvent::Log {
             level,
@@ -2225,13 +2256,14 @@ impl ManifestPoller {
                 container,
                 probed: false,
                 http_status: code,
-                network: resp.timing,
+                network: resp.timing.clone(),
                 wire,
                 chunked_transfer: resp.chunked_transfer,
                 segment_url: url.to_string(),
                 probe_bytes: probe_slice(&head),
             };
             self.apply_doh_timing(url, &mut fetch.network).await;
+            self.send_event(StreamEvent::Transport(fetch.network.clone()));
             Ok(fetch)
         } else {
             let mut fetch = self.download_segment_reqwest(url).await?;
@@ -2242,12 +2274,14 @@ impl ManifestPoller {
 
     async fn download_segment_reqwest(&self, url: &str) -> Result<SegmentFetch> {
         let started = Instant::now();
-        let response = self
-            .client
-            .get(url)
-            .send()
-            .await
-            .wrap_err_with(|| format!("segment GET failed: {url}"))?;
+        let response = match self.client.get(url).send().await {
+            Ok(r) => r,
+            Err(e) => {
+                self.emit_transport_failure(&e);
+                return Err(e).wrap_err_with(|| format!("segment GET failed: {url}"));
+            }
+        };
+        let version = response.version();
         let status = response.status();
         let code = status.as_u16();
         if !status.is_success() {
@@ -2279,6 +2313,10 @@ impl ManifestPoller {
         }
 
         let download_ms = started.elapsed().as_millis() as u64;
+        let mut network = timing_from_reqwest_version(version, started, ttfb_ms);
+        network.transfer_ms = Some(download_ms.saturating_sub(ttfb_ms));
+        self.apply_doh_timing(url, &mut network).await;
+        self.send_event(StreamEvent::Transport(network.clone()));
         let mut wire = deep_wire_probe(&head);
         self.finalize_wire(&mut wire);
         let container = if wire.container == ContainerKind::Unknown {
@@ -2295,7 +2333,7 @@ impl ManifestPoller {
             container,
             probed: false,
             http_status: code,
-            network: timing_from_ttfb(ttfb_ms),
+            network,
             wire,
             chunked_transfer: chunked,
             segment_url: url.to_string(),
@@ -2349,13 +2387,14 @@ impl ManifestPoller {
                 container,
                 probed: true,
                 http_status: code,
-                network: resp.timing,
+                network: resp.timing.clone(),
                 wire,
                 chunked_transfer: resp.chunked_transfer,
                 segment_url: url.to_string(),
                 probe_bytes: probe_slice(&resp.body),
             };
             self.apply_doh_timing(url, &mut fetch.network).await;
+            self.send_event(StreamEvent::Transport(fetch.network.clone()));
             Ok(fetch)
         } else {
             let mut fetch = self.probe_segment_reqwest(url).await?;
@@ -2367,13 +2406,14 @@ impl ManifestPoller {
     async fn probe_segment_reqwest(&self, url: &str) -> Result<SegmentFetch> {
         let started = Instant::now();
         let range = format!("bytes=0-{DEEP_WIRE_PROBE_BYTES}");
-        let response = self
-            .client
-            .get(url)
-            .header(RANGE, range)
-            .send()
-            .await
-            .wrap_err_with(|| format!("range probe failed: {url}"))?;
+        let response = match self.client.get(url).header(RANGE, range).send().await {
+            Ok(r) => r,
+            Err(e) => {
+                self.emit_transport_failure(&e);
+                return Err(e).wrap_err_with(|| format!("range probe failed: {url}"));
+            }
+        };
+        let version = response.version();
 
         let status = response.status();
         let code = status.as_u16();
@@ -2415,6 +2455,9 @@ impl ManifestPoller {
         } else {
             transferred
         };
+        let mut network = timing_from_reqwest_version(version, started, ttfb_ms);
+        network.transfer_ms = Some(download_ms.saturating_sub(ttfb_ms));
+        self.send_event(StreamEvent::Transport(network.clone()));
         let mut wire = deep_wire_probe(&buf);
         self.finalize_wire(&mut wire);
         let container = if wire.container == ContainerKind::Unknown {
@@ -2431,7 +2474,7 @@ impl ManifestPoller {
             container,
             probed: true,
             http_status: code,
-            network: timing_from_ttfb(ttfb_ms),
+            network,
             wire,
             chunked_transfer: chunked,
             segment_url: url.to_string(),
@@ -2552,7 +2595,7 @@ fn build_http_client_with_timeouts(
         .user_agent(user_agent.unwrap_or(DEFAULT_UA))
         .gzip(true)
         .brotli(true)
-        .redirect(reqwest::redirect::Policy::limited(10))
+        .redirect(crate::engine::redirect::redirect_policy())
         .timeout(Duration::from_secs(timeout_secs))
         .connect_timeout(Duration::from_secs(connect_secs))
         .pool_idle_timeout(Duration::from_secs(90));

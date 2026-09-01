@@ -23,12 +23,13 @@ use crate::engine::ManifestPoller;
 use crate::models::{
     format_dvr_window, AbrHealth, AbrVariant, AdBreakInfo, CdnStats, ChannelEntry, DiagCategory,
     DiagSeverity, DiagnosticFinding, DiagnosticSummary, DlDurHud, G2gMetrics, HealthReport, IngestStats,
-    LatencyState, LogEntry, LogLevel, PlaylistMeta, RingBuffer, SegmentMetrics, SeiProbeResult,
-    StreamEvent, StreamSnapshot, StreamStatus, SyntheticQoeSnapshot, Tr101290Report, VirtualBuffer,
-    DIAGNOSTIC_DIR, EVENT_CHANNEL_CAPACITY, HISTORY_CAPACITY, LOG_CAPACITY,
+    LatencyState, LogEntry, LogLevel, MultiCdnSkewReport, NetworkTiming, PlaylistMeta, RingBuffer,
+    SegmentMetrics, SeiProbeResult, StreamEvent, StreamSnapshot, StreamStatus, SyntheticQoeSnapshot,
+    Tr101290Report, VirtualBuffer, DIAGNOSTIC_DIR, EVENT_CHANNEL_CAPACITY, HISTORY_CAPACITY, LOG_CAPACITY,
 };
 use crate::ui::channel_picker::{ChannelPicker, PickerAction};
 use crate::ui::layout::{self, DiagnosticPanel};
+use crate::ui::render_cache::UiRenderCache;
 
 const FRAME_PERIOD: Duration = Duration::from_millis(33);
 const TOAST_SECS: u64 = 2;
@@ -146,6 +147,9 @@ pub struct App {
     pub toast: Option<(String, Instant)>,
     pub picker: Option<ChannelPicker>,
     pub session: SessionOpts,
+    pub render_cache: UiRenderCache,
+    pub transport: NetworkTiming,
+    pub multi_cdn: Option<MultiCdnSkewReport>,
     rx: Receiver<StreamEvent>,
     tx: Sender<StreamEvent>,
     poller: Option<JoinHandle<()>>,
@@ -239,6 +243,9 @@ impl App {
             toast: None,
             picker,
             session,
+            render_cache: UiRenderCache::default(),
+            transport: NetworkTiming::default(),
+            multi_cdn: None,
             rx,
             tx,
             poller: None,
@@ -389,6 +396,7 @@ impl App {
                             self.handle_key(key)?;
                         }
                         Some(Ok(Event::Resize(_, _))) => {
+                            self.render_cache.mark_dirty();
                             terminal.draw(|frame| self.draw_ui(frame))?;
                         }
                         Some(Err(err)) => {
@@ -423,6 +431,8 @@ impl App {
             }
             return;
         }
+        let url_width = frame.area().width.saturating_sub(14) as usize;
+        UiRenderCache::take_and_rebuild(self, url_width);
         layout::draw(frame, self);
         if self.diagnostic_panel != DiagnosticPanel::None {
             layout::draw_diagnostic_panel(frame, frame.area(), self);
@@ -853,7 +863,16 @@ impl App {
             StreamEvent::Error(message) => {
                 self.push_log(LogLevel::Error, DiagCategory::Info, message);
             }
+            StreamEvent::MultiCdnSkew(report) => {
+                self.multi_cdn = Some(report);
+                self.render_cache.mark_dirty();
+            }
+            StreamEvent::Transport(t) => {
+                self.transport = t;
+                self.render_cache.mark_dirty();
+            }
         }
+        self.render_cache.mark_dirty();
     }
 
     fn push_log(&mut self, level: LogLevel, category: DiagCategory, message: impl Into<String>) {

@@ -21,6 +21,7 @@ pub enum DiagnosticReasonCode {
     ErrBudgetCcExceeded,
     ErrBudgetDriftExceeded,
     ErrDohResolutionFailed,
+    ErrCdnSyncSkew,
 }
 
 impl DiagnosticReasonCode {
@@ -43,6 +44,7 @@ impl DiagnosticReasonCode {
             Self::ErrBudgetCcExceeded => "ERR_BUDGET_CC_EXCEEDED",
             Self::ErrBudgetDriftExceeded => "ERR_BUDGET_DRIFT_EXCEEDED",
             Self::ErrDohResolutionFailed => "ERR_DOH_RESOLUTION_FAILED",
+            Self::ErrCdnSyncSkew => "ERR_CDN_SYNC_SKEW",
         }
     }
 

@@ -16,7 +16,7 @@ use tokio_rustls::TlsConnector;
 use url::Url;
 
 use crate::engine::ip_pin::{pick_connect_addr, resolve_pinned_addrs, validate_outbound_url};
-use crate::models::NetworkTiming;
+use crate::models::{HttpVersion, NetworkTiming};
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -136,7 +136,10 @@ pub async fn traced_get(
             tcp_ms: Some(tcp_ms),
             tls_ms,
             ttfb_ms,
+            transfer_ms: Some(download_ms.saturating_sub(ttfb_ms)),
             doh_ms: None,
+            http_version: Some(HttpVersion::H1),
+            quic: None,
         },
         download_ms: download_ms.max(1),
         chunked_transfer,
@@ -257,11 +260,8 @@ pub fn parse_header_pairs(headers: &[String]) -> Vec<(String, String)> {
 /// Fallback timing when only wall-clock TTFB is known.
 pub fn timing_from_ttfb(ttfb_ms: u64) -> NetworkTiming {
     NetworkTiming {
-        dns_ms: None,
-        tcp_ms: None,
-        tls_ms: None,
         ttfb_ms,
-        doh_ms: None,
+        ..NetworkTiming::default()
     }
 }
 
@@ -412,10 +412,14 @@ mod tests {
             tcp_ms: Some(18),
             tls_ms: Some(22),
             ttfb_ms: 45,
+            transfer_ms: Some(10),
             doh_ms: None,
+            http_version: None,
+            quic: None,
         };
         let s = t.display_line();
         assert!(s.contains("DNS: 4ms"));
+        assert!(s.contains("Xfer: 10ms"));
         assert!(s.contains("TCP: 18ms"));
         assert!(s.contains("TLS: 22ms"));
         assert!(s.contains("TTFB: 45ms"));

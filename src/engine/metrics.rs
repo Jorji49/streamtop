@@ -114,6 +114,9 @@ pub struct MetricsSnapshot {
     pub stream_errors: HashMap<String, u64>,
     pub part_dl_duration_ratio: f64,
     pub dns_doh_duration_secs: f64,
+    pub http_version: String,
+    pub quic_handshake_secs: f64,
+    pub quic_stream_resets_total: u64,
     pub segment_ttfb_hist: Hist,
     pub llhls_part_hist: Hist,
     pub drm_license_hist: Hist,
@@ -150,6 +153,9 @@ impl Default for MetricsSnapshot {
             stream_errors: HashMap::new(),
             part_dl_duration_ratio: 0.0,
             dns_doh_duration_secs: 0.0,
+            http_version: "h1.1".into(),
+            quic_handshake_secs: 0.0,
+            quic_stream_resets_total: 0,
             segment_ttfb_hist: Hist::with_bucket_count(TTFB_BUCKETS.len()),
             llhls_part_hist: Hist::with_bucket_count(PART_BUCKETS.len()),
             drm_license_hist: Hist::with_bucket_count(DRM_BUCKETS.len()),
@@ -171,6 +177,17 @@ pub fn update_metrics(snap: &mut MetricsSnapshot, event: &StreamEvent) {
             if let Some(net) = &s.network {
                 if let Some(ms) = net.doh_ms {
                     snap.dns_doh_duration_secs = ms as f64 / 1000.0;
+                }
+                if let Some(ver) = net.http_version {
+                    snap.http_version = ver.as_metric_label().to_string();
+                }
+                if let Some(quic) = &net.quic {
+                    if let Some(ms) = quic.handshake_ms {
+                        snap.quic_handshake_secs = ms as f64 / 1000.0;
+                    }
+                    if let Some(resets) = quic.stream_resets {
+                        snap.quic_stream_resets_total = resets;
+                    }
                 }
             }
             if let Some(ms) = s.latency_ms {
@@ -280,6 +297,19 @@ pub fn update_metrics(snap: &mut MetricsSnapshot, event: &StreamEvent) {
         StreamEvent::Tr101290(r) => {
             snap.tr101290_p1_total = u64::from(r.p1_violations);
             snap.tr101290_p2_total = u64::from(r.p2_violations);
+        }
+        StreamEvent::Transport(t) => {
+            if let Some(ver) = t.http_version {
+                snap.http_version = ver.as_metric_label().to_string();
+            }
+            if let Some(quic) = &t.quic {
+                if let Some(ms) = quic.handshake_ms {
+                    snap.quic_handshake_secs = ms as f64 / 1000.0;
+                }
+                if let Some(resets) = quic.stream_resets {
+                    snap.quic_stream_resets_total = resets;
+                }
+            }
         }
         StreamEvent::Error(msg) => {
             if let Some(code) = parse_http_status(msg) {
@@ -523,6 +553,27 @@ streamtop_channel_dropped_total{{{labels}}} {drops}
         &labels,
         DRM_BUCKETS,
     ));
+    let _ = writeln!(
+        out,
+        "# HELP streamtop_http_version Negotiated HTTP version (ALPN)\n# TYPE streamtop_http_version gauge"
+    );
+    for ver in ["h1.1", "h2", "h3"] {
+        let active = if snap.http_version == ver { 1.0 } else { 0.0 };
+        let _ = writeln!(
+            out,
+            "streamtop_http_version{{{labels},version=\"{ver}\"}} {active:.0}"
+        );
+    }
+    let _ = writeln!(
+        out,
+        "# HELP streamtop_quic_handshake_seconds QUIC handshake duration\n# TYPE streamtop_quic_handshake_seconds gauge\nstreamtop_quic_handshake_seconds{{{labels}}} {:.6}",
+        snap.quic_handshake_secs
+    );
+    let _ = writeln!(
+        out,
+        "# HELP streamtop_quic_stream_resets_total QUIC stream reset events\n# TYPE streamtop_quic_stream_resets_total counter\nstreamtop_quic_stream_resets_total{{{labels}}} {}",
+        snap.quic_stream_resets_total
+    );
     out
 }
 
@@ -719,6 +770,9 @@ mod tests {
         assert!(out.contains("streamtop_drm_license_ttfb_seconds_bucket"));
         assert!(out.contains("streamtop_codec_mismatch_total"));
         assert!(out.contains("streamtop_channel_dropped_total"));
+        assert!(out.contains("streamtop_http_version"));
+        assert!(out.contains("streamtop_quic_handshake_seconds"));
+        assert!(out.contains("streamtop_quic_stream_resets_total"));
         assert!(out.contains("status=\"403\""));
         assert!(!out.contains("token=secret"));
         assert!(
