@@ -26,11 +26,11 @@ Terminal HLS, DASH, IPTV, and WHEP stream diagnostics with wire probes, CI expor
 
 ### Pinnacle transport and CDN
 
-- **HTTP/2 ALPN telemetry**: `NetworkTiming` adds `transfer_ms`, `http_version`; Prometheus `streamtop_http_version`, `streamtop_quic_handshake_seconds`, `streamtop_quic_stream_resets_total`
+- **HTTP/3 (QUIC) telemetry**: reqwest `http3` + ALPN; handshake timing on h3; Prometheus `streamtop_http_version`, `streamtop_quic_handshake_seconds`, `streamtop_quic_stream_resets_total`
 - **Multi-CDN skew**: `--multi-cdn URL1,URL2,...`, `--max-cdn-skew-ms`, matrix TUI, `ERR_CDN_SYNC_SKEW`
 - **Middlebox heuristics wired**: `ERR_DPI_TCP_RESET`, redirect cycle/limit `ERR_HTTP_REDIRECT_LOOP`
-- **TUI render cache**: header text rebuilt on events, not 30 FPS draw ticks
-- **Summary JSON schema v5**: `http_version`, `transfer_ms`, `multi_cdn_skew`
+- **Zero-heap TUI**: `UiRenderCache` stores pre-built Status and Last Segment `Paragraph` widgets; draw borrows without per-frame allocation
+- **Summary JSON schema v5**: `http_version`, `transfer_ms`, `multi_cdn_skew`; `ingest_stats` removed
 
 ## Key CLI flags
 
@@ -70,12 +70,13 @@ streamtop "https://origin.example/whep/feed"
 ## Removed
 
 - `--anti-dpi` active raw socket stub
+- Raw `srt://` / `rtmp://` ingest probes and `ingest_stats` summary field
 
 ## Quality gates
 
-- **179 tests** passing (`cargo test --locked --all-targets`, 1 RTMP mock ignored)
+- **190 tests** passing (`cargo test --locked --all-targets`)
 - **Zero clippy warnings** (`-D warnings -W clippy::pedantic -W clippy::nursery`)
-- Summary JSON validated against `schemas/summary.v1.json` (schema version 4)
+- Summary JSON validated against `schemas/summary.v1.json` (schema version 5)
 
 ## Full changelog
 
