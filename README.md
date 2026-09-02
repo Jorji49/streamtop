@@ -6,7 +6,8 @@
 
 **Terminal HLS, DASH, and IPTV stream monitor. Real-time health checks, wire probes, and production metrics from the command line.**
 
-<a title="This tool is Tool of The Week on Terminal Trove, The $HOME of all things in the terminal" href="https://terminaltrove.com/"><img src="https://cdn.terminaltrove.com/media/badges/tool_of_the_week/png/terminal_trove_tool_of_the_week_gold_on_black_bg.png" alt="Terminal Trove Tool of The Week" /></a>
+<a title="This tool is Tool Of The Week on Terminal Trove, The HOME of all things in the terminal" href="https://terminaltrove.com"><img src="https://cdn.terminaltrove.com/media/badges/tool_of_the_week/png/terminal_trove_tool_of_the_week_gold_on_black_bg.png" alt="Terminal Trove Tool Of The Week" height="50" /></a>
+
 
 [![Awesome Ratatui](https://img.shields.io/badge/awesome-ratatui-e43716?style=for-the-badge&logo=rust&logoColor=white)](https://github.com/ratatui/awesome-ratatui)
 
