@@ -118,6 +118,14 @@ brew tap Jorji49/tap
 brew install streamtop
 ```
 
+### X-CMD
+
+[x-cmd](https://www.x-cmd.com/) is a modern Shell toolkit that gives AI agents and developers powerful, portable, and composable command-line capabilities.
+
+```bash
+x eget use Jorji49/streamtop
+```
+
 ### Arch (binary package)
 
 AUR submission is not listed yet. Use the packaging mirror:
