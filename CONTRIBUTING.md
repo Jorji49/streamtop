@@ -31,7 +31,7 @@ Optional hermetic E2E:
 - Bounded channels only; hot paths avoid unnecessary `.clone()` / heap churn.
 - Validate untrusted bytes with `.get(..)` or `slice_util::subslice_len`.
 - Comments only for protocol quirks, bitmasks, concurrency, or SSRF mitigations.
-- No em dashes in docs or comments. Use `-` or `:`.
+- Follow standard rustdoc conventions: keep doc comments concise, factual, and focused on invariant/protocol details.
 
 ## Pull requests
 
