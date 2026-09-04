@@ -32,9 +32,6 @@ pub struct ProfileSection {
     pub allow_insecure_otel: Option<bool>,
     pub tr101290: Option<bool>,
     pub probe_sei: Option<bool>,
-    pub simulate_player: Option<bool>,
-    pub throttle_kbps: Option<u64>,
-    pub simulated_rtt_ms: Option<u64>,
 }
 
 /// Resolve config path: `$STREAMTOP_CONFIG` or platform config dir.
@@ -126,15 +123,6 @@ fn apply_section(session: &mut SessionOpts, section: &ProfileSection) {
     if let Some(v) = section.probe_sei {
         session.probe_sei = v;
     }
-    if let Some(v) = section.simulate_player {
-        session.simulate_player = v;
-    }
-    if section.throttle_kbps.is_some() {
-        session.throttle_kbps = section.throttle_kbps;
-    }
-    if section.simulated_rtt_ms.is_some() {
-        session.simulated_rtt_ms = section.simulated_rtt_ms;
-    }
 }
 
 #[cfg(test)]
@@ -158,9 +146,6 @@ mod tests {
             otel_endpoint: None,
             tr101290: false,
             probe_sei: false,
-            simulate_player: false,
-            throttle_kbps: None,
-            simulated_rtt_ms: None,
             doh_provider: None,
         };
         apply_section(
@@ -178,9 +163,6 @@ mod tests {
                 allow_insecure_otel: Some(true),
                 tr101290: Some(true),
                 probe_sei: Some(true),
-                simulate_player: Some(true),
-                throttle_kbps: Some(1500),
-                simulated_rtt_ms: Some(80),
             },
         );
         assert_eq!(s.headers, vec!["B: 2".to_string()]);
@@ -194,9 +176,6 @@ mod tests {
         assert_eq!(s.otel_endpoint.as_deref(), Some("http://127.0.0.1:4318"));
         assert!(s.tr101290);
         assert!(s.probe_sei);
-        assert!(s.simulate_player);
-        assert_eq!(s.throttle_kbps, Some(1500));
-        assert_eq!(s.simulated_rtt_ms, Some(80));
         assert_eq!(s.interval_ms, Some(1000));
     }
 }

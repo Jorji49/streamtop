@@ -70,9 +70,6 @@ pub async fn run_budget(
         .with_diagnostics(&crate::engine::poller::DiagnosticOpts {
             tr101290: session.tr101290,
             probe_sei: session.probe_sei,
-            simulate_player: session.simulate_player,
-            throttle_kbps: session.throttle_kbps,
-            simulated_rtt_ms: session.simulated_rtt_ms,
         }),
         &session,
     )?;

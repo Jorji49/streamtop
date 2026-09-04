@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.5.0] - 2026-09-04
+
+### Removed
+
+- `--simulate-player`, `--throttle-kbps`, `--simulated-rtt-ms`, and `synthetic_qoe` summary/metrics/UI
+- `--prefer-http2` noop flag
+- Legacy `--export-*` shims; use `--export` only
+- CLI aliases `--metrics-port`, `range-probe`, `matrix`, `headless`
+
+### Changed
+
+- Summary JSON schema version 6 (drops `synthetic_qoe`)
+- Transport I/O drop reason code: `ERR_TCP_IO_RESET` (was `ERR_DPI_TCP_RESET`)
+- Docker build copies `.cargo/config.toml` for `reqwest_unstable` / HTTP/3
+- README and packaging docs trimmed of persona/SEO and stale CLI examples
+
 ## [1.4.0] - 2026-09-01
 
 ### Added

@@ -24,7 +24,7 @@
   ],
   "properties": {
     "schema": { "const": "streamtop.summary.v1" },
-    "schema_version": { "const": 5 },
+    "schema_version": { "const": 6 },
     "verdict": { "enum": ["PASS", "FAIL"] },
     "ok": { "type": "boolean" },
     "health_score": { "type": "integer", "minimum": 0, "maximum": 100 },
@@ -89,30 +89,6 @@
             }
           }
         }
-      }
-    },
-    "synthetic_qoe": {
-      "type": ["object", "null"],
-      "additionalProperties": false,
-      "required": [
-        "tdr",
-        "rebuffer_risk_score",
-        "ttff_ms",
-        "selected_bitrate_bps",
-        "buffer_2s_rebuffer_pct",
-        "buffer_4s_rebuffer_pct",
-        "buffer_6s_rebuffer_pct"
-      ],
-      "properties": {
-        "tdr": { "type": "number" },
-        "rebuffer_risk_score": { "type": "integer", "minimum": 0, "maximum": 100 },
-        "ttff_ms": { "type": ["integer", "null"], "minimum": 0 },
-        "selected_bitrate_bps": { "type": ["integer", "null"], "minimum": 0 },
-        "buffer_2s_rebuffer_pct": { "type": "integer", "minimum": 0, "maximum": 100 },
-        "buffer_4s_rebuffer_pct": { "type": "integer", "minimum": 0, "maximum": 100 },
-        "buffer_6s_rebuffer_pct": { "type": "integer", "minimum": 0, "maximum": 100 },
-        "throttle_kbps": { "type": ["integer", "null"], "minimum": 0 },
-        "simulated_rtt_ms": { "type": ["integer", "null"], "minimum": 0 }
       }
     },
     "sei_metadata": {

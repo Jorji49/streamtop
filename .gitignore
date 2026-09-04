@@ -22,6 +22,9 @@
 /stage/
 /release/
 /release-assets/
+/release-main/
+/release-upload/
+/release-main-ci/
 /verify-hashes/
 /check-rel/
 /ci-artifacts/

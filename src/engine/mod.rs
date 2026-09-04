@@ -39,7 +39,6 @@ pub mod session_poller;
 pub mod slice_util;
 pub mod subtitle_probe;
 pub mod summary;
-pub mod synthetic_qoe;
 pub mod tr101290;
 pub mod transport;
 pub mod vod;

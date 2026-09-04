@@ -103,7 +103,6 @@ pub async fn run_vod(url: String, session: SessionOpts, format: SummaryFormat) -
                 None,
                 None,
                 None,
-                None,
             );
             println!("{}", serde_json::to_string_pretty(&doc)?);
         }

@@ -88,7 +88,6 @@ fn latency_display(state: LatencyState) -> (String, Color) {
     }
 }
 
-/// Cached header/segment widgets for zero-allocation draw ticks.
 #[derive(Debug)]
 pub struct UiRenderCache {
     pub header: Paragraph<'static>,

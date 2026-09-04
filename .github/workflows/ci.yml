@@ -187,7 +187,7 @@ jobs:
             sleep 5
           done
           cat artifacts/summary.json || true
-          ./target/release/streamtop "$URL" --export-har artifacts/smoke.har --timeout 10 --probe-headers || true
+          ./target/release/streamtop "$URL" --export "har:artifacts/smoke.har" --timeout 10 --probe-headers || true
           exit $code
 
       - name: Upload HAR / summary on smoke failure

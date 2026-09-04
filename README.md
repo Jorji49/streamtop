@@ -24,18 +24,9 @@
 
 **streamtop** is a Rust CLI and terminal UI for monitoring live video streams. Point it at an HLS playlist (`.m3u8`), MPEG-DASH manifest (`.mpd`), IPTV channel list (`.m3u`), or WHEP HTTP endpoint and get segment timing, codec wire data, ad markers, and health scores without opening a browser or GUI player.
 
-Use it to debug CDN issues, validate encoder output, compare origin vs edge, run CI smoke tests on manifests, or watch production feeds with Prometheus and OpenTelemetry hooks.
+Debug CDN issues, validate encoder output, compare origin vs edge, run CI smoke tests on manifests, or scrape Prometheus metrics from a live probe.
 
 WHEP HTTP endpoints are the supported path for WebRTC egress signaling probes. Legacy `srt://` and `rtmp://` URLs are rejected at startup.
-
-## Use cases
-
-| Role | Typical task |
-|------|----------------|
-| Broadcast / OTT engineer | Check GOP cadence, audio sync, LL-HLS part timing, SCTE-35 ad cues |
-| CDN / SRE | Track TTFB, DNS/TCP/TLS breakdown, glass-to-glass latency, rebuffer risk |
-| Developer / QA | Headless `--summary` PASS/FAIL in CI, budget thresholds, SARIF export, VOD crawl |
-| NOC | Dual-pane `--compare`, webhooks to Slack/Discord, live SHI and stall alerts |
 
 ## Features
 
@@ -59,14 +50,13 @@ WHEP HTTP endpoints are the supported path for WebRTC egress signaling probes. L
 ### Live operations
 
 * **LL-HLS part telemetry**: per-part TTFB, download ms, Part RTF (`part_dl_duration_ratio`); Prometheus `streamtop_part_dl_duration_ratio`
-* **DNS-over-HTTPS** (`--doh-provider cloudflare|google|<URL>`): pure-Rust DoH JSON lookup; `doh_ms` in wire timing and summary JSON
-* **HTTP/2 ALPN telemetry**: `NetworkTiming` reports DNS/TCP/TLS/TTFB/transfer ms and negotiated `http_version`; Prometheus `streamtop_http_version`
+* **DNS-over-HTTPS** (`--doh-provider cloudflare|google|<URL>`): DoH JSON lookup; `doh_ms` in wire timing and summary JSON
+* **HTTP version / timing**: `NetworkTiming` reports DNS/TCP/TLS/TTFB/transfer ms and negotiated `http_version`
 * **Multi-CDN skew** (`--multi-cdn URL1,URL2,...`): concurrent edge polling, live-edge seq/PDT skew matrix, `ERR_CDN_SYNC_SKEW`
 * **SCTE-35 / DAI**: manifest cues, inband DASH `emsg`, cross-layer mismatch detection
-* **Staging ClearKey** (`--clearkey KID:KEY`): cenc CTR and FairPlay **cbcs** 1:9 pattern probe
+* **Staging ClearKey** (`--clearkey KID:KEY`): cenc CTR and FairPlay cbcs pattern probe
 * **Glass-to-glass latency**: PRFT, HLS PDT, DASH publish time -> `g2g_total_ms`
-* **Virtual buffer model**: rebuffer probability, stall risk index, ABR ladder switch detection
-* **Synthetic QoE** (`--simulate-player`): player sim with throttle and simulated RTT
+* **Measured buffer model**: rebuffer probability and stall risk from observed download-to-duration ratios
 * **Split-screen compare**: two URLs side by side in one TUI
 * **Quick Play** (`p`): launch `mpv` or `ffplay` with active headers
 
@@ -77,15 +67,13 @@ WHEP HTTP endpoints are the supported path for WebRTC egress signaling probes. L
 * **Compliance report**: `--export report-html:report.html` or `--export report-json:report.json`
 * **SARIF 2.1.0**: `--summary-format sarif` or `--export sarif:streamtop.sarif` for GitHub Code Scanning
 * **GitHub Actions step summary**: `--github-step-summary FILE` or auto-write when `GITHUB_STEP_SUMMARY` is set (`--summary`, budget mode)
-* **Headless CI**: stable `streamtop.summary.v1` JSON contract (field version **5**), `--timeout`, PASS/FAIL rules
+* **Headless CI**: stable `streamtop.summary.v1` JSON contract (field version **6**), `--timeout`, PASS/FAIL rules
 * **Stream budget** (`--budget-max-rtf`, `--budget-max-ttfb`, `--budget-max-cc-errors`, `--budget-max-drift`): threshold assertions with JSON verdict
 * **Multi-stream agent** (`--agent agent.example.toml`): fleet polling with aggregated `/metrics`
-* **Prometheus** `/metrics` on `:9184` (Bearer token required on non-loopback bind); `streamtop_http_version`, `streamtop_quic_handshake_seconds`, `streamtop_dns_doh_duration_seconds`, `streamtop_part_dl_duration_ratio`
+* **Prometheus** `/metrics` on `:9184` (Bearer token required on non-loopback bind)
 * **OpenTelemetry**: OTLP traces + metric batches (`/v1/traces`, `/v1/metrics`)
-* **Grafana**: `--export grafana` -> dashboard JSON v4 (DAI, ClearKey, agent panels)
+* **Grafana**: `--export grafana` -> dashboard JSON
 * **Webhooks**: Slack, Discord, generic HTTP on stall, SHI, 5xx, mismatch, ad start
-
-Legacy flags (`--export-curl`, `--export-har`, `--export-report`, `--export-grafana`, `--export-incident`) still work but print a deprecation warning; use `--export` instead.
 
 ## Install
 
@@ -193,7 +181,7 @@ streamtop "https://example.com/live.ts.m3u8" --tr101290 --probe-sei
 | Charts | Latency or TTFB; download rate or transfer time |
 | Log | Warnings, ads (SCTE-35), stalls, HTTP errors |
 
-Overlay keys: `t` TR 101 290, `s` SEI/HDR, `y` synthetic QoE.
+Overlay keys: `t` TR 101 290, `s` SEI/HDR.
 
 FPS prefers playlist `FRAME-RATE` / `@frameRate`, otherwise the bitstream when available. GOP interval comes from keyframe PTS across segments (Fixed or Variable). Audio codec / rate / channels come from ADTS, fMP4, or MPEG-TS PMT in the probe window.
 
@@ -217,7 +205,7 @@ streamtop <URL> --webhook http://127.0.0.1:9999/hook --allow-insecure-webhooks
 # Channel list audit -> audit_report.json / .csv
 streamtop ./channels.m3u --audit
 
-# Headless PASS/FAIL (CI). Stable contract: streamtop.summary.v1; field version: 5
+# Headless PASS/FAIL (CI). Stable contract: streamtop.summary.v1; field version: 6
 streamtop <URL> --summary --summary-format json --timeout 10
 
 # SARIF 2.1.0 for GitHub Code Scanning
@@ -298,19 +286,6 @@ streamtop "https://webrtc.example/live/whep" --timeout 5
 
 Non-loopback `--metrics-bind` requires a non-empty `--metrics-token` or `STREAMTOP_METRICS_TOKEN`.
 
-### Deprecated flags
-
-These hidden aliases still work but log a warning; migrate to `--export`:
-
-| Legacy | Replacement |
-|--------|-------------|
-| `--export-curl` | `--export curl` |
-| `--export-har FILE` | `--export har:FILE` |
-| `--export-report PATH` | `--export report-html:PATH` or `report-json:PATH` |
-| `--export-grafana` | `--export grafana` |
-| `--export-incident [PATH]` | `--export incident[:PATH]` |
-
-
 ## Keyboard shortcuts
 
 | Key | Action |
@@ -324,6 +299,8 @@ These hidden aliases still work but log a warning; migrate to `--export`:
 | `?` | Help |
 | `/` | Regex log filter modal (Enter lock, Esc clear) |
 | `f` / `F` | Cycle preset log filter / clear regex filter |
+| `t` | TR 101 290 overlay |
+| `s` | SEI / HDR / caption overlay |
 | `j` / `k` | Scroll log or channel list |
 
 Compare mode: `Space` pause/resume, `d` detail, `l` log focus, `c` curl, `h` HAR, `Tab` switch pane.
@@ -331,7 +308,7 @@ Compare mode: `Space` pause/resume, `d` detail, `l` log focus, `c` curl, `h` HAR
 
 ## Headless verdict
 
-`--summary` returns PASS only when the stream is LIVE, SHI is at least 85, no critical RFC errors or origin stalls were observed, the last HTTP status is 200/206, and at least one segment was fetched. Any failed condition returns FAIL and a non-zero exit code. The schema file is `schemas/summary.v1.json`; `schema_version` is currently `5`.
+`--summary` returns PASS only when the stream is LIVE, SHI is at least 85, no critical RFC errors or origin stalls were observed, the last HTTP status is 200/206, and at least one segment was fetched. Any failed condition returns FAIL and a non-zero exit code. The schema file is `schemas/summary.v1.json`; `schema_version` is currently `6`.
 
 ## FAQ
 
@@ -346,10 +323,6 @@ HLS (including LL-HLS parts), MPEG-DASH, IPTV M3U lists, and WHEP HTTP egress. W
 
 **Is it safe to expose Prometheus metrics?**  
 Bind to loopback by default. For remote scrape targets, set `--metrics-token` or `STREAMTOP_METRICS_TOKEN`; Bearer auth is required on non-loopback binds.
-
-## Related searches
-
-HLS stream monitor, MPEG-DASH diagnostics tool, IPTV analyzer CLI, live stream health check, LL-HLS latency monitor, LL-HLS part RTF, WHEP probe, SCTE-35 ad detection, TR 101 290 MPEG-TS analyzer, CDN TTFB probe, DoH stream diagnostics, SARIF CI export, OTT stream QA, Rust terminal video diagnostics.
 
 ## License
 

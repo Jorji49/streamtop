@@ -161,17 +161,6 @@ try {
         }
     }
 
-    Log 'Synthetic QoE summary'
-    $Out = Run-Summary $HlsUrl @('--simulate-player', '--throttle-kbps', '1500', '--simulated-rtt-ms', '120', '--probe-headers')
-    if ($Out) {
-        $Risk = Get-JsonField $Out 'synthetic_qoe.rebuffer_risk_score'
-        if (($Risk -match '^\d+$') -and [int]$Risk -ge 0 -and [int]$Risk -le 100) {
-            Pass "synthetic_qoe.rebuffer_risk_score=$Risk"
-        } else {
-            Fail "rebuffer_risk_score out of range: $Risk"
-        }
-    }
-
     Log 'Legacy SRT URL rejection'
     $ErrFile = Join-Path $Tmp 'srt_err.txt'
     & $Streamtop $SrtUrl '--summary' 2>$ErrFile | Out-Null
@@ -212,7 +201,7 @@ try {
     if ($Out) {
         Pass 'DASH summary schema valid'
         $Sv = Get-JsonField $Out 'schema_version'
-        if ($Sv -eq '5') { Pass 'summary schema v5' } else { Fail "expected schema_version 5, got $Sv" }
+        if ($Sv -eq '6') { Pass 'summary schema v6' } else { Fail "expected schema_version 6, got $Sv" }
     }
 
     Log 'ClearKey cbcs staging smoke'
@@ -222,22 +211,22 @@ try {
     )
     if ($Out) { Pass 'ClearKey staging summary schema valid' }
 
-    Log 'HTML export-report'
+    Log 'HTML export report-html'
     $Report = Join-Path $Tmp 'test_report.html'
     $prevEap = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
-    & $Streamtop $HlsUrl '--export-report' $Report '--timeout' '5' 1>$null 2>$null
+    & $Streamtop $HlsUrl '--export' "report-html:$Report" '--timeout' '5' 1>$null 2>$null
     $ErrorActionPreference = $prevEap
     if ((Test-Path $Report) -and (Get-Content $Report -TotalCount 1) -match '<!DOCTYPE html>') {
-        Pass 'export-report HTML structure'
+        Pass 'export report-html HTML structure'
     } else {
-        Fail 'export-report missing or invalid HTML'
+        Fail 'export report-html missing or invalid HTML'
     }
     $Side = Join-Path $Tmp 'test_report.incident.json'
     if ((Test-Path $Side) -and (Get-Item $Side).Length -gt 0) {
-        Pass 'export-report incident sidecar'
+        Pass 'export report-html incident sidecar'
     } else {
-        Fail 'export-report incident sidecar missing'
+        Fail 'export report-html incident sidecar missing'
     }
 
     Log 'Agent fleet metrics'
@@ -301,7 +290,7 @@ interval_ms = 500
     $Har = Join-Path $Tmp 'incident.har'
     $prevEap = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
-    & $Streamtop $HlsUrl --export-har $Har --timeout 2 1>$null 2>$null
+    & $Streamtop $HlsUrl --export "har:$Har" --timeout 2 1>$null 2>$null
     $ErrorActionPreference = $prevEap
     if ((Test-Path $Har) -and (Get-Item $Har).Length -gt 0) { Pass 'HAR export' } else { Fail 'HAR export' }
 
@@ -310,7 +299,7 @@ interval_ms = 500
     $MetricsUrl = "http://127.0.0.1:$MetricsPort/metrics"
     $PromProc = Start-Process -FilePath $Streamtop `
         -ArgumentList @(
-            $HlsUrl, '--simulate-player', '--tr101290',
+            $HlsUrl, '--tr101290',
             '--prometheus', $MetricsPort, '--metrics-token', 'test-token',
             '--probe-headers'
         ) `
@@ -342,11 +331,6 @@ interval_ms = 500
         }
 
         $Metrics = $Auth.Content
-        if ($Metrics -match 'streamtop_qoe_rebuffer_risk') {
-            Pass 'metric streamtop_qoe_rebuffer_risk present'
-        } else {
-            Fail 'missing streamtop_qoe_rebuffer_risk'
-        }
         if ($Metrics -match 'streamtop_tr101290_p1_violations_total') {
             Pass 'metric streamtop_tr101290_p1_violations_total present'
         } else {

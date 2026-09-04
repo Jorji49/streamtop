@@ -23,13 +23,11 @@ use crate::engine::ManifestPoller;
 use crate::models::{StreamEvent, EVENT_CHANNEL_CAPACITY};
 use crate::ui::app::SessionOpts;
 
-/// Max concurrent pollers in agent mode (bounded memory).
+// Bounded concurrent pollers (agent mode).
 pub const MAX_AGENT_STREAMS: usize = 64;
 
-/// Per-stream event channel capacity (matches `EVENT_CHANNEL_CAPACITY`).
 pub const AGENT_EVENT_CHANNEL_CAPACITY: usize = EVENT_CHANNEL_CAPACITY;
 
-/// Agent-wide metrics registry (one snapshot per stream_id).
 #[derive(Debug, Default)]
 pub struct AgentMetricsRegistry {
     pub streams: HashMap<String, MetricsSnapshot>,
@@ -232,9 +230,6 @@ fn spawn_agent_stream(
         otel_endpoint: agent.otel_endpoint.clone(),
         tr101290: stream.tr101290,
         probe_sei: stream.probe_sei,
-        simulate_player: false,
-        throttle_kbps: None,
-        simulated_rtt_ms: None,
         doh_provider: None,
     };
 
@@ -251,9 +246,6 @@ fn spawn_agent_stream(
     .with_diagnostics(&crate::engine::poller::DiagnosticOpts {
         tr101290: session.tr101290,
         probe_sei: session.probe_sei,
-        simulate_player: false,
-        throttle_kbps: None,
-        simulated_rtt_ms: None,
     });
 
     if let Some(ck) = &session.clearkey {

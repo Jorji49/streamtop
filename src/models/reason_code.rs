@@ -1,6 +1,5 @@
 use serde::{Deserialize, Serialize};
 
-/// Unified diagnostic reason codes for TUI, JSON export, and Prometheus labels.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum DiagnosticReasonCode {
@@ -12,7 +11,7 @@ pub enum DiagnosticReasonCode {
     ErrTr101290Tei,
     ErrCdnCacheMiss,
     ErrAesKeyFetchFailed,
-    ErrDpiTcpReset,
+    ErrTcpIoReset,
     ErrPatPmtTimeout,
     ErrPartRtfStall,
     ErrAbrVariantMisalignment,
@@ -35,7 +34,7 @@ impl DiagnosticReasonCode {
             Self::ErrTr101290Tei => "ERR_TR101290_TEI",
             Self::ErrCdnCacheMiss => "ERR_CDN_CACHE_MISS",
             Self::ErrAesKeyFetchFailed => "ERR_AES_KEY_FETCH_FAILED",
-            Self::ErrDpiTcpReset => "ERR_DPI_TCP_RESET",
+            Self::ErrTcpIoReset => "ERR_TCP_IO_RESET",
             Self::ErrPatPmtTimeout => "ERR_TR101290_PAT_PMT_TIMEOUT",
             Self::ErrPartRtfStall => "ERR_PART_RTF_STALL",
             Self::ErrAbrVariantMisalignment => "ERR_ABR_VARIANT_MISALIGNMENT",

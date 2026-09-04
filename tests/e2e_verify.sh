@@ -153,18 +153,6 @@ if [[ -f "${OUT:-}" ]]; then
   fi
 fi
 
-# --- 3. Synthetic QoE ---
-log "Synthetic QoE summary"
-OUT=$(run_summary "$HLS_URL" --simulate-player --throttle-kbps 1500 --simulated-rtt-ms 120 --probe-headers) || true
-if [[ -f "${OUT:-}" ]]; then
-  RISK=$(json_get ".synthetic_qoe.rebuffer_risk_score" "$OUT")
-  if [[ "$RISK" =~ ^[0-9]+$ ]] && [[ "$RISK" -ge 0 && "$RISK" -le 100 ]]; then
-    pass "synthetic_qoe.rebuffer_risk_score=$RISK"
-  else
-    fail "rebuffer_risk_score out of range: $RISK"
-  fi
-fi
-
 # --- 4. Legacy ingest URLs rejected ---
 log "Legacy SRT URL rejection"
 if "$STREAMTOP" "$SRT_URL" --summary 2>"$TMP/srt_err.txt"; then
@@ -203,10 +191,10 @@ OUT=$(run_summary "$DASH_URL" --probe-headers --probe-drm) || true
 if [[ -f "${OUT:-}" ]]; then
   pass "DASH summary schema valid"
   SV=$(json_get ".schema_version" "$OUT")
-  if [[ "$SV" == "5" ]]; then
-    pass "summary schema v5"
+  if [[ "$SV" == "6" ]]; then
+    pass "summary schema v6"
   else
-    fail "expected schema_version 5, got $SV"
+    fail "expected schema_version 6, got $SV"
   fi
 fi
 
@@ -219,19 +207,19 @@ if [[ -f "${OUT:-}" ]]; then
 fi
 
 # --- 5c. HTML compliance report ---
-log "HTML export-report"
+log "HTML export report-html"
 REPORT="$TMP/test_report.html"
-"$STREAMTOP" "$HLS_URL" --export-report "$REPORT" --timeout 5 >/dev/null 2>&1 || true
+"$STREAMTOP" "$HLS_URL" --export "report-html:$REPORT" --timeout 5 >/dev/null 2>&1 || true
 if [[ -s "$REPORT" ]] && head -n 1 "$REPORT" | grep -q '<!DOCTYPE html>'; then
-  pass "export-report HTML structure"
+  pass "export report-html HTML structure"
 else
-  fail "export-report missing or invalid HTML"
+  fail "export report-html missing or invalid HTML"
 fi
 SIDE="$TMP/test_report.incident.json"
 if [[ -s "$SIDE" ]]; then
-  pass "export-report incident sidecar"
+  pass "export report-html incident sidecar"
 else
-  fail "export-report incident sidecar missing"
+  fail "export report-html incident sidecar missing"
 fi
 
 # --- 5d. Multi-stream agent metrics ---
@@ -294,7 +282,7 @@ log "VOD crawl and incident exports"
 "$STREAMTOP" --vod "$HLS_URL" --summary --summary-format json >/dev/null 2>&1 \
   && pass "VOD crawl command" || fail "VOD crawl command"
 HAR="$TMP/incident.har"
-"$STREAMTOP" "$HLS_URL" --export-har "$HAR" --timeout 2 >/dev/null 2>&1 || true
+"$STREAMTOP" "$HLS_URL" --export "har:$HAR" --timeout 2 >/dev/null 2>&1 || true
 [[ -s "$HAR" ]] && pass "HAR export" || fail "HAR export"
 
 # --- 7. Prometheus auth + metrics ---
@@ -302,7 +290,7 @@ log "Prometheus metrics auth"
 METRICS_PORT=$((20000 + RANDOM % 20000))
 METRICS_URL="http://127.0.0.1:${METRICS_PORT}/metrics"
 "$STREAMTOP" "$HLS_URL" \
-  --simulate-player --tr101290 \
+  --tr101290 \
   --prometheus "$METRICS_PORT" --metrics-token "test-token" \
   --probe-headers >/dev/null 2>&1 &
 PROM_PID=$!
@@ -326,7 +314,6 @@ else
   fail "expected metrics 200 with token, got $CODE"
 fi
 
-echo "$METRICS" | grep -q "streamtop_qoe_rebuffer_risk" && pass "metric streamtop_qoe_rebuffer_risk present" || fail "missing streamtop_qoe_rebuffer_risk"
 echo "$METRICS" | grep -q "streamtop_tr101290_p1_violations_total" && pass "metric streamtop_tr101290_p1_violations_total present" || fail "missing tr101290 p1 metric"
 echo "$METRICS" | grep -q "streamtop_inband_emsg_total" && pass "metric streamtop_inband_emsg_total present" || fail "missing inband emsg metric"
 echo "$METRICS" | grep -q "streamtop_ad_mismatch_total" && pass "metric streamtop_ad_mismatch_total present" || fail "missing ad mismatch metric"

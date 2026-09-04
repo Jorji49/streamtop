@@ -17,13 +17,13 @@ use crate::engine::redact::redact_url;
 use crate::engine::ManifestPoller;
 use crate::models::{
     CdnStats, DiagCategory, DiagSeverity, HealthReport, LatencyState, SeiProbeResult, StreamEvent,
-    StreamStatus, StreamStatusKind, SyntheticQoeSnapshot, Tr101290Report, EVENT_CHANNEL_CAPACITY,
+    StreamStatus, StreamStatusKind, Tr101290Report, EVENT_CHANNEL_CAPACITY,
 };
 use crate::ui::app::SessionOpts;
 
 /// Stable machine-readable schema id for `--summary --summary-format json`.
 pub const SUMMARY_SCHEMA: &str = "streamtop.summary.v1";
-pub const SUMMARY_SCHEMA_VERSION: u32 = 5;
+pub const SUMMARY_SCHEMA_VERSION: u32 = 6;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SummaryFormat {
@@ -67,8 +67,6 @@ pub struct SummaryJson {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tr101290: Option<Tr101290Report>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub synthetic_qoe: Option<SyntheticQoeSnapshot>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub sei_metadata: Option<SeiProbeResult>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub spec_violations: Option<Vec<crate::models::SpecViolation>>,
@@ -99,7 +97,6 @@ pub fn build_summary_json(
     subtitle_drift_ms: Option<i64>,
     pssh_systems: Option<Vec<String>>,
     tr101290: Option<Tr101290Report>,
-    synthetic_qoe: Option<SyntheticQoeSnapshot>,
     sei_metadata: Option<SeiProbeResult>,
     spec_violations: Option<Vec<crate::models::SpecViolation>>,
     doh_ms: Option<u64>,
@@ -130,7 +127,6 @@ pub fn build_summary_json(
         subtitle_drift_ms,
         pssh_systems,
         tr101290,
-        synthetic_qoe,
         sei_metadata,
         spec_violations,
         doh_ms,
@@ -172,9 +168,6 @@ pub async fn run_summary(
     .with_diagnostics(&DiagnosticOpts {
         tr101290: session.tr101290,
         probe_sei: session.probe_sei,
-        simulate_player: session.simulate_player,
-        throttle_kbps: session.throttle_kbps,
-        simulated_rtt_ms: session.simulated_rtt_ms,
     });
     if let Some(exporter) = otel.clone() {
         poller = poller.with_otel(exporter);
@@ -215,7 +208,6 @@ pub async fn run_summary(
     let mut subtitle_drift_ms: Option<i64> = None;
     let mut pssh_systems: Option<Vec<String>> = None;
     let mut tr101290: Option<Tr101290Report> = None;
-    let mut synthetic_qoe: Option<SyntheticQoeSnapshot> = None;
     let mut sei_metadata: Option<SeiProbeResult> = None;
     let mut spec_findings: Vec<crate::models::DiagnosticFinding> = Vec::new();
     let mut abr_health = crate::models::AbrHealth::default();
@@ -261,7 +253,6 @@ pub async fn run_summary(
                 }
                 StreamEvent::AbrHealth(a) => abr_health = a,
                 StreamEvent::Tr101290(r) => tr101290 = Some(r),
-                StreamEvent::SyntheticQoe(q) => synthetic_qoe = Some(q),
                 StreamEvent::SeiProbe(s) => sei_metadata = Some(s),
                 StreamEvent::Finding(f) => {
                     spec_findings.push(f.clone());
@@ -360,7 +351,6 @@ pub async fn run_summary(
                 subtitle_drift_ms,
                 pssh_systems,
                 tr101290.clone(),
-                synthetic_qoe,
                 sei_metadata,
                 spec_violations,
                 last_doh_ms,
@@ -458,7 +448,6 @@ mod tests {
             None,
             None,
             None,
-            None,
         );
         let v = serde_json::to_value(&payload).unwrap();
         assert_eq!(v["schema"], SUMMARY_SCHEMA);
@@ -477,7 +466,7 @@ mod tests {
         let schema: serde_json::Value =
             serde_json::from_str(include_str!("../../schemas/summary.v1.json")).unwrap();
         assert_eq!(schema["title"], SUMMARY_SCHEMA);
-        assert_eq!(schema["properties"]["schema_version"]["const"], 5);
+        assert_eq!(schema["properties"]["schema_version"]["const"], 6);
 
         let health = HealthReport::perfect();
         let payload = build_summary_json(
@@ -495,7 +484,6 @@ mod tests {
             0,
             true,
             0,
-            None,
             None,
             None,
             None,

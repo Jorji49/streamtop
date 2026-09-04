@@ -1,12 +1,12 @@
 {
-    "version": "1.4.0",
+    "version": "1.5.0",
     "description": "HLS/DASH/IPTV stream diagnostics in the terminal",
     "homepage": "https://github.com/Jorji49/streamtop",
     "license": "MIT",
     "architecture": {
         "64bit": {
-            "url": "https://github.com/Jorji49/streamtop/releases/download/v1.4.0/streamtop-windows-x86_64-1.4.0.zip",
-            "hash": "118e2b99b9f5bd43cfb96f8eb0bc50214fd4eb7a1fffc499e8bd4722fbe0fb20"
+            "url": "https://github.com/Jorji49/streamtop/releases/download/v1.5.0/streamtop-windows-x86_64-1.5.0.zip",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
         }
     },
     "bin": "streamtop.exe",

@@ -57,36 +57,20 @@ impl From<SummaryFormatArg> for SummaryFormat {
 #[allow(clippy::struct_excessive_bools)] // clap CLI flags
 struct Cli {
     /// Stream URL, local playlist/MPD, or channel lineup (M3U / JSON / YAML)
-    #[arg(required_unless_present_any = ["compare", "export_grafana", "export", "vod", "agent", "multi_cdn"])]
+    #[arg(required_unless_present_any = ["compare", "export", "vod", "agent", "multi_cdn"])]
     url: Option<String>,
 
-    /// Unified export: `report-html[:PATH]`, `report-json`, `curl`, `har[:PATH]`, `incident[:PATH]`, `grafana`, `sarif[:PATH]`
+    /// Export: `report-html[:PATH]`, `report-json`, `curl`, `har[:PATH]`, `incident[:PATH]`, `grafana`, `sarif[:PATH]`
     #[arg(long = "export", value_name = "FORMAT[:FILE]")]
     export: Vec<String>,
 
     /// Multi-stream headless agent (TOML config with [[streams]])
     #[arg(long = "agent", value_name = "CONFIG.toml")]
-    agent: Option<PathBufArg>,
-
-    /// Export HTML or JSON compliance report and exit (deprecated: use --export)
-    #[arg(long = "export-report", value_name = "PATH", hide = true)]
-    export_report: Option<PathBufArg>,
+    agent: Option<std::path::PathBuf>,
 
     /// Compare two live streams side by side
     #[arg(long = "compare", num_args = 2, value_names = ["URL_1", "URL_2"])]
     compare: Option<Vec<String>>,
-
-    /// Write streamtop-grafana.json for Prometheus and exit (deprecated: use --export grafana)
-    #[arg(long = "export-grafana", hide = true)]
-    export_grafana: bool,
-
-    /// Print a curl command for the last segment after a short poll (deprecated: use --export curl)
-    #[arg(long = "export-curl", hide = true)]
-    export_curl: bool,
-
-    /// Write HAR 1.2 for manifest + last segment after a short poll (deprecated: use --export har)
-    #[arg(long = "export-har", value_name = "FILE", hide = true)]
-    export_har: Option<PathBufArg>,
 
     /// Named profile from ~/.config/streamtop/config.toml
     #[arg(long = "profile", value_name = "NAME")]
@@ -105,7 +89,7 @@ struct Cli {
     interval_ms: Option<u64>,
 
     /// Range-request the start of each segment only (wire/header probe). Default on; use --full-segment to disable.
-    #[arg(long = "probe-headers", alias = "range-probe")]
+    #[arg(long = "probe-headers")]
     probe_headers: bool,
 
     /// Download full segments instead of 64 KB range probe (more bandwidth, bitrate timing)
@@ -116,20 +100,16 @@ struct Cli {
     #[arg(long = "clearkey", value_name = "KID:KEY")]
     clearkey: Option<String>,
 
-    /// Export incident bundle to PATH (deprecated: use --export incident)
-    #[arg(long = "export-incident", value_name = "PATH", num_args = 0..=1, default_missing_value = "", hide = true)]
-    export_incident: Option<String>,
-
     /// Probe DRM license / EXT-X-KEY / DASH `LA_URL` `ClearKey` TTFB
     #[arg(long = "probe-drm")]
     probe_drm: bool,
 
-    /// Range-probe every channel; write `audit_report.json/.csv`
-    #[arg(long = "audit", alias = "matrix")]
+    /// Range-probe every channel; write `audit_report.json` / `.csv`
+    #[arg(long = "audit")]
     audit: bool,
 
     /// Headless PASS/FAIL summary (no TUI)
-    #[arg(long = "summary", alias = "headless")]
+    #[arg(long = "summary")]
     summary: bool,
 
     /// VOD inspection: crawl playlist/MPD tree without live polling
@@ -146,7 +126,7 @@ struct Cli {
 
     /// Write GitHub Actions step summary markdown (SHI, ABR, budget table)
     #[arg(long = "github-step-summary", value_name = "FILE")]
-    github_step_summary: Option<PathBufArg>,
+    github_step_summary: Option<std::path::PathBuf>,
 
     /// Listen seconds for --summary / export modes (default: 8)
     #[arg(long = "timeout", value_name = "SECS", default_value_t = 8)]
@@ -162,10 +142,6 @@ struct Cli {
     )]
     prometheus: Option<u16>,
 
-    /// Alias for --prometheus <PORT>
-    #[arg(long = "metrics-port", value_name = "PORT", hide = true)]
-    metrics_port: Option<u16>,
-
     /// Metrics listen address (default: 127.0.0.1)
     #[arg(
         long = "metrics-bind",
@@ -174,7 +150,7 @@ struct Cli {
     )]
     metrics_bind: String,
 
-    /// Bearer token for /metrics (Authorization: Bearer …)
+    /// Bearer token for /metrics (Authorization: Bearer ...)
     #[arg(long = "metrics-token", value_name = "TOKEN")]
     metrics_token: Option<String>,
 
@@ -201,18 +177,6 @@ struct Cli {
     /// SEI NAL probe: captions (CEA-608/708) and HDR metadata
     #[arg(long = "probe-sei")]
     probe_sei: bool,
-
-    /// Synthetic player `QoE` simulator (TDR, rebuffer risk, ABR selection)
-    #[arg(long = "simulate-player")]
-    simulate_player: bool,
-
-    /// Virtual throughput cap for --simulate-player (kbps)
-    #[arg(long = "throttle-kbps", value_name = "KBPS")]
-    throttle_kbps: Option<u64>,
-
-    /// Simulated RTT added to segment fetch time (ms)
-    #[arg(long = "simulated-rtt-ms", value_name = "MS")]
-    simulated_rtt_ms: Option<u64>,
 
     /// Stream budget: max download-to-duration ratio (CI assertion mode)
     #[arg(long = "budget-max-rtf", value_name = "RATIO")]
@@ -245,21 +209,6 @@ struct Cli {
     /// Max live-edge skew across CDN edges before `ERR_CDN_SYNC_SKEW` (default 3000ms)
     #[arg(long = "max-cdn-skew-ms", value_name = "MS", default_value_t = 3000)]
     max_cdn_skew_ms: i64,
-
-    /// Prefer HTTP/2 ALPN when available (reqwest default stack)
-    #[arg(long = "prefer-http2")]
-    prefer_http2: bool,
-}
-
-/// Path argument for clap.
-#[derive(Debug, Clone)]
-struct PathBufArg(std::path::PathBuf);
-
-impl std::str::FromStr for PathBufArg {
-    type Err = std::convert::Infallible;
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Ok(Self(std::path::PathBuf::from(s)))
-    }
 }
 
 #[allow(clippy::too_many_lines)]
@@ -272,7 +221,7 @@ async fn main() -> Result<ExitCode> {
 
     let cli = Cli::parse();
 
-    if let Some(PathBufArg(config)) = &cli.agent {
+    if let Some(config) = &cli.agent {
         let path = config
             .to_str()
             .ok_or_else(|| eyre!("agent config path is not valid UTF-8"))?;
@@ -296,9 +245,6 @@ async fn main() -> Result<ExitCode> {
             otel_endpoint: None,
             tr101290: false,
             probe_sei: false,
-            simulate_player: false,
-            throttle_kbps: None,
-            simulated_rtt_ms: None,
             doh_provider: None,
         },
     )?;
@@ -323,9 +269,6 @@ async fn main() -> Result<ExitCode> {
     }
     if let Some(ck) = &cli.clearkey {
         session.clearkey = Some(ck.clone());
-    }
-    if cli.export_incident.is_some() {
-        session.export_incident = cli.export_incident.clone();
     }
     if cli.webhook.is_some() {
         session.webhook_url = cli.webhook.clone();
@@ -357,15 +300,6 @@ async fn main() -> Result<ExitCode> {
     if cli.probe_sei {
         session.probe_sei = true;
     }
-    if cli.simulate_player {
-        session.simulate_player = true;
-    }
-    if cli.throttle_kbps.is_some() {
-        session.throttle_kbps = cli.throttle_kbps;
-    }
-    if cli.simulated_rtt_ms.is_some() {
-        session.simulated_rtt_ms = cli.simulated_rtt_ms;
-    }
     if let Some(doh) = &cli.doh_provider {
         session.doh_provider = Some(doh.clone());
     }
@@ -373,21 +307,6 @@ async fn main() -> Result<ExitCode> {
     let mut export_plan = ExportPlan::default();
     for spec in &cli.export {
         export_plan.push(parse_export_spec(spec)?);
-    }
-    export_plan = export_plan.merge_legacy(
-        cli.export_report.as_ref().map(|p| &p.0),
-        cli.export_curl,
-        cli.export_har.as_ref().map(|p| &p.0),
-        cli.export_incident.as_deref(),
-        cli.export_grafana,
-    );
-    for item in &export_plan.exports {
-        if let Some(flag) = item.deprecated_via {
-            eprintln!(
-                "warning: {flag} is deprecated; use --export {}",
-                item.format.as_str()
-            );
-        }
     }
     if export_plan
         .exports
@@ -431,7 +350,7 @@ async fn main() -> Result<ExitCode> {
     }
 
     let client = build_http_client(&session.headers, session.user_agent.as_deref())?;
-    let metrics_port = cli.metrics_port.or(cli.prometheus);
+    let metrics_port = cli.prometheus;
     let metrics_bind: std::net::IpAddr = cli
         .metrics_bind
         .parse()
@@ -528,7 +447,7 @@ async fn main() -> Result<ExitCode> {
             }
             if want_export {
                 return Err(eyre!(
-                    "--export-curl/--export-har require a single HLS/DASH stream URL"
+                    "--export curl/har require a single HLS/DASH stream URL"
                 ));
             }
             if cli.audit {
@@ -588,7 +507,7 @@ async fn main() -> Result<ExitCode> {
                     url,
                     session,
                     budget,
-                    cli.github_step_summary.as_ref().map(|p| p.0.as_path()),
+                    cli.github_step_summary.as_deref(),
                 )
                 .await
             } else if cli.summary {
@@ -597,7 +516,7 @@ async fn main() -> Result<ExitCode> {
                     session,
                     cli.timeout_secs,
                     cli.summary_format.into(),
-                    cli.github_step_summary.as_ref().map(|p| p.0.as_path()),
+                    cli.github_step_summary.as_deref(),
                 )
                 .await
             } else {

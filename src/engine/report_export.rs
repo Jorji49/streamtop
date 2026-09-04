@@ -78,9 +78,6 @@ async fn collect_report_data(
     .with_diagnostics(&DiagnosticOpts {
         tr101290: session.tr101290,
         probe_sei: session.probe_sei,
-        simulate_player: session.simulate_player,
-        throttle_kbps: session.throttle_kbps,
-        simulated_rtt_ms: session.simulated_rtt_ms,
     });
     if let Some(exporter) = otel.clone() {
         poller = poller.with_otel(exporter);

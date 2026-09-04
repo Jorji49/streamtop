@@ -38,12 +38,21 @@ fn cli_help_lists_supported_operational_flags() {
         "--vod",
         "--tr101290",
         "--probe-sei",
-        "--simulate-player",
         "--allow-insecure-otel",
         "--multi-cdn",
-        "--prefer-http2",
+        "--export",
+        "--prometheus",
     ] {
         assert!(help.contains(flag), "missing help flag: {flag}");
+    }
+    for gone in [
+        "--simulate-player",
+        "--prefer-http2",
+        "--export-curl",
+        "--metrics-port",
+        "--throttle-kbps",
+    ] {
+        assert!(!help.contains(gone), "unexpected help flag: {gone}");
     }
 }
 
@@ -218,9 +227,6 @@ async fn vod_scans_mock_hls_playlist() {
         otel_endpoint: None,
         tr101290: false,
         probe_sei: false,
-        simulate_player: false,
-        throttle_kbps: None,
-        simulated_rtt_ms: None,
         doh_provider: None,
     };
     let exit = run_vod(url, session, SummaryFormat::Json)

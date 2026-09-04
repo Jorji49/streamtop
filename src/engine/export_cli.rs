@@ -1,4 +1,4 @@
-//! Unified `--export FORMAT[:FILE]` parsing (v1.4.0).
+//! Unified `--export FORMAT[:FILE]` parsing.
 
 use std::path::PathBuf;
 
@@ -48,7 +48,6 @@ impl ExportFormat {
 pub struct ResolvedExport {
     pub format: ExportFormat,
     pub path: Option<PathBuf>,
-    pub deprecated_via: Option<&'static str>,
 }
 
 /// Parse `--export format` or `--export format:path`.
@@ -70,7 +69,6 @@ pub fn parse_export_spec(raw: &str) -> Result<ResolvedExport> {
     Ok(ResolvedExport {
         format: ExportFormat::from_token(fmt)?,
         path,
-        deprecated_via: None,
     })
 }
 
@@ -80,43 +78,6 @@ pub struct ExportPlan {
 }
 
 impl ExportPlan {
-    #[must_use]
-    pub fn merge_legacy(
-        mut self,
-        export_report: Option<&PathBuf>,
-        export_curl: bool,
-        export_har: Option<&PathBuf>,
-        export_incident: Option<&str>,
-        export_grafana: bool,
-    ) -> Self {
-        if export_grafana {
-            self.push_deprecated(ExportFormat::Grafana, None, "--export-grafana");
-        }
-        if export_curl {
-            self.push_deprecated(ExportFormat::Curl, None, "--export-curl");
-        }
-        if let Some(path) = export_har {
-            self.push_deprecated(ExportFormat::Har, Some(path.clone()), "--export-har");
-        }
-        if let Some(path) = export_report {
-            let fmt = if path.extension().is_some_and(|e| e == "json") {
-                ExportFormat::ReportJson
-            } else {
-                ExportFormat::ReportHtml
-            };
-            self.push_deprecated(fmt, Some(path.clone()), "--export-report");
-        }
-        if let Some(path) = export_incident {
-            let p = if path.is_empty() {
-                None
-            } else {
-                Some(PathBuf::from(path))
-            };
-            self.push_deprecated(ExportFormat::Incident, p, "--export-incident");
-        }
-        self
-    }
-
     pub fn push(&mut self, item: ResolvedExport) {
         if !self
             .exports
@@ -125,14 +86,6 @@ impl ExportPlan {
         {
             self.exports.push(item);
         }
-    }
-
-    fn push_deprecated(&mut self, format: ExportFormat, path: Option<PathBuf>, flag: &'static str) {
-        self.push(ResolvedExport {
-            format,
-            path,
-            deprecated_via: Some(flag),
-        });
     }
 
     pub fn wants_any(&self) -> bool {
@@ -173,13 +126,5 @@ mod tests {
             parse_export_spec("report-json").expect("json").format,
             ExportFormat::ReportJson
         );
-    }
-
-    #[test]
-    fn legacy_merge_deduplicates() {
-        let plan = ExportPlan::default().merge_legacy(None, true, None, None, false);
-        assert_eq!(plan.exports.len(), 1);
-        assert_eq!(plan.exports[0].format, ExportFormat::Curl);
-        assert_eq!(plan.exports[0].deprecated_via, Some("--export-curl"));
     }
 }

@@ -49,7 +49,6 @@ use crate::engine::playlist_parser::{is_iptv_channel_list, local_path_from_url};
 use crate::engine::redirect::RedirectLoopError;
 use crate::engine::sei_probe::SeiProbeAccumulator;
 use crate::engine::subtitle_probe::{compute_subtitle_drift, probe_subtitle_payload};
-use crate::engine::synthetic_qoe::SyntheticQoeEngine;
 use crate::engine::tr101290::{probe_container_tr101290, Tr101290Engine};
 use crate::engine::transport::timing_from_reqwest_version;
 use crate::engine::wire_timing::WireTimingTracker;
@@ -64,14 +63,10 @@ use crate::models::{
 
 const DEFAULT_UA: &str = concat!("streamtop/", env!("CARGO_PKG_VERSION"));
 
-/// Optional next-gen diagnostic probes (TR 101 290, SEI, synthetic QoE).
 #[derive(Debug, Clone, Default)]
 pub struct DiagnosticOpts {
     pub tr101290: bool,
     pub probe_sei: bool,
-    pub simulate_player: bool,
-    pub throttle_kbps: Option<u64>,
-    pub simulated_rtt_ms: Option<u64>,
 }
 
 #[derive(Debug, Default)]
@@ -103,7 +98,6 @@ pub struct ManifestPoller {
     last_active_ad: Arc<Mutex<Option<crate::models::AdBreakInfo>>>,
     tr101290: Arc<Mutex<Tr101290Engine>>,
     sei_acc: Arc<Mutex<SeiProbeAccumulator>>,
-    qoe: Arc<Mutex<SyntheticQoeEngine>>,
     segment_wall_ms: Arc<Mutex<u64>>,
     aes_key_cache: Arc<Mutex<Aes128KeyCache>>,
     last_drm: Arc<Mutex<crate::models::DrmInfo>>,
@@ -163,7 +157,6 @@ impl ManifestPoller {
             last_active_ad: Arc::new(Mutex::new(None)),
             tr101290: Arc::new(Mutex::new(Tr101290Engine::new())),
             sei_acc: Arc::new(Mutex::new(SeiProbeAccumulator::new())),
-            qoe: Arc::new(Mutex::new(SyntheticQoeEngine::new(None, None))),
             segment_wall_ms: Arc::new(Mutex::new(0)),
             aes_key_cache: Arc::new(Mutex::new(Aes128KeyCache::new())),
             last_drm: Arc::new(Mutex::new(crate::models::DrmInfo::default())),
@@ -182,9 +175,6 @@ impl ManifestPoller {
     #[must_use]
     pub fn with_diagnostics(mut self, opts: &DiagnosticOpts) -> Self {
         self.diagnostics = opts.clone();
-        if let Ok(mut qoe) = self.qoe.lock() {
-            *qoe = SyntheticQoeEngine::new(opts.throttle_kbps, opts.simulated_rtt_ms);
-        }
         self
     }
 
@@ -341,12 +331,10 @@ impl ManifestPoller {
         &self,
         fetch: &SegmentFetch,
         duration_secs: f32,
-        download_kbps: Option<u64>,
-        ladder_bps: &[u64],
         probe_bytes: &[u8],
     ) {
         let d = &self.diagnostics;
-        if !d.tr101290 && !d.probe_sei && !d.simulate_player {
+        if !d.tr101290 && !d.probe_sei {
             return;
         }
         if probe_bytes.is_empty() {
@@ -392,17 +380,6 @@ impl ManifestPoller {
                 {
                     self.send_event(StreamEvent::SeiProbe(sei));
                 }
-            }
-        }
-        if d.simulate_player {
-            if let Ok(mut qoe) = self.qoe.lock() {
-                let snap = qoe.observe_segment(
-                    duration_secs,
-                    fetch.download_ms,
-                    download_kbps,
-                    ladder_bps,
-                );
-                self.send_event(StreamEvent::SyntheticQoe(snap));
             }
         }
     }
@@ -949,8 +926,7 @@ impl ManifestPoller {
             let mut wire = fetch.wire.clone();
             self.post_wire_extras(&fetch, &mut wire);
 
-            let ladder_bps: Vec<u64> = variants.iter().map(|v| v.bandwidth).collect();
-            self.post_segment_diagnostics(&fetch, seg_hint, kbps, &ladder_bps, &fetch.probe_bytes);
+            self.post_segment_diagnostics(&fetch, seg_hint, &fetch.probe_bytes);
 
             let metrics = SegmentMetrics {
                 media_sequence: seq,
@@ -1149,9 +1125,9 @@ impl ManifestPoller {
             self.send_event(StreamEvent::Finding(DiagnosticFinding::with_reason_code(
                 DiagCategory::Rfc,
                 DiagSeverity::Error,
-                "dpi_tcp_reset",
-                "TCP reset suspected after TLS ClientHello (passive heuristic)",
-                DiagnosticReasonCode::ErrDpiTcpReset,
+                "tcp_io_reset",
+                "TCP I/O drop after connect (passive heuristic)",
+                DiagnosticReasonCode::ErrTcpIoReset,
             )));
         }
     }
@@ -2025,15 +2001,12 @@ impl ManifestPoller {
             }
         }
 
-        let ladder_bps: Vec<u64> = variants.iter().map(|v| v.bandwidth).collect();
         let probe_plain = self
             .maybe_decrypt_aes128_probe(&fetch, media_sequence)
             .await;
         self.post_segment_diagnostics(
             &fetch,
             segment.duration,
-            download_kbps,
-            &ladder_bps,
             &probe_plain,
         );
 

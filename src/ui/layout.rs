@@ -13,7 +13,6 @@ pub enum DiagnosticPanel {
     None,
     Tr101290,
     Sei,
-    Qoe,
 }
 
 fn rounded(title: impl Into<String>) -> Block<'static> {
@@ -497,7 +496,6 @@ pub fn draw_help(frame: &mut Frame, area: Rect, picker_context: bool) {
             Line::from("  r            Reset metrics / ring buffers"),
             Line::from("  t            TR 101 290 compliance table"),
             Line::from("  s            SEI / HDR / caption probe"),
-            Line::from("  y            Synthetic QoE simulator"),
             Line::from("  ?            Help (any key closes)"),
             Line::from("  j/k ↑↓       Scroll event log"),
             Line::from("  q / Ctrl+C   Quit (restore terminal)"),
@@ -528,7 +526,6 @@ pub fn draw_diagnostic_panel(frame: &mut Frame, area: Rect, app: &App) {
     match app.diagnostic_panel {
         DiagnosticPanel::Tr101290 => draw_tr101290_panel(frame, popup, app),
         DiagnosticPanel::Sei => draw_sei_panel(frame, popup, app),
-        DiagnosticPanel::Qoe => draw_qoe_panel(frame, popup, app),
         DiagnosticPanel::None => {}
     }
 }
@@ -607,41 +604,6 @@ fn draw_sei_panel(frame: &mut Frame, area: Rect, app: &App) {
     ];
     frame.render_widget(
         Paragraph::new(lines).block(rounded(" SEI / HDR / Captions ")),
-        area,
-    );
-}
-
-fn draw_qoe_panel(frame: &mut Frame, area: Rect, app: &App) {
-    let q = &app.synthetic_qoe;
-    let lines = vec![
-        Line::from(format!(" TDR            : {:.3}", q.tdr)),
-        Line::from(format!(" Rebuffer risk  : {} / 100", q.rebuffer_risk_score)),
-        Line::from(format!(
-            " TTFF           : {} ms",
-            q.ttff_ms.map_or_else(|| "-".into(), |v| v.to_string())
-        )),
-        Line::from(format!(
-            " Selected ABR   : {} bps",
-            q.selected_bitrate_bps
-                .map_or_else(|| "-".into(), |v| v.to_string())
-        )),
-        Line::from(format!(
-            " Buffer 2s/4s/6s: {}% / {}% / {}%",
-            q.buffer_2s_rebuffer_pct, q.buffer_4s_rebuffer_pct, q.buffer_6s_rebuffer_pct
-        )),
-        Line::from(format!(
-            " Throttle       : {} kbps",
-            q.throttle_kbps
-                .map_or_else(|| "-".into(), |v| v.to_string())
-        )),
-        Line::from(format!(
-            " Simulated RTT  : {} ms",
-            q.simulated_rtt_ms
-                .map_or_else(|| "-".into(), |v| v.to_string())
-        )),
-    ];
-    frame.render_widget(
-        Paragraph::new(lines).block(rounded(" Synthetic Player QoE ")),
         area,
     );
 }

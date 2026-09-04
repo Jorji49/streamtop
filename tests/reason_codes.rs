@@ -11,7 +11,7 @@ const ALL_CODES: &[DiagnosticReasonCode] = &[
     DiagnosticReasonCode::ErrTr101290Tei,
     DiagnosticReasonCode::ErrCdnCacheMiss,
     DiagnosticReasonCode::ErrAesKeyFetchFailed,
-    DiagnosticReasonCode::ErrDpiTcpReset,
+    DiagnosticReasonCode::ErrTcpIoReset,
     DiagnosticReasonCode::ErrPatPmtTimeout,
     DiagnosticReasonCode::ErrPartRtfStall,
     DiagnosticReasonCode::ErrAbrVariantMisalignment,

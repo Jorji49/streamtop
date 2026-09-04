@@ -28,9 +28,9 @@ Terminal HLS, DASH, IPTV, and WHEP stream diagnostics with wire probes, CI expor
 
 - **HTTP/3 (QUIC) telemetry**: reqwest `http3` + ALPN; handshake timing on h3; Prometheus `streamtop_http_version`, `streamtop_quic_handshake_seconds`, `streamtop_quic_stream_resets_total`
 - **Multi-CDN skew**: `--multi-cdn URL1,URL2,...`, `--max-cdn-skew-ms`, matrix TUI, `ERR_CDN_SYNC_SKEW`
-- **Middlebox heuristics wired**: `ERR_DPI_TCP_RESET`, redirect cycle/limit `ERR_HTTP_REDIRECT_LOOP`
+- **Transport I/O drop hint**: `ERR_TCP_IO_RESET` when connect succeeds but transfer ends with zero bytes and an I/O error
 - **Zero-heap TUI**: `UiRenderCache` stores pre-built Status and Last Segment `Paragraph` widgets; draw borrows without per-frame allocation
-- **Summary JSON schema v5**: `http_version`, `transfer_ms`, `multi_cdn_skew`; `ingest_stats` removed
+- **Summary JSON schema v6**: `http_version`, `transfer_ms`, `multi_cdn_skew`; `ingest_stats` and `synthetic_qoe` removed
 
 ## Key CLI flags
 
@@ -46,7 +46,6 @@ Terminal HLS, DASH, IPTV, and WHEP stream diagnostics with wire probes, CI expor
 | `--budget-max-drift DURATION` | CI budget: subtitle A/V drift |
 | `--multi-cdn URLS` | Multi-CDN skew matrix (comma-separated or `label=URL`) |
 | `--max-cdn-skew-ms MS` | Skew threshold for `ERR_CDN_SYNC_SKEW` (default 3000) |
-| `--prefer-http2` | Enable reqwest HTTP/2 ALPN stack |
 
 ## Examples
 
@@ -62,21 +61,19 @@ streamtop "$URL" --doh-provider cloudflare --probe-headers --summary --summary-f
 streamtop "https://origin.example/whep/feed"
 ```
 
-## Deprecated
-
-- `--export-curl`, `--export-har`, `--export-report`, `--export-grafana`, `--export-incident` -> use `--export`
-- `srt://` / `rtmp://` URLs are rejected at startup; use WHEP HTTP endpoints
-
 ## Removed
 
+- `--simulate-player`, `--throttle-kbps`, `--simulated-rtt-ms`, and `synthetic_qoe` summary field
+- `--prefer-http2` (noop flag)
+- Legacy `--export-*` shims; use `--export` only
 - `--anti-dpi` active raw socket stub
 - Raw `srt://` / `rtmp://` ingest probes and `ingest_stats` summary field
 
 ## Quality gates
 
-- **190 tests** passing (`cargo test --locked --all-targets`)
+- **185+ tests** passing (`cargo test --locked`)
 - **Zero clippy warnings** (`-D warnings -W clippy::pedantic -W clippy::nursery`)
-- Summary JSON validated against `schemas/summary.v1.json` (schema version 5)
+- Summary JSON validated against `schemas/summary.v1.json` (schema version 6)
 
 ## Full changelog
 

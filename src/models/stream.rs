@@ -1540,21 +1540,6 @@ pub struct Tr101290Report {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct SyntheticQoeSnapshot {
-    pub tdr: f64,
-    pub rebuffer_risk_score: u8,
-    pub ttff_ms: Option<u64>,
-    pub selected_bitrate_bps: Option<u64>,
-    pub buffer_2s_rebuffer_pct: u8,
-    pub buffer_4s_rebuffer_pct: u8,
-    pub buffer_6s_rebuffer_pct: u8,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub throttle_kbps: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub simulated_rtt_ms: Option<u64>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SeiProbeResult {
     pub cea608_present: bool,
     pub cea708_present: bool,
@@ -1613,7 +1598,6 @@ pub enum StreamEvent {
     Finding(DiagnosticFinding),
     WireProbe(WireProbeInfo),
     Tr101290(Tr101290Report),
-    SyntheticQoe(SyntheticQoeSnapshot),
     SeiProbe(SeiProbeResult),
     Log {
         level: LogLevel,

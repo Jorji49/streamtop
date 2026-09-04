@@ -1,7 +1,7 @@
 # Maintainer: Ahmet Kayra Kama <kayraak@pm.me>
 # Contributor: Ahmet Kayra Kama <kayraak@pm.me>
 pkgname=streamtop-bin
-pkgver=1.4.0
+pkgver=1.5.0
 pkgrel=1
 pkgdesc="Terminal HLS, DASH, and IPTV stream monitor with wire probes and metrics"
 arch=('x86_64')
@@ -12,7 +12,7 @@ provides=('streamtop')
 conflicts=('streamtop')
 source=("${pkgname}-${pkgver}.tar.gz::https://github.com/Jorji49/streamtop/releases/download/v${pkgver}/streamtop-x86_64-unknown-linux-gnu.tar.gz"
         "LICENSE::https://raw.githubusercontent.com/Jorji49/streamtop/v${pkgver}/LICENSE")
-sha256sums=('fa2dcc27630c60acf22c4f8856905667936babc7db924e3fc719cd300478d717'
+sha256sums=('0000000000000000000000000000000000000000000000000000000000000000'
             '17ae2f4382f88ddcc4dafa488d59401dbb0d3a59d7f1a967c715cd13fbfa9f3d')
 
 package() {

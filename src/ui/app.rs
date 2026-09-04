@@ -25,7 +25,7 @@ use crate::models::{
     DiagSeverity, DiagnosticFinding, DiagnosticSummary, DlDurHud, G2gMetrics, HealthReport,
     LatencyState, LogEntry, LogLevel, MultiCdnSkewReport, NetworkTiming, PlaylistMeta, RingBuffer,
     SegmentMetrics, SeiProbeResult, StreamEvent, StreamSnapshot, StreamStatus,
-    SyntheticQoeSnapshot, Tr101290Report, VirtualBuffer, DIAGNOSTIC_DIR, EVENT_CHANNEL_CAPACITY,
+    Tr101290Report, VirtualBuffer, DIAGNOSTIC_DIR, EVENT_CHANNEL_CAPACITY,
     HISTORY_CAPACITY, LOG_CAPACITY,
 };
 use crate::ui::channel_picker::{ChannelPicker, PickerAction};
@@ -76,29 +76,16 @@ pub struct SessionOpts {
     pub user_agent: Option<String>,
     pub interval_ms: Option<u64>,
     pub probe_headers: bool,
-    /// Optional DRM license / ClearKey / LA_URL TTFB probe (`--probe-drm`).
     pub probe_drm: bool,
-    /// Staging ClearKey KID:KEY (`--clearkey`).
     pub clearkey: Option<String>,
-    /// Optional incident export path (`--export-incident`).
     pub export_incident: Option<String>,
     pub webhook_url: Option<String>,
     pub alert_on: String,
-    /// Bypass webhook SSRF checks (local tests only).
     pub allow_insecure_webhooks: bool,
-    /// Bypass OTLP destination checks (local tests only).
     pub allow_insecure_otel: bool,
-    /// OTLP trace export endpoint (e.g. http://127.0.0.1:4318).
     pub otel_endpoint: Option<String>,
-    /// ETSI TR 101 290 P1/P2 MPEG-TS compliance (`--tr101290`).
     pub tr101290: bool,
-    /// SEI/HDR/caption wire probe (`--probe-sei`).
     pub probe_sei: bool,
-    /// Synthetic player QoE simulator (`--simulate-player`).
-    pub simulate_player: bool,
-    pub throttle_kbps: Option<u64>,
-    pub simulated_rtt_ms: Option<u64>,
-    /// Optional DNS-over-HTTPS provider (`--doh-provider`).
     pub doh_provider: Option<String>,
 }
 
@@ -132,7 +119,6 @@ pub struct App {
     pub diagnostic_panel: DiagnosticPanel,
     pub tr101290: Tr101290Report,
     pub sei_probe: SeiProbeResult,
-    pub synthetic_qoe: SyntheticQoeSnapshot,
     pub show_help: bool,
     /// Active regex filter for event log (`/` modal).
     pub log_filter: Option<String>,
@@ -229,7 +215,6 @@ impl App {
             diagnostic_panel: DiagnosticPanel::None,
             tr101290: Tr101290Report::default(),
             sei_probe: SeiProbeResult::default(),
-            synthetic_qoe: SyntheticQoeSnapshot::default(),
             show_help: false,
             log_filter: None,
             log_filter_regex: None,
@@ -284,9 +269,6 @@ impl App {
         .with_diagnostics(&DiagnosticOpts {
             tr101290: self.session.tr101290,
             probe_sei: self.session.probe_sei,
-            simulate_player: self.session.simulate_player,
-            throttle_kbps: self.session.throttle_kbps,
-            simulated_rtt_ms: self.session.simulated_rtt_ms,
         });
         if let Some(ref ck) = self.session.clearkey {
             if let Ok(spec) = crate::engine::drm_probe::ClearKeySpec::parse(ck) {
@@ -575,13 +557,6 @@ impl App {
                     DiagnosticPanel::Sei
                 };
             }
-            KeyCode::Char('y' | 'Y') => {
-                self.diagnostic_panel = if self.diagnostic_panel == DiagnosticPanel::Qoe {
-                    DiagnosticPanel::None
-                } else {
-                    DiagnosticPanel::Qoe
-                };
-            }
             KeyCode::Up | KeyCode::Char('k') => {
                 self.log_scroll = self.log_scroll.saturating_add(1);
             }
@@ -838,7 +813,6 @@ impl App {
             StreamEvent::WireProbe(_) => {}
             StreamEvent::Tr101290(r) => self.tr101290 = r,
             StreamEvent::SeiProbe(s) => self.sei_probe = s,
-            StreamEvent::SyntheticQoe(q) => self.synthetic_qoe = q,
             StreamEvent::Log {
                 level,
                 category,
@@ -1155,7 +1129,6 @@ impl App {
             diagnostic_panel: DiagnosticPanel::None,
             tr101290: Tr101290Report::default(),
             sei_probe: SeiProbeResult::default(),
-            synthetic_qoe: SyntheticQoeSnapshot::default(),
             show_help: false,
             log_filter: None,
             log_filter_regex: None,
@@ -1180,9 +1153,6 @@ impl App {
                 otel_endpoint: None,
                 tr101290: false,
                 probe_sei: false,
-                simulate_player: false,
-                throttle_kbps: None,
-                simulated_rtt_ms: None,
                 doh_provider: None,
             },
             render_cache: UiRenderCache::default(),
