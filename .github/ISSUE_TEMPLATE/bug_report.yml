@@ -1,0 +1,61 @@
+name: Bug report
+description: Incorrect behavior, crash, or probe false positive/negative
+title: "bug: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Redact tokens, cookies, and signed URLs before pasting logs or playlists.
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What went wrong in one or two sentences.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: streamtop version
+      placeholder: "1.5.0 (streamtop --version)"
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: OS
+      options:
+        - Linux
+        - macOS
+        - Windows
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction
+      description: Minimal command line and steps. Prefer a local fixture or redacted URL shape.
+      placeholder: |
+        streamtop <URL> --summary --timeout 10
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual
+      description: Include stderr, summary JSON excerpt, or TUI observation.
+    validations:
+      required: true
+  - type: textarea
+    id: extras
+    attributes:
+      label: Extra context
+      description: Protocol (HLS/DASH/IPTV/WHEP), CDN, relevant flags (`--tr101290`, `--probe-headers`, …).

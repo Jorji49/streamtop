@@ -1,0 +1,33 @@
+name: Feature request
+description: Proposal for a measurable probe, export, or CLI capability
+title: "feat: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Prefer wire-measurable behavior (timing, TR 101 290, manifests, metrics).
+        Speculative simulators and chat-app integrations need a strong operational case.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What operational gap exists today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: Concrete CLI flag, metric name, or probe behavior.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+  - type: textarea
+    id: refs
+    attributes:
+      label: Specs / references
+      description: RFC, ETSI, HLS/DASH IOP sections if applicable.
