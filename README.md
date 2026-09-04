@@ -10,6 +10,8 @@
 
 
 [![Awesome Ratatui](https://img.shields.io/badge/awesome-ratatui-e43716?style=for-the-badge&logo=rust&logoColor=white)](https://github.com/ratatui/awesome-ratatui)
+[![Awesome Rust](https://img.shields.io/badge/awesome-rust-dea584?style=for-the-badge&logo=rust&logoColor=white)](https://github.com/rust-unofficial/awesome-rust)
+[![Awesome IPTV](https://img.shields.io/badge/awesome-iptv-6a1b9a?style=for-the-badge&logo=vlcmediaplayer&logoColor=white)](https://github.com/iptv-org/awesome-iptv)
 
 [![Crates.io](https://img.shields.io/crates/v/streamtop?style=flat-square&color=007ec6&labelColor=1c1c1c)](https://crates.io/crates/streamtop)
 [![Release](https://img.shields.io/github/v/release/Jorji49/streamtop?label=release&style=flat-square&color=007ec6&labelColor=1c1c1c)](https://github.com/Jorji49/streamtop/releases/latest)
