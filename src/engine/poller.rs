@@ -2004,11 +2004,7 @@ impl ManifestPoller {
         let probe_plain = self
             .maybe_decrypt_aes128_probe(&fetch, media_sequence)
             .await;
-        self.post_segment_diagnostics(
-            &fetch,
-            segment.duration,
-            &probe_plain,
-        );
+        self.post_segment_diagnostics(&fetch, segment.duration, &probe_plain);
 
         let metrics = SegmentMetrics {
             media_sequence,

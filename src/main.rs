@@ -503,13 +503,7 @@ async fn main() -> Result<ExitCode> {
                     ExitCode::from(1)
                 })
             } else if budget.active() {
-                run_budget(
-                    url,
-                    session,
-                    budget,
-                    cli.github_step_summary.as_deref(),
-                )
-                .await
+                run_budget(url, session, budget, cli.github_step_summary.as_deref()).await
             } else if cli.summary {
                 run_summary(
                     url,

@@ -24,9 +24,8 @@ use crate::models::{
     format_dvr_window, AbrHealth, AbrVariant, AdBreakInfo, CdnStats, ChannelEntry, DiagCategory,
     DiagSeverity, DiagnosticFinding, DiagnosticSummary, DlDurHud, G2gMetrics, HealthReport,
     LatencyState, LogEntry, LogLevel, MultiCdnSkewReport, NetworkTiming, PlaylistMeta, RingBuffer,
-    SegmentMetrics, SeiProbeResult, StreamEvent, StreamSnapshot, StreamStatus,
-    Tr101290Report, VirtualBuffer, DIAGNOSTIC_DIR, EVENT_CHANNEL_CAPACITY,
-    HISTORY_CAPACITY, LOG_CAPACITY,
+    SegmentMetrics, SeiProbeResult, StreamEvent, StreamSnapshot, StreamStatus, Tr101290Report,
+    VirtualBuffer, DIAGNOSTIC_DIR, EVENT_CHANNEL_CAPACITY, HISTORY_CAPACITY, LOG_CAPACITY,
 };
 use crate::ui::channel_picker::{ChannelPicker, PickerAction};
 use crate::ui::layout::{self, DiagnosticPanel};
