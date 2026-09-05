@@ -1,0 +1,29 @@
+name: Test Homebrew Formula (macOS)
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'Formula/**'
+      - '.github/workflows/test-brew.yml'
+
+jobs:
+  brew-audit-install:
+    runs-on: macos-latest
+    steps:
+      - name: Tap repository
+        run: |
+          brew tap Jorji49/tap
+
+      - name: Audit formula syntax and metadata
+        run: |
+          brew audit --strict --formula Jorji49/tap/streamtop
+
+      - name: Install formula from tap
+        run: |
+          brew install Jorji49/tap/streamtop
+
+      - name: Verify installed binary
+        run: |
+          streamtop --version
+          streamtop --help
