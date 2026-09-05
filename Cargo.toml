@@ -71,7 +71,7 @@ directories = "5"
 subtle = "2"
 aes = "0.8"
 cbc = "0.1"
-ctr = "0.9"
+ctr = "0.10"
 regex = "1"
 
 [dev-dependencies]
