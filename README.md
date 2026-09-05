@@ -122,7 +122,7 @@ Source: `dist/aur/PKGBUILD`.
 ### Docker
 
 ```bash
-docker run -it --rm ghcr.io/jorji49/streamtop:v1.4.0 <URL>
+docker run -it --rm ghcr.io/jorji49/streamtop:v1.5.0 <URL>
 docker run -it --rm ghcr.io/jorji49/streamtop:latest <URL>
 ```
 
@@ -131,7 +131,7 @@ Metrics on a non-loopback bind require a token:
 ```bash
 docker run --rm -p 9184:9184 \
   -e STREAMTOP_METRICS_TOKEN=change-me \
-  ghcr.io/jorji49/streamtop:v1.4.0 \
+  ghcr.io/jorji49/streamtop:v1.5.0 \
   <URL> --prometheus --metrics-bind 0.0.0.0 \
   --metrics-token "$STREAMTOP_METRICS_TOKEN"
 ```

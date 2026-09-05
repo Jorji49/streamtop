@@ -9,7 +9,13 @@
 /.vscode/
 /.idea/
 /.claude/
+/.codex/
+/.continue/
+/.gemini/
+/.agent/
 .cursorrules
+AGENTS.md
+*.canvas.tsx
 *.tmp
 *.bak
 /.release-artifacts/
