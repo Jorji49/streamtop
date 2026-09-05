@@ -70,7 +70,7 @@ toml = "0.8"
 directories = "5"
 subtle = "2"
 aes = "0.8"
-cbc = "0.1"
+cbc = "0.2"
 ctr = "0.9"
 regex = "1"
 
