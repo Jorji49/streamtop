@@ -52,7 +52,7 @@ m3u8-rs = "6.0"
 dash-mpd = { version = "0.20", default-features = false }
 chrono = { version = "0.4", features = ["serde", "clock"] }
 ratatui = "0.28"
-crossterm = { version = "0.28", features = ["event-stream"] }
+crossterm = { version = "0.29", features = ["event-stream"] }
 clap = { version = "4", features = ["derive"] }
 color-eyre = "0.6"
 serde = { version = "1", features = ["derive"] }
