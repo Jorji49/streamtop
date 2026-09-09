@@ -4,21 +4,16 @@ use color_eyre::eyre::{eyre, Result};
 use tokio::time::sleep;
 
 use crate::engine::abr_model::simulate_segment_fetch;
-use crate::engine::dash::{
-    extract_dash_ad_events, ll_dash_production_drift, parse_dash_mpd,
-};
+use crate::engine::dash::{extract_dash_ad_events, ll_dash_production_drift, parse_dash_mpd};
 use crate::engine::linter::{
-    analyze_abr_ladder, apply_abr_penalty, lint_abr_player,
-    lint_variant_alignment, SpecLinter,
+    analyze_abr_ladder, apply_abr_penalty, lint_abr_player, lint_variant_alignment, SpecLinter,
 };
 use crate::models::{
-    DiagCategory, LatencyState, LlHlsInfo, LogLevel, MediaRenditions,
-    NetworkTiming, PlaylistMeta, SegmentMetrics, StreamEvent, StreamStatus,
-    VirtualBuffer,
+    DiagCategory, LatencyState, LlHlsInfo, LogLevel, MediaRenditions, NetworkTiming, PlaylistMeta,
+    SegmentMetrics, StreamEvent, StreamStatus, VirtualBuffer,
 };
 
 use super::ManifestPoller;
-
 
 impl ManifestPoller {
     pub(super) async fn run_dash_loop(self) {

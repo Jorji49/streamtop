@@ -9,8 +9,8 @@ use url::Url;
 use crate::engine::doh::resolve_doh;
 use crate::engine::playlist_parser::local_path_from_url;
 use crate::models::{
-    DiagCategory, DiagSeverity, DiagnosticFinding, DiagnosticReasonCode, NetworkTiming, StreamEvent,
-    MAX_MANIFEST_BYTES, MAX_PLAYLIST_DEPTH,
+    DiagCategory, DiagSeverity, DiagnosticFinding, DiagnosticReasonCode, NetworkTiming,
+    StreamEvent, MAX_MANIFEST_BYTES, MAX_PLAYLIST_DEPTH,
 };
 
 use super::ManifestPoller;
@@ -132,7 +132,10 @@ where
         .unwrap_or_else(|_| Err(eyre!("probe read timeout after {PROBE_READ_TIMEOUT_SECS}s")))
 }
 
-pub(super) async fn read_response_bytes_limited(response: reqwest::Response, max: usize) -> Result<Vec<u8>> {
+pub(super) async fn read_response_bytes_limited(
+    response: reqwest::Response,
+    max: usize,
+) -> Result<Vec<u8>> {
     let mut stream = response.bytes_stream();
     let mut buf = Vec::new();
     while let Some(chunk) = stream.next().await {

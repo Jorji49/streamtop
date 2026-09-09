@@ -1,4 +1,3 @@
-
 use chrono::Utc;
 
 use crate::engine::channel_stats::record_channel_drop;
@@ -8,8 +7,8 @@ use crate::engine::metrics::update_metrics;
 use crate::engine::middlebox::classify_transport_failure;
 use crate::engine::redirect::RedirectLoopError;
 use crate::models::{
-    DiagCategory, DiagSeverity, DiagnosticFinding,
-    DiagnosticReasonCode, LogLevel, StreamEvent, WireProbeInfo,
+    DiagCategory, DiagSeverity, DiagnosticFinding, DiagnosticReasonCode, LogLevel, StreamEvent,
+    WireProbeInfo,
 };
 
 use super::segment_fetch::SegmentFetch;
@@ -108,7 +107,12 @@ impl ManifestPoller {
         }
     }
 
-    pub(super) fn emit_log(&self, level: LogLevel, category: DiagCategory, message: impl Into<String>) {
+    pub(super) fn emit_log(
+        &self,
+        level: LogLevel,
+        category: DiagCategory,
+        message: impl Into<String>,
+    ) {
         self.send_event(StreamEvent::Log {
             level,
             category,

@@ -16,15 +16,11 @@ use crate::engine::container_probe::{
 use crate::engine::dai_validator::{
     inband_events_from_wire, validate_ad_alignment, validate_inband_vs_manifest,
 };
-use crate::engine::drm_probe::{
-    apply_clearkey_to_wire, probe_clearkey,
-};
+use crate::engine::drm_probe::{apply_clearkey_to_wire, probe_clearkey};
 use crate::engine::linter::{
     inspect_container, lint_abr_player, lint_subtitle_drift, parse_cdn_headers, SpecLinter,
 };
-use crate::engine::network_trace::{
-    reqwest_headers_chunked, timing_from_ttfb, traced_get,
-};
+use crate::engine::network_trace::{reqwest_headers_chunked, timing_from_ttfb, traced_get};
 use crate::engine::playlist_parser::local_path_from_url;
 use crate::engine::subtitle_probe::{compute_subtitle_drift, probe_subtitle_payload};
 use crate::engine::tr101290::probe_container_tr101290;
@@ -32,8 +28,7 @@ use crate::engine::transport::timing_from_reqwest_version;
 use crate::engine::wire_timing::WireTimingTracker;
 use crate::models::{
     AbrVariant, CdnEdgeInfo, ContainerKind, DiagCategory, DiagSeverity, DiagnosticFinding,
-    DiagnosticReasonCode, LatencyState, LogLevel,
-    NetworkTiming, SegmentMetrics, StreamEvent,
+    DiagnosticReasonCode, LatencyState, LogLevel, NetworkTiming, SegmentMetrics, StreamEvent,
     VirtualBuffer, WireProbeInfo, DEEP_WIRE_PROBE_BYTES, MAX_SEGMENT_BYTES,
 };
 
@@ -430,7 +425,11 @@ impl ManifestPoller {
         Ok(())
     }
 
-    pub(super) fn apply_wire_to_variants(&self, variants: &mut Vec<AbrVariant>, wire: &WireProbeInfo) {
+    pub(super) fn apply_wire_to_variants(
+        &self,
+        variants: &mut Vec<AbrVariant>,
+        wire: &WireProbeInfo,
+    ) {
         if wire.width.is_none()
             && wire.height.is_none()
             && wire.frame_rate.is_none()
@@ -783,7 +782,10 @@ pub(super) fn local_cdn() -> CdnEdgeInfo {
     }
 }
 
-pub(super) async fn read_local_segment(path: &std::path::Path, probe: bool) -> Result<SegmentFetch> {
+pub(super) async fn read_local_segment(
+    path: &std::path::Path,
+    probe: bool,
+) -> Result<SegmentFetch> {
     let started = Instant::now();
     let data = tokio::fs::read(path)
         .await

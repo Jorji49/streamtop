@@ -11,17 +11,14 @@ use url::Url;
 
 use crate::engine::linter::{
     ad_log_key, analyze_abr_ladder, apply_abr_penalty, apply_hls_blocking_params,
-    extract_ad_signals_near_live_edge,
-    lint_variant_alignment, ll_hls_probe_range, next_blocking_targets,
-    scan_drm_keys, scan_ll_hls, scan_media_renditions, SpecLinter,
+    extract_ad_signals_near_live_edge, lint_variant_alignment, ll_hls_probe_range,
+    next_blocking_targets, scan_drm_keys, scan_ll_hls, scan_media_renditions, SpecLinter,
 };
 use crate::engine::playlist_parser::{is_iptv_channel_list, local_path_from_url};
 use crate::models::{
-    AbrVariant, DiagCategory, DiagSeverity, DiagnosticFinding,
-    DiagnosticReasonCode, LatencyState, LlDashInfo, LogLevel, PlaylistMeta, StreamEvent, StreamStatus,
-    VirtualBuffer, AD_SCAN_LIVE_EDGE_SEGMENTS,
-    HLS_LIVE_EDGE_SEGMENTS,
-    MEDIA_SEQ_GAP_TOLERANCE,
+    AbrVariant, DiagCategory, DiagSeverity, DiagnosticFinding, DiagnosticReasonCode, LatencyState,
+    LlDashInfo, LogLevel, PlaylistMeta, StreamEvent, StreamStatus, VirtualBuffer,
+    AD_SCAN_LIVE_EDGE_SEGMENTS, HLS_LIVE_EDGE_SEGMENTS, MEDIA_SEQ_GAP_TOLERANCE,
 };
 
 use super::ManifestPoller;

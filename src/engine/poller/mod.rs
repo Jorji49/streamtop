@@ -140,7 +140,11 @@ impl ManifestPoller {
         }
         Ok(StreamProtocol::Hls)
     }
-    pub(super) async fn probe_drm_license(&self, drm: &mut crate::models::DrmInfo, playlist_url: &Url) {
+    pub(super) async fn probe_drm_license(
+        &self,
+        drm: &mut crate::models::DrmInfo,
+        playlist_url: &Url,
+    ) {
         let Some(uri) = drm.key_uri.clone() else {
             return;
         };

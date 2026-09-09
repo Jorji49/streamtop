@@ -115,12 +115,7 @@ impl Drop for MockStreamServer {
     }
 }
 
-fn http_response(
-    status: &str,
-    body: &[u8],
-    ctype: &str,
-    location: Option<&str>,
-) -> Vec<u8> {
+fn http_response(status: &str, body: &[u8], ctype: &str, location: Option<&str>) -> Vec<u8> {
     let loc = location
         .map(|href| format!("Location: {href}\r\n"))
         .unwrap_or_default();
@@ -255,12 +250,7 @@ fn route(
             .is_some_and(|ext| ext.eq_ignore_ascii_case("mp4"))
     {
         if matches!(scenario, MockScenario::CorruptPssh) {
-            return (
-                "200 OK",
-                corrupt_pssh_segment_bytes(),
-                "video/mp4",
-                None,
-            );
+            return ("200 OK", corrupt_pssh_segment_bytes(), "video/mp4", None);
         }
         if matches!(
             scenario,
