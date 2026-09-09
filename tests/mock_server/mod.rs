@@ -26,6 +26,9 @@ pub enum MockScenario {
     SeiCaptions,
     LlHlsFmp4,
     DashLive,
+    Aes128Hls,
+    CdnRedirect,
+    MediaSeqGap,
 }
 
 #[derive(Debug, Clone)]
@@ -35,6 +38,7 @@ pub struct MockStreamServer {
 }
 
 static SEGMENT_SEQ: AtomicU64 = AtomicU64::new(1);
+static MEDIA_SEQ_GAP_HITS: AtomicU64 = AtomicU64::new(0);
 
 impl MockStreamServer {
     pub async fn start_hls() -> Self {
@@ -72,7 +76,7 @@ impl MockStreamServer {
                                 .split_whitespace()
                                 .nth(1)
                                 .unwrap_or("/");
-                            let (status, body, ctype) = route(path, scenario);
+                            let (status, body, ctype, location) = route(path, scenario);
                             if let Some((start, end)) = range {
                                 let start = start.min(body.len());
                                 let end = end.min(body.len().saturating_sub(1));
@@ -87,11 +91,11 @@ impl MockStreamServer {
                                     let _ = stream.write_all(slice).await;
                                     return;
                                 }
-                                let msg = http_response("416 Range Not Satisfiable", b"", ctype);
+                                let msg = http_response("416 Range Not Satisfiable", b"", ctype, None);
                                 let _ = stream.write_all(&msg).await;
                                 return;
                             }
-                            let msg = http_response(status, &body, ctype);
+                            let msg = http_response(status, &body, ctype, location);
                             let _ = stream.write_all(&msg).await;
                         });
                     }
@@ -111,9 +115,17 @@ impl Drop for MockStreamServer {
     }
 }
 
-fn http_response(status: &str, body: &[u8], ctype: &str) -> Vec<u8> {
+fn http_response(
+    status: &str,
+    body: &[u8],
+    ctype: &str,
+    location: Option<&str>,
+) -> Vec<u8> {
+    let loc = location
+        .map(|href| format!("Location: {href}\r\n"))
+        .unwrap_or_default();
     let mut out = format!(
-        "HTTP/1.1 {status}\r\nContent-Type: {ctype}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        "HTTP/1.1 {status}\r\nContent-Type: {ctype}\r\n{loc}Content-Length: {}\r\nConnection: close\r\n\r\n",
         body.len()
     )
     .into_bytes();
@@ -136,7 +148,11 @@ fn parse_range_header(req: &str) -> Option<(usize, usize)> {
     None
 }
 
-fn route(path: &str, scenario: MockScenario) -> (&'static str, Vec<u8>, &'static str) {
+#[allow(clippy::too_many_lines)]
+fn route(
+    path: &str,
+    scenario: MockScenario,
+) -> (&'static str, Vec<u8>, &'static str, Option<&'static str>) {
     let path_obj = std::path::Path::new(path);
     if path_obj
         .extension()
@@ -147,7 +163,22 @@ fn route(path: &str, scenario: MockScenario) -> (&'static str, Vec<u8>, &'static
         } else {
             b"WEBVTT\n\n00:00:01.000 --> 00:00:04.000\nOK\n".to_vec()
         };
-        return ("200 OK", body, "text/vtt");
+        return ("200 OK", body, "text/vtt", None);
+    }
+
+    if matches!(scenario, MockScenario::CdnRedirect)
+        && (path.contains("edge.m3u8") || path.ends_with("/cdn/live.m3u8"))
+    {
+        return (
+            "302 Found",
+            Vec::new(),
+            "text/plain",
+            Some("/origin/live.m3u8"),
+        );
+    }
+
+    if path.contains("key.bin") || path.ends_with("/aes.key") {
+        return ("200 OK", vec![0u8; 16], "application/octet-stream", None);
     }
 
     if (path_obj
@@ -160,6 +191,7 @@ fn route(path: &str, scenario: MockScenario) -> (&'static str, Vec<u8>, &'static
             "200 OK",
             load_fixture_bytes("dash_live.mpd"),
             "application/dash+xml",
+            None,
         );
     }
 
@@ -180,7 +212,7 @@ fn route(path: &str, scenario: MockScenario) -> (&'static str, Vec<u8>, &'static
             MockScenario::SubtitleDrift => {
                 b"#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:2\n#EXT-X-MEDIA-SEQUENCE:1\n#EXTINF:2.0,\nseg.ts\n#EXTINF:2.0,\nsub.vtt\n".to_vec()
             }
-            MockScenario::Tr101290 => {
+            MockScenario::Tr101290 | MockScenario::CdnRedirect => {
                 b"#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:2\n#EXT-X-MEDIA-SEQUENCE:1\n#EXTINF:2.0,\nseg.ts\n".to_vec()
             }
             MockScenario::SeiCaptions => {
@@ -189,9 +221,11 @@ fn route(path: &str, scenario: MockScenario) -> (&'static str, Vec<u8>, &'static
             MockScenario::DashLive => {
                 b"#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:2\n#EXT-X-MEDIA-SEQUENCE:1\n#EXTINF:2.0,\nseg.m4s\n".to_vec()
             }
+            MockScenario::Aes128Hls => aes128_media_playlist(),
+            MockScenario::MediaSeqGap => media_seq_gap_playlist(),
             _ => b"#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:2\n#EXT-X-MEDIA-SEQUENCE:1\n#EXTINF:2.0,\nseg.ts\n".to_vec(),
         };
-        return ("200 OK", body, "application/vnd.apple.mpegurl");
+        return ("200 OK", body, "application/vnd.apple.mpegurl", None);
     }
 
     if std::path::Path::new(path)
@@ -199,13 +233,18 @@ fn route(path: &str, scenario: MockScenario) -> (&'static str, Vec<u8>, &'static
         .is_some_and(|ext| ext.eq_ignore_ascii_case("ts"))
     {
         if matches!(scenario, MockScenario::Tr101290) {
-            return ("200 OK", fixtures::tr101290_broken_ts(), "video/mp2t");
+            return ("200 OK", fixtures::tr101290_broken_ts(), "video/mp2t", None);
         }
         if matches!(scenario, MockScenario::SeiCaptions) || path.contains("sei") {
-            return ("200 OK", fixtures::sei_caption_hdr_ts(), "video/mp2t");
+            return ("200 OK", fixtures::sei_caption_hdr_ts(), "video/mp2t", None);
         }
         let seq = SEGMENT_SEQ.fetch_add(1, Ordering::Relaxed);
-        return ("200 OK", fixtures::minimal_ts_packet(seq), "video/mp2t");
+        return (
+            "200 OK",
+            fixtures::minimal_ts_packet(seq),
+            "video/mp2t",
+            None,
+        );
     }
 
     if std::path::Path::new(path)
@@ -216,17 +255,35 @@ fn route(path: &str, scenario: MockScenario) -> (&'static str, Vec<u8>, &'static
             .is_some_and(|ext| ext.eq_ignore_ascii_case("mp4"))
     {
         if matches!(scenario, MockScenario::CorruptPssh) {
-            return ("200 OK", corrupt_pssh_segment_bytes(), "video/mp4");
+            return (
+                "200 OK",
+                corrupt_pssh_segment_bytes(),
+                "video/mp4",
+                None,
+            );
         }
         if matches!(
             scenario,
             MockScenario::SeiCaptions | MockScenario::LlHlsFmp4 | MockScenario::DashLive
         ) {
-            return ("200 OK", fixtures::sei_fmp4_m4s(), "video/mp4");
+            return ("200 OK", fixtures::sei_fmp4_m4s(), "video/mp4", None);
         }
     }
 
-    ("404 Not Found", Vec::new(), "text/plain")
+    ("404 Not Found", Vec::new(), "text/plain", None)
+}
+
+fn aes128_media_playlist() -> Vec<u8> {
+    b"#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:2\n#EXT-X-MEDIA-SEQUENCE:1\n#EXT-X-KEY:METHOD=AES-128,URI=\"key.bin\",IV=0x00000000000000000000000000000001\n#EXTINF:2.0,\nseg.ts\n".to_vec()
+}
+
+fn media_seq_gap_playlist() -> Vec<u8> {
+    let hit = MEDIA_SEQ_GAP_HITS.fetch_add(1, Ordering::SeqCst);
+    let seq = if hit == 0 { 1 } else { 10 };
+    format!(
+        "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:2\n#EXT-X-MEDIA-SEQUENCE:{seq}\n#EXTINF:2.0,\nseg.ts\n"
+    )
+    .into_bytes()
 }
 
 fn ll_hls_master_playlist() -> Vec<u8> {
@@ -360,5 +417,78 @@ mod tests {
             .await
             .expect("get");
         assert_eq!(resp.status().as_u16(), 206);
+    }
+
+    #[tokio::test]
+    async fn mock_aes128_playlist_and_key() {
+        let server = MockStreamServer::start_with(MockScenario::Aes128Hls).await;
+        let client = reqwest::Client::new();
+        let pl = client
+            .get(format!("{}/live.m3u8", server.base_url))
+            .send()
+            .await
+            .expect("get")
+            .text()
+            .await
+            .expect("text");
+        assert!(pl.contains("#EXT-X-KEY:METHOD=AES-128"));
+        assert!(pl.contains("URI=\"key.bin\""));
+        let key = client
+            .get(format!("{}/key.bin", server.base_url))
+            .send()
+            .await
+            .expect("key")
+            .bytes()
+            .await
+            .expect("bytes");
+        assert_eq!(key.len(), 16);
+    }
+
+    #[tokio::test]
+    async fn mock_cdn_redirect_hop() {
+        let server = MockStreamServer::start_with(MockScenario::CdnRedirect).await;
+        let client = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .expect("client");
+        let resp = client
+            .get(format!("{}/edge.m3u8", server.base_url))
+            .send()
+            .await
+            .expect("get");
+        assert_eq!(resp.status().as_u16(), 302);
+        let loc = resp
+            .headers()
+            .get("location")
+            .expect("location")
+            .to_str()
+            .expect("str");
+        assert!(loc.contains("origin/live.m3u8"));
+    }
+
+    #[tokio::test]
+    async fn mock_media_seq_gap_jumps() {
+        MEDIA_SEQ_GAP_HITS.store(0, Ordering::SeqCst);
+        let server = MockStreamServer::start_with(MockScenario::MediaSeqGap).await;
+        let client = reqwest::Client::new();
+        let url = format!("{}/live.m3u8", server.base_url);
+        let first = client
+            .get(&url)
+            .send()
+            .await
+            .expect("get")
+            .text()
+            .await
+            .expect("text");
+        let second = client
+            .get(&url)
+            .send()
+            .await
+            .expect("get")
+            .text()
+            .await
+            .expect("text");
+        assert!(first.contains("#EXT-X-MEDIA-SEQUENCE:1"));
+        assert!(second.contains("#EXT-X-MEDIA-SEQUENCE:10"));
     }
 }

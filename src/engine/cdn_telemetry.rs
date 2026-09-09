@@ -72,6 +72,10 @@ pub fn parse_cdn_headers(headers: &reqwest::header::HeaderMap) -> CdnEdgeInfo {
         .or_else(|| get("x-goog-hash"));
     let akamai_cache = get("akamai-cache-status");
     let x_cache_hits = get("x-cache-hits");
+    let oke_front = get("x-oke-front-cache");
+    let mncdn_cache = get("x-mncdn-cache").or_else(|| get("x-mn-cache"));
+    let ec_debug = get("x-ec-debug");
+    let gcore_cache = get("x-gcore-cache");
 
     let server_timing = get("server-timing").map(|s| parse_server_timing(&s));
 
@@ -90,6 +94,10 @@ pub fn parse_cdn_headers(headers: &reqwest::header::HeaderMap) -> CdnEdgeInfo {
         goog: goog.as_deref(),
         cache_control: cache_control.as_deref(),
         akamai_cache: akamai_cache.as_deref(),
+        oke_front: oke_front.as_deref(),
+        mncdn_cache: mncdn_cache.as_deref(),
+        ec_debug: ec_debug.as_deref(),
+        gcore_cache: gcore_cache.as_deref(),
     });
 
     let cache_status = cf_cache
@@ -97,7 +105,10 @@ pub fn parse_cdn_headers(headers: &reqwest::header::HeaderMap) -> CdnEdgeInfo {
         .or_else(|| akamai_cache.clone())
         .or_else(|| x_cache.clone())
         .or(x_cache_status)
-        .or_else(|| get("cdn-cache"));
+        .or_else(|| get("cdn-cache"))
+        .or_else(|| oke_front.clone())
+        .or_else(|| mncdn_cache.clone())
+        .or_else(|| gcore_cache.clone());
 
     let verdict = match provider.as_deref() {
         Some("Akamai") => classify_akamai(x_cache.as_deref()),
@@ -105,6 +116,11 @@ pub fn parse_cdn_headers(headers: &reqwest::header::HeaderMap) -> CdnEdgeInfo {
         Some("CloudFront") => classify_cloudfront(x_cache.as_deref()),
         Some("Fastly") => classify_fastly(x_cache.as_deref(), age, cache_control.as_deref()),
         Some("BunnyCDN") => classify_bunny(cache_status.as_deref(), age, cache_control.as_deref()),
+        Some("JOCDN") => classify_jocdn(cache_status.as_deref(), age, cache_control.as_deref()),
+        Some("Medianova") => classify_medianova(mncdn_cache.as_deref().or(cache_status.as_deref())),
+        Some("Edgio") => classify_edgio(x_cache.as_deref(), age, cache_control.as_deref()),
+        Some("Lumen") => classify_lumen(cache_status.as_deref(), age, cache_control.as_deref()),
+        Some("Gcore") => classify_gcore(gcore_cache.as_deref().or(cache_status.as_deref())),
         _ => classify_generic_cdn(cache_status.as_deref(), age, cache_control.as_deref()),
     };
 
@@ -149,6 +165,10 @@ struct CdnDetectHints<'a> {
     goog: Option<&'a str>,
     cache_control: Option<&'a str>,
     akamai_cache: Option<&'a str>,
+    oke_front: Option<&'a str>,
+    mncdn_cache: Option<&'a str>,
+    ec_debug: Option<&'a str>,
+    gcore_cache: Option<&'a str>,
 }
 
 fn detect_cdn_provider(h: &CdnDetectHints<'_>) -> Option<String> {
@@ -192,6 +212,21 @@ fn detect_cdn_provider(h: &CdnDetectHints<'_>) -> Option<String> {
         || (via_u.contains("GFE") && !cc_u.is_empty())
     {
         return Some("Google Cloud CDN".into());
+    }
+    if h.oke_front.is_some() || server_u.contains("JOCDN") {
+        return Some("JOCDN".into());
+    }
+    if h.mncdn_cache.is_some() || server_u.contains("MNCDN") {
+        return Some("Medianova".into());
+    }
+    if h.ec_debug.is_some() || server_u.contains("ECD") || server_u.contains("ECS") {
+        return Some("Edgio".into());
+    }
+    if server_u.contains("LEVEL3") || via_u.contains("LEVEL3") {
+        return Some("Lumen".into());
+    }
+    if h.gcore_cache.is_some() || server_u.contains("GCORE") {
+        return Some("Gcore".into());
     }
     if served_by_upper.contains("CACHE-")
         || via_u.contains("VARNISH")
@@ -249,6 +284,52 @@ fn classify_bunny(
     cache_control: Option<&str>,
 ) -> CacheVerdict {
     classify_generic_cdn(cache_status, age, cache_control)
+}
+
+fn classify_jocdn(
+    cache_status: Option<&str>,
+    age: Option<u64>,
+    cache_control: Option<&str>,
+) -> CacheVerdict {
+    classify_generic_cdn(cache_status, age, cache_control)
+}
+
+fn classify_medianova(cache_status: Option<&str>) -> CacheVerdict {
+    let s = cache_status.unwrap_or("").to_ascii_uppercase();
+    if s.contains("HIT") {
+        CacheVerdict::Hit
+    } else if s.contains("MISS") {
+        CacheVerdict::Miss
+    } else {
+        CacheVerdict::Unknown
+    }
+}
+
+fn classify_edgio(
+    x_cache: Option<&str>,
+    age: Option<u64>,
+    cache_control: Option<&str>,
+) -> CacheVerdict {
+    classify_generic_cdn(x_cache, age, cache_control)
+}
+
+fn classify_lumen(
+    cache_status: Option<&str>,
+    age: Option<u64>,
+    cache_control: Option<&str>,
+) -> CacheVerdict {
+    classify_generic_cdn(cache_status, age, cache_control)
+}
+
+fn classify_gcore(cache_status: Option<&str>) -> CacheVerdict {
+    let s = cache_status.unwrap_or("").to_ascii_uppercase();
+    if s.contains("HIT") {
+        CacheVerdict::Hit
+    } else if s.contains("MISS") {
+        CacheVerdict::Miss
+    } else {
+        CacheVerdict::Unknown
+    }
 }
 
 fn classify_generic_cdn(
@@ -369,5 +450,89 @@ mod tests {
         assert_eq!(info.provider.as_deref(), Some("Cloudflare"));
         assert_eq!(info.pop.as_deref(), Some("AMS"));
         assert_eq!(info.verdict, CacheVerdict::Hit);
+    }
+
+    #[test]
+    fn detect_jocdn_oke_front() {
+        let mut h = HeaderMap::new();
+        h.insert("x-oke-front-cache", HeaderValue::from_static("HIT"));
+        let info = parse_cdn_headers(&h);
+        assert_eq!(info.provider.as_deref(), Some("JOCDN"));
+        assert_eq!(info.verdict, CacheVerdict::Hit);
+    }
+
+    #[test]
+    fn detect_jocdn_server_name() {
+        let mut h = HeaderMap::new();
+        h.insert("server", HeaderValue::from_static("JOCDN"));
+        h.insert("x-cache", HeaderValue::from_static("MISS"));
+        let info = parse_cdn_headers(&h);
+        assert_eq!(info.provider.as_deref(), Some("JOCDN"));
+        assert_eq!(info.verdict, CacheVerdict::Miss);
+    }
+
+    #[test]
+    fn detect_medianova_mncdn() {
+        let mut h = HeaderMap::new();
+        h.insert("server", HeaderValue::from_static("MNCDN"));
+        h.insert("x-mncdn-cache", HeaderValue::from_static("HIT"));
+        let info = parse_cdn_headers(&h);
+        assert_eq!(info.provider.as_deref(), Some("Medianova"));
+        assert_eq!(info.verdict, CacheVerdict::Hit);
+    }
+
+    #[test]
+    fn detect_medianova_x_mn_cache_miss() {
+        let mut h = HeaderMap::new();
+        h.insert("x-mn-cache", HeaderValue::from_static("MISS"));
+        let info = parse_cdn_headers(&h);
+        assert_eq!(info.provider.as_deref(), Some("Medianova"));
+        assert_eq!(info.verdict, CacheVerdict::Miss);
+    }
+
+    #[test]
+    fn detect_edgio_ecd_server() {
+        let mut h = HeaderMap::new();
+        h.insert("server", HeaderValue::from_static("ECD (ecd/4.0)"));
+        h.insert("x-cache", HeaderValue::from_static("TCP_HIT"));
+        let info = parse_cdn_headers(&h);
+        assert_eq!(info.provider.as_deref(), Some("Edgio"));
+        assert_eq!(info.verdict, CacheVerdict::Hit);
+    }
+
+    #[test]
+    fn detect_edgio_ec_debug() {
+        let mut h = HeaderMap::new();
+        h.insert("x-ec-debug", HeaderValue::from_static("ec=1"));
+        h.insert("x-cache", HeaderValue::from_static("TCP_MISS"));
+        let info = parse_cdn_headers(&h);
+        assert_eq!(info.provider.as_deref(), Some("Edgio"));
+        assert_eq!(info.verdict, CacheVerdict::Miss);
+    }
+
+    #[test]
+    fn detect_lumen_level3() {
+        let mut h = HeaderMap::new();
+        h.insert("via", HeaderValue::from_static("1.1 LEVEL3"));
+        h.insert("x-cache", HeaderValue::from_static("HIT"));
+        let info = parse_cdn_headers(&h);
+        assert_eq!(info.provider.as_deref(), Some("Lumen"));
+        assert_eq!(info.verdict, CacheVerdict::Hit);
+    }
+
+    #[test]
+    fn detect_gcore_hit_miss() {
+        let mut h = HeaderMap::new();
+        h.insert("server", HeaderValue::from_static("GCORE"));
+        h.insert("x-gcore-cache", HeaderValue::from_static("HIT"));
+        let hit = parse_cdn_headers(&h);
+        assert_eq!(hit.provider.as_deref(), Some("Gcore"));
+        assert_eq!(hit.verdict, CacheVerdict::Hit);
+
+        let mut m = HeaderMap::new();
+        m.insert("x-gcore-cache", HeaderValue::from_static("MISS"));
+        let miss = parse_cdn_headers(&m);
+        assert_eq!(miss.provider.as_deref(), Some("Gcore"));
+        assert_eq!(miss.verdict, CacheVerdict::Miss);
     }
 }

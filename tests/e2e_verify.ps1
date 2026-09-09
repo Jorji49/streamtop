@@ -132,6 +132,8 @@ try {
     $HlsUrl = "$Base/live.m3u8"
     $LlUrl = "$Base/ll-hls/master.m3u8"
     $DashUrl = "$Base/dash/live.mpd"
+    $AesUrl = "$Base/aes128/live.m3u8"
+    $CdnEdgeUrl = "$Base/cdn/edge.m3u8"
     $SrtUrl = 'srt://127.0.0.1:9000'
     $RtmpUrl = 'rtmp://127.0.0.1:1935/live/stream'
 
@@ -193,6 +195,28 @@ try {
             Pass 'LL-HLS saw_segment'
         } else {
             Fail 'LL-HLS did not fetch a segment'
+        }
+    }
+
+    Log 'AES-128 EXT-X-KEY smoke'
+    $Out = Run-Summary $AesUrl @('--probe-headers')
+    if ($Out) {
+        $Seg = Get-JsonField $Out 'saw_segment'
+        if ($Seg -eq 'True' -or $Seg -eq 'true') {
+            Pass 'AES-128 saw_segment'
+        } else {
+            Fail 'AES-128 did not fetch a segment'
+        }
+    }
+
+    Log 'CDN 302 hop smoke'
+    $Out = Run-Summary $CdnEdgeUrl @('--probe-headers')
+    if ($Out) {
+        $Seg = Get-JsonField $Out 'saw_segment'
+        if ($Seg -eq 'True' -or $Seg -eq 'true') {
+            Pass 'CDN redirect saw_segment'
+        } else {
+            Fail 'CDN redirect did not fetch a segment'
         }
     }
 

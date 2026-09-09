@@ -124,6 +124,10 @@ SEI_URL="${BASE}/sei/live.m3u8"
 HLS_URL="${BASE}/live.m3u8"
 LL_URL="${BASE}/ll-hls/master.m3u8"
 DASH_URL="${BASE}/dash/live.mpd"
+AES_URL="${BASE}/aes128/live.m3u8"
+CDN_EDGE_URL="${BASE}/cdn/edge.m3u8"
+AES_URL="${BASE}/aes128/live.m3u8"
+CDN_URL="${BASE}/cdn/edge.m3u8"
 SRT_URL="srt://127.0.0.1:9000"
 RTMP_URL="rtmp://127.0.0.1:1935/live/stream"
 
@@ -183,6 +187,23 @@ if [[ -f "${OUT:-}" ]]; then
     pass "LL-HLS saw_segment"
   else
     fail "LL-HLS did not fetch a segment"
+  fi
+fi
+
+log "AES-128 EXT-X-KEY smoke"
+OUT=$(run_summary "$AES_URL" --probe-headers) || true
+if [[ -f "${OUT:-}" ]]; then
+  pass "AES-128 summary schema valid"
+fi
+
+log "CDN 302 hop smoke"
+OUT=$(run_summary "$CDN_EDGE_URL" --probe-headers) || true
+if [[ -f "${OUT:-}" ]]; then
+  SEG=$(json_get ".saw_segment" "$OUT")
+  if [[ "$SEG" == "True" || "$SEG" == "true" ]]; then
+    pass "CDN redirect hop saw_segment"
+  else
+    fail "CDN redirect hop did not fetch a segment"
   fi
 fi
 

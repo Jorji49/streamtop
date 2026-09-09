@@ -758,6 +758,19 @@ mod tests {
     }
 
     #[test]
+    fn utc_timing_truncated_mpd_is_none() {
+        let xml = r#"<MPD><UTCTiming schemeIdUri="urn:mpeg:dash:utc:dir"#;
+        assert!(parse_utc_timing_scheme(xml).is_none());
+    }
+
+    #[test]
+    fn utc_timing_fixture_dash_live() {
+        let xml = include_str!("../../tests/fixtures/dash_live.mpd");
+        let scheme = parse_utc_timing_scheme(xml);
+        assert!(scheme.is_some_and(|s| s.contains("http-iso")));
+    }
+
+    #[test]
     fn iso8601_duration_parses_seconds() {
         assert_eq!(iso8601_duration_to_ms("PT2.5S"), Some(2500));
         assert_eq!(iso8601_duration_to_ms("PT1M"), Some(60_000));

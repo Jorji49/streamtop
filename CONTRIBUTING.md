@@ -7,6 +7,11 @@ measurements (manifest/segment timing, TR 101 290, container probes, metrics)
 over speculative simulation or chat integrations unless there is a clear
 operational need.
 
+Limits: no media decode; G2G from PDT/PRFT only; WHEP signaling only; TR 101 290
+on the probe window (P1/P2); no SRT/RTMP. Linter score penalties: RFC -15, stall
+-20, CDN MISS -5, high TTFB -10 (summary JSON SHI field names stay frozen at
+`schema_version` 6).
+
 ## Development setup
 
 ```bash

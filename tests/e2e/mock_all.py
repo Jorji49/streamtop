@@ -176,6 +176,12 @@ class FeedHandler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(body)
             return
+        if path.endswith("/cdn/edge.m3u8"):
+            self.send_response(302)
+            self.send_header("Location", "/cdn/live.m3u8")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
         body, ctype = route_http(path)
         rng = self.headers.get("Range")
         if rng and body:
@@ -233,6 +239,23 @@ def route_http(path: str) -> Tuple[bytes, str]:
             b"#EXT-X-PRELOAD-HINT:TYPE=PART,URI=\"part1.m4s\"\n"
             b"#EXTINF:2.0,\nseg.m4s\n"
         )
+        return pl, "application/vnd.apple.mpegurl"
+    if path.endswith("key.bin") or path.endswith("/aes.key"):
+        return bytes(16), "application/octet-stream"
+    if "/aes128/" in path and path.endswith(".m3u8"):
+        pl = (
+            b"#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:2\n"
+            b"#EXT-X-MEDIA-SEQUENCE:1\n"
+            b'#EXT-X-KEY:METHOD=AES-128,URI="key.bin",IV=0x00000000000000000000000000000001\n'
+            b"#EXTINF:2.0,\nseg.ts\n"
+        )
+        return pl, "application/vnd.apple.mpegurl"
+    if path.endswith("/cdn/edge.m3u8"):
+        # Handled in do_GET via redirect; fallback playlist if followed without hop.
+        pl = b"#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:2\n#EXT-X-MEDIA-SEQUENCE:1\n#EXTINF:2.0,\nseg.ts\n"
+        return pl, "application/vnd.apple.mpegurl"
+    if "/gap/" in path and path.endswith(".m3u8"):
+        pl = b"#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:2\n#EXT-X-MEDIA-SEQUENCE:10\n#EXTINF:2.0,\nseg.ts\n"
         return pl, "application/vnd.apple.mpegurl"
     if "/tr101290/" in path and path.endswith(".m3u8"):
         pl = b"#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:2\n#EXT-X-MEDIA-SEQUENCE:1\n#EXTINF:2.0,\ntr101290/seg.ts\n"

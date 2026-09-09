@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.5.1] - 2026-09-09
+
+### Added
+
+- CDN edge detection: JOCDN, Medianova (MNCDN), Edgio, Lumen (Level3), Gcore
+- Hermetic fixtures: AES-128 `#EXT-X-KEY`, DASH `UTCTiming`, CDN 302 hop, media-sequence gap
+
+### Changed
+
+- `ManifestPoller` split into `src/engine/poller/` modules (behavior unchanged)
+- TUI/docs: linter score wording (summary JSON SHI fields unchanged, schema v6)
+- README Limits: no decode, G2G estimate, WHEP signaling-only, TR 101 290 probe window
+
 ## [1.5.0] - 2026-09-04
 
 ### Removed

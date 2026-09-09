@@ -921,6 +921,51 @@ seg.ts
         assert_eq!(d.key_uri.as_deref(), Some("https://lic.example/key"));
         assert!(d.badge.contains("AES-128"));
     }
+
+    #[test]
+    fn scan_key_uri_truncated_quote() {
+        let raw = "#EXTM3U\n#EXT-X-KEY:METHOD=AES-128,URI=\"http://x/key\n#EXTINF:2,\nseg.ts\n";
+        let d = scan_drm_keys(raw);
+        assert!(d.present);
+        assert!(d.key_uri.is_none());
+        assert!(d.badge.contains("AES-128"));
+    }
+}
+
+#[cfg(test)]
+mod playlist_seq_tests {
+    use super::*;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn media_sequence_small_step_ok() {
+        let mut linter = SpecLinter::new();
+        let t0 = Instant::now();
+        linter.on_playlist_refresh(1, 2, 1, t0);
+        linter.on_playlist_refresh(3, 2, 1, t0 + Duration::from_millis(400));
+        let findings = linter.take_findings();
+        assert!(!findings.iter().any(|f| f.rule == "MEDIA_SEQUENCE_GAP"));
+    }
+
+    #[test]
+    fn media_sequence_gap_emits_warning() {
+        let mut linter = SpecLinter::new();
+        let t0 = Instant::now();
+        linter.on_playlist_refresh(1, 2, 1, t0);
+        linter.on_playlist_refresh(10, 2, 1, t0 + Duration::from_millis(400));
+        let findings = linter.take_findings();
+        assert!(findings.iter().any(|f| f.rule == "MEDIA_SEQUENCE_GAP"));
+    }
+
+    #[test]
+    fn media_sequence_regress_emits_error() {
+        let mut linter = SpecLinter::new();
+        let t0 = Instant::now();
+        linter.on_playlist_refresh(10, 2, 1, t0);
+        linter.on_playlist_refresh(1, 2, 1, t0 + Duration::from_millis(400));
+        let findings = linter.take_findings();
+        assert!(findings.iter().any(|f| f.rule == "MEDIA_SEQUENCE_REGRESS"));
+    }
 }
 
 /// Collect `#EXT-X-MEDIA` AUDIO / SUBTITLES renditions (language + name + format hints).

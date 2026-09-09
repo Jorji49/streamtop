@@ -650,7 +650,7 @@ fn draw_pane(
             status_tag(&pane.status),
             pane.status.message
         )),
-        Line::from(format!("SHI    : {shi}")),
+        Line::from(format!("linter : {shi}")),
         Line::from(format!(
             "Seq    : {seq}  |  Latency: {lat}  |  Bitrate: {br}"
         )),

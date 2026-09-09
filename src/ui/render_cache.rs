@@ -216,7 +216,7 @@ impl UiRenderCache {
             ),
             Span::raw(" "),
             Span::styled(
-                format!(" SHI {:>3} {} ", app.health.score, app.health.label),
+                format!(" linter {:>3} {} ", app.health.score, app.health.label),
                 Style::default()
                     .fg(score_fg)
                     .bg(score_back)

@@ -29,6 +29,15 @@ Debug CDN issues, validate encoder output, compare origin vs edge, run CI smoke 
 
 WHEP HTTP endpoints are the supported path for WebRTC egress signaling probes. Legacy `srt://` and `rtmp://` URLs are rejected at startup.
 
+## Limits
+
+* No media decode: wire/container probes only (headers + first bytes / probe window).
+* G2G is an estimate from HLS PDT, DASH publish time, and PRFT when present - not end-to-end player latency.
+* WHEP: signaling only (SDP offer/answer). No WebRTC media path.
+* TR 101 290: P1/P2 on the MPEG-TS probe window, not a full multiplex analyzer.
+* No SRT / RTMP ingest.
+* Linter score (TUI): four flags - RFC -15, origin stall -20, CDN MISS -5, high TTFB -10. Summary JSON still uses the existing SHI field names (`schema_version` 6).
+
 ## Features
 
 ### Protocols and inputs
@@ -36,14 +45,14 @@ WHEP HTTP endpoints are the supported path for WebRTC egress signaling probes. L
 * **HLS** (`.m3u8`): live, LL-HLS `#EXT-X-PART` / `PRELOAD-HINT`, part TTFB and Part RTF, `#EXT-X-PROGRAM-DATE-TIME`, media playlists
 * **MPEG-DASH** (`.mpd`): live and VOD, ServiceDescription latency, UTCTiming, ContentProtection / PSSH
 * **IPTV / catalogs** (`.m3u`, `.json`, `.yaml`): channel picker, search, playlist audit to JSON/CSV
-* **WHEP**: HTTP POST SDP offer, parse 200/201 answer (signaling TTFB, codecs, ICE candidates, stream IDs)
+* **WHEP**: HTTP POST SDP offer, parse 200/201 answer (signaling only: TTFB, codecs, ICE candidates, stream IDs)
 
 ### Wire and container probes
 
 * **`--probe-headers`**: fetch only the first bytes of each segment for fast TTFB and header checks
 * **GOP / FPS / resolution**: manifest vs bitstream comparison; mismatch badges in the TUI
 * **Audio**: ADTS, fMP4, MPEG-TS PMT from the probe window
-* **TR 101 290** (`--tr101290`): MPEG-TS P1/P2 checks (sync, continuity, PCR, PAT/PMT)
+* **TR 101 290** (`--tr101290`): MPEG-TS P1/P2 on the probe window (sync, continuity, PCR, PAT/PMT)
 * **AES-128-CBC probe**: in-memory `#EXT-X-KEY` fetch and decrypt for encrypted TS/fMP4 wire analysis (no full decoder)
 * **SEI / HDR** (`--probe-sei`): side metadata from H.264/H.265 elementary streams
 * **DRM** (`--probe-drm`): key-server / LA_URL TTFB with SSRF-safe pinned GET
@@ -53,10 +62,11 @@ WHEP HTTP endpoints are the supported path for WebRTC egress signaling probes. L
 * **LL-HLS part telemetry**: per-part TTFB, download ms, Part RTF (`part_dl_duration_ratio`); Prometheus `streamtop_part_dl_duration_ratio`
 * **DNS-over-HTTPS** (`--doh-provider cloudflare|google|<URL>`): DoH JSON lookup; `doh_ms` in wire timing and summary JSON
 * **HTTP version / timing**: `NetworkTiming` reports DNS/TCP/TLS/TTFB/transfer ms and negotiated `http_version`
+* **CDN edge classify**: Cloudflare, CloudFront, Akamai, Fastly, BunnyCDN, Azure, Google, JOCDN, Medianova, Edgio, Lumen, Gcore (HIT/MISS from edge headers)
 * **Multi-CDN skew** (`--multi-cdn URL1,URL2,...`): concurrent edge polling, live-edge seq/PDT skew matrix, `ERR_CDN_SYNC_SKEW`
 * **SCTE-35 / DAI**: manifest cues, inband DASH `emsg`, cross-layer mismatch detection
 * **Staging ClearKey** (`--clearkey KID:KEY`): cenc CTR and FairPlay cbcs pattern probe
-* **Glass-to-glass latency**: PRFT, HLS PDT, DASH publish time -> `g2g_total_ms`
+* **Glass-to-glass estimate**: PRFT, HLS PDT, DASH publish time -> `g2g_total_ms` (not player E2E)
 * **Measured buffer model**: rebuffer probability and stall risk from observed download-to-duration ratios
 * **Split-screen compare**: two URLs side by side in one TUI
 * **Quick Play** (`p`): launch `mpv` or `ffplay` with active headers
@@ -74,7 +84,7 @@ WHEP HTTP endpoints are the supported path for WebRTC egress signaling probes. L
 * **Prometheus** `/metrics` on `:9184` (Bearer token required on non-loopback bind)
 * **OpenTelemetry**: OTLP traces + metric batches (`/v1/traces`, `/v1/metrics`)
 * **Grafana**: `--export grafana` -> dashboard JSON
-* **Webhooks**: Slack, Discord, generic HTTP on stall, SHI, 5xx, mismatch, ad start
+* **Webhooks**: Slack, Discord, generic HTTP on stall, linter score, 5xx, mismatch, ad start
 
 ## Install
 
@@ -122,7 +132,7 @@ Source: `dist/aur/PKGBUILD`.
 ### Docker
 
 ```bash
-docker run -it --rm ghcr.io/jorji49/streamtop:v1.5.0 <URL>
+docker run -it --rm ghcr.io/jorji49/streamtop:v1.5.1 <URL>
 docker run -it --rm ghcr.io/jorji49/streamtop:latest <URL>
 ```
 
@@ -131,7 +141,7 @@ Metrics on a non-loopback bind require a token:
 ```bash
 docker run --rm -p 9184:9184 \
   -e STREAMTOP_METRICS_TOKEN=change-me \
-  ghcr.io/jorji49/streamtop:v1.5.0 \
+  ghcr.io/jorji49/streamtop:v1.5.1 \
   <URL> --prometheus --metrics-bind 0.0.0.0 \
   --metrics-token "$STREAMTOP_METRICS_TOKEN"
 ```
@@ -176,7 +186,7 @@ streamtop "https://example.com/live.ts.m3u8" --tr101290 --probe-sei
 
 | Area | Contents |
 |------|----------|
-| Status | URL, LIVE / ESTIMATED, SHI, FPS, GOP / audio badges, latency, CDN, buffer, G2G, LL-HLS |
+| Status | URL, LIVE / ESTIMATED, linter score, FPS, GOP / audio badges, latency, CDN, buffer, G2G, LL-HLS |
 | Last segment | Seq, sizes, DNS / TCP / TLS / DoH / TTFB, container, GOP interval, audio |
 | ABR ladder | Bitrate, resolution, FPS, codecs. `[wire]` is from the bitstream; red = manifest vs wire mismatch |
 | Charts | Latency or TTFB; download rate or transfer time |
@@ -212,7 +222,7 @@ streamtop <URL> --summary --summary-format json --timeout 10
 # SARIF 2.1.0 for GitHub Code Scanning
 streamtop <URL> --summary --summary-format sarif --timeout 10
 
-# GitHub Actions step summary (SHI, RTF, TR 101 290, ABR, budget table)
+# GitHub Actions step summary (linter score, RTF, TR 101 290, ABR, budget table)
 streamtop <URL> --summary --github-step-summary "$GITHUB_STEP_SUMMARY" --timeout 10
 # When GITHUB_STEP_SUMMARY is set, --summary and budget mode write it automatically.
 
@@ -292,7 +302,7 @@ Non-loopback `--metrics-bind` requires a non-empty `--metrics-token` or `STREAMT
 | Key | Action |
 |-----|--------|
 | `q` / `Esc` / `Ctrl+C` | Quit (`Esc` leaves the channel list when open) |
-| `Space` | Write `diagnostics/…` report (URLs and secrets redacted) |
+| `Space` | Write `diagnostics/â€¦` report (URLs and secrets redacted) |
 | `c` | Copy curl for the last segment (redacted) |
 | `p` | Play with `mpv` or `ffplay` (not in Docker) |
 | `r` | Reset metrics |
@@ -309,12 +319,12 @@ Compare mode: `Space` pause/resume, `d` detail, `l` log focus, `c` curl, `h` HAR
 
 ## Headless verdict
 
-`--summary` returns PASS only when the stream is LIVE, SHI is at least 85, no critical RFC errors or origin stalls were observed, the last HTTP status is 200/206, and at least one segment was fetched. Any failed condition returns FAIL and a non-zero exit code. The schema file is `schemas/summary.v1.json`; `schema_version` is currently `6`.
+`--summary` returns PASS only when the stream is LIVE, linter score is at least 85, no critical RFC errors or origin stalls were observed, the last HTTP status is 200/206, and at least one segment was fetched. Any failed condition returns FAIL and a non-zero exit code. The schema file is `schemas/summary.v1.json`; `schema_version` is currently `6` (SHI JSON field names unchanged).
 
 ## FAQ
 
 **How is streamtop different from ffprobe or VLC?**  
-ffprobe inspects a single file or URL snapshot. streamtop polls live playlists, tracks segment health over time, surfaces SCTE-35 and SHI trends, and exports Prometheus metrics and CI-friendly summary JSON.
+ffprobe inspects a single file or URL snapshot. streamtop polls live playlists, tracks segment health over time, surfaces SCTE-35 and linter-score trends, and exports Prometheus metrics and CI-friendly summary JSON.
 
 **Does it work headless in CI?**  
 Yes. Use `--summary --summary-format json --timeout N` for PASS/FAIL output, `--summary-format sarif` or `--export sarif:FILE` for Code Scanning, and `--budget-max-*` for threshold gates. Hermetic E2E tests live in `tests/e2e_verify.sh` and `tests/e2e_verify.ps1`.
