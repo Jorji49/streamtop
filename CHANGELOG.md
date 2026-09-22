@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.5.2] - 2026-09-23
+
+### Security
+
+- rustls 0.23.45 (RUSTSEC-2026-0285 / GHSA-2mjx-qc3c-rqvc)
+
+### Changed
+
+- README install: drop Winget claim until microsoft/winget-pkgs merge; keep cargo, Homebrew, Docker, GitHub binaries
+
 ## [1.5.1] - 2026-09-09
 
 ### Added

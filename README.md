@@ -95,21 +95,6 @@ cargo install streamtop
 # or: cargo install cargo-binstall && cargo binstall streamtop
 ```
 
-### Scoop (Windows)
-
-```powershell
-scoop bucket add streamtop https://github.com/Jorji49/streamtop
-scoop install streamtop/streamtop
-```
-
-### Winget (Windows)
-
-Validated, awaiting merge: [microsoft/winget-pkgs#427437](https://github.com/microsoft/winget-pkgs/pull/427437).
-
-```powershell
-winget install Jorji49.streamtop
-```
-
 ### Homebrew
 
 ```bash
@@ -117,22 +102,10 @@ brew tap Jorji49/tap
 brew install streamtop
 ```
 
-### Arch (binary package)
-
-AUR submission is not listed yet. Use the packaging mirror:
-
-```bash
-git clone https://github.com/Jorji49/streamtop-bin.git
-cd streamtop-bin
-makepkg -si
-```
-
-Source: `dist/aur/PKGBUILD`.
-
 ### Docker
 
 ```bash
-docker run -it --rm ghcr.io/jorji49/streamtop:v1.5.1 <URL>
+docker run -it --rm ghcr.io/jorji49/streamtop:v1.5.2 <URL>
 docker run -it --rm ghcr.io/jorji49/streamtop:latest <URL>
 ```
 
@@ -141,17 +114,9 @@ Metrics on a non-loopback bind require a token:
 ```bash
 docker run --rm -p 9184:9184 \
   -e STREAMTOP_METRICS_TOKEN=change-me \
-  ghcr.io/jorji49/streamtop:v1.5.1 \
+  ghcr.io/jorji49/streamtop:v1.5.2 \
   <URL> --prometheus --metrics-bind 0.0.0.0 \
   --metrics-token "$STREAMTOP_METRICS_TOKEN"
-```
-
-### Debian package
-
-```bash
-cargo install cargo-deb
-cargo deb
-sudo dpkg -i target/debian/streamtop_*.deb
 ```
 
 ### From source
