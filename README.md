@@ -62,7 +62,7 @@ WHEP HTTP endpoints are the supported path for WebRTC egress signaling probes. L
 * **LL-HLS part telemetry**: per-part TTFB, download ms, Part RTF (`part_dl_duration_ratio`); Prometheus `streamtop_part_dl_duration_ratio`
 * **DNS-over-HTTPS** (`--doh-provider cloudflare|google|<URL>`): DoH JSON lookup; `doh_ms` in wire timing and summary JSON
 * **HTTP version / timing**: `NetworkTiming` reports DNS/TCP/TLS/TTFB/transfer ms and negotiated `http_version`
-* **CDN edge classify**: Cloudflare, CloudFront, Akamai, Fastly, BunnyCDN, Azure, Google, JOCDN, Medianova, Edgio, Lumen, Gcore (HIT/MISS from edge headers)
+* **CDN edge classify**: Cloudflare, CloudFront, Akamai, Fastly, BunnyCDN, Azure CDN, Google Cloud CDN, JOCDN, Medianova, Edgio, Lumen, Gcore (HIT/MISS from edge headers)
 * **Multi-CDN skew** (`--multi-cdn URL1,URL2,...`): concurrent edge polling, live-edge seq/PDT skew matrix, `ERR_CDN_SYNC_SKEW`
 * **SCTE-35 / DAI**: manifest cues, inband DASH `emsg`, cross-layer mismatch detection
 * **Staging ClearKey** (`--clearkey KID:KEY`): cenc CTR and FairPlay cbcs pattern probe
@@ -267,7 +267,7 @@ Non-loopback `--metrics-bind` requires a non-empty `--metrics-token` or `STREAMT
 | Key | Action |
 |-----|--------|
 | `q` / `Esc` / `Ctrl+C` | Quit (`Esc` leaves the channel list when open) |
-| `Space` | Write `diagnostics/â€¦` report (URLs and secrets redacted) |
+| `Space` | Write `diagnostics/<channel>_<time>.json` (URLs and secrets redacted) |
 | `c` | Copy curl for the last segment (redacted) |
 | `p` | Play with `mpv` or `ffplay` (not in Docker) |
 | `r` | Reset metrics |
