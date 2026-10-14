@@ -1,8 +1,6 @@
 # Changelog
 
-## [Unreleased]
-
-Proposed release: **1.5.3**. Not published. `Cargo.toml` stays at 1.5.2 until a release is cut, so packaging hashes are unchanged.
+## [1.5.3] - 2026-10-14
 
 ### Security
 
