@@ -20,7 +20,7 @@ jobs:
   promote:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
@@ -34,7 +34,7 @@ jobs:
           test "$CONCLUSION" = success
           JOBS=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}/jobs" --paginate --jq '.jobs[] | "\(.name)\t\(.conclusion)"')
           echo "$JOBS"
-          for needle in "check (" "e2e hermetic" "e2e hermetic (Windows)" "cargo audit" "spellcheck"; do
+          for needle in "check (" "e2e hermetic" "e2e hermetic (Windows)" "cargo audit" "cargo deny" "spellcheck"; do
             echo "$JOBS" | grep -F "$needle" | grep -Fq success || {
               echo "::error::required job missing or not success: $needle"
               exit 1
@@ -52,7 +52,7 @@ jobs:
           git merge-base --is-ancestor "$CANDIDATE_SHA" HEAD
 
       - name: Download candidate artifacts
-        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           run-id: ${{ inputs.candidate_run_id }}
           github-token: ${{ github.token }}

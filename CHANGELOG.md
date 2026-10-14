@@ -1,5 +1,39 @@
 # Changelog
 
+## [Unreleased]
+
+Proposed release: **1.5.3**. Not published. `Cargo.toml` stays at 1.5.2 until a release is cut, so packaging hashes are unchanged.
+
+### Security
+
+- Replace unmaintained `serde_yaml` / `unsafe-libyaml` with `serde_norway`
+- Bump ratatui to 0.30 (drops unsound `lru` 0.12 and unmaintained `paste`)
+- `cargo deny check` in CI
+- Rust 1.99 toolchain; MSRV 1.88 (ratatui 0.30)
+- Refresh GitHub Action pins (checkout v7, artifact upload v7 / download v8, Docker actions v4/v6/v7)
+
+### Fixed
+
+- Initial playlist and audit downloads honor `MAX_MANIFEST_BYTES` (10 MB). Local files are read with the same cap
+- Local segment probe reads the wire window instead of the whole file. Full downloads stop at 32 MB
+- WHEP detection matches a `whep` path segment on an HTTP(S) URL and ignores playlist extensions and query strings
+- WHEP `m=` lines record payload types (the format field was read one token too far, so it was always dropped)
+- `--timeout` applies to WHEP probes and multi-CDN summary (previously WHEP used the 4s client timeout, and multi-CDN forced at least 8s)
+- Socket traces time out DNS lookup and the HTTP read, not only TCP connect and TLS handshake
+- SCTE-35 break duration and short MPEG-TS packets return errors instead of panicking
+
+### Changed
+
+- Tokio features limited to the ones the binary uses
+- Direct dependency bumps that stay source-compatible: axum 0.8, base64 0.23, webpki-roots 1, toml 1, directories 6, crossterm 0.29
+- Docker image: Rust 1.99, Alpine 3.24, non-root `streamtop` user, build context is the compiler inputs only
+- README: `--full-segment`, Arch `PKGBUILD`, Scoop. Drop the Awesome IPTV badge (the list does not include this project). Winget remains unpublished
+
+### Not upgraded
+
+- reqwest stays on 0.12. 0.13 renames the rustls feature and defaults to aws-lc-rs, which is a poor fit for the Alpine musl image that uses ring
+- dash-mpd stays on 0.20. 0.21 removes the public MPD DOM (`parse`, `Period`, `AdaptationSet`) this crate uses
+
 ## [1.5.2] - 2026-09-23
 
 ### Security

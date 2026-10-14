@@ -23,10 +23,12 @@ use streamtop::engine::metrics::run_prometheus;
 use streamtop::engine::playlist_parser::{
     detect_and_parse, looks_like_remote_url, path_to_file_url, ParsedInput,
 };
-use streamtop::engine::poller::build_http_client;
+use streamtop::engine::poller::{
+    build_http_client, read_file_limited, read_response_bytes_limited,
+};
 use streamtop::engine::summary::{run_summary, SummaryFormat};
 use streamtop::engine::vod::run_vod;
-use streamtop::models::ChannelEntry;
+use streamtop::models::{ChannelEntry, MAX_MANIFEST_BYTES};
 use streamtop::ui::app::{restore_terminal_global, SessionOpts};
 use streamtop::ui::{App, CompareApp, MultiCdnApp};
 
@@ -371,7 +373,7 @@ async fn main() -> Result<ExitCode> {
     if let Some(raw) = &cli.multi_cdn {
         let targets = streamtop::engine::multi_cdn::parse_multi_cdn(raw)?;
         if cli.summary {
-            let duration = Duration::from_secs(cli.timeout_secs.max(8));
+            let duration = Duration::from_secs(cli.timeout_secs.max(1));
             let (report, findings) = streamtop::engine::multi_cdn::analyze_multi_cdn(
                 &targets,
                 &session,
@@ -419,7 +421,12 @@ async fn main() -> Result<ExitCode> {
     }
 
     if streamtop::engine::whep::is_whep_url(input_url) {
-        let report = streamtop::engine::whep::probe_whep(&client, input_url).await?;
+        let report = streamtop::engine::whep::probe_whep(
+            &client,
+            input_url,
+            Duration::from_secs(cli.timeout_secs.max(1)),
+        )
+        .await?;
         println!("{}", serde_json::to_string_pretty(&report)?);
         restore_terminal_global();
         return Ok(if report.ready {
@@ -541,7 +548,9 @@ async fn load_input(client: &Client, input: &str) -> Result<(String, Vec<u8>, Op
             .get(reqwest::header::CONTENT_TYPE)
             .and_then(|v| v.to_str().ok())
             .map(std::string::ToString::to_string);
-        let body = response.bytes().await?.to_vec();
+        let body = read_response_bytes_limited(response, MAX_MANIFEST_BYTES)
+            .await
+            .wrap_err("failed to read body")?;
         return Ok((input.to_string(), body, content_type));
     }
 
@@ -550,9 +559,7 @@ async fn load_input(client: &Client, input: &str) -> Result<(String, Vec<u8>, Op
         return Err(eyre!("input is not a URL or an existing file: {input}"));
     }
     let origin = path_to_file_url(path)?;
-    let body = tokio::fs::read(path)
-        .await
-        .wrap_err_with(|| format!("failed to read {}", path.display()))?;
+    let body = read_file_limited(path, MAX_MANIFEST_BYTES).await?;
     Ok((origin, body, None))
 }
 

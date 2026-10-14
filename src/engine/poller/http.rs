@@ -69,9 +69,7 @@ impl ManifestPoller {
     }
     pub(super) async fn fetch_manifest(&self, url: &str) -> Result<(Vec<u8>, Option<String>)> {
         if let Some(path) = local_path_from_url(url) {
-            let body = tokio::fs::read(&path)
-                .await
-                .wrap_err_with(|| format!("failed to read {}", path.display()))?;
+            let body = read_file_limited(&path, MAX_MANIFEST_BYTES).await?;
             return Ok((body, None));
         }
         let response = with_probe_read_timeout(async {
@@ -107,7 +105,6 @@ impl ManifestPoller {
                 "playlist nesting exceeds MAX_PLAYLIST_DEPTH ({MAX_PLAYLIST_DEPTH})"
             ));
         }
-        let _ = depth;
         self.fetch_bytes(url).await
     }
 }
@@ -132,7 +129,8 @@ where
         .unwrap_or_else(|_| Err(eyre!("probe read timeout after {PROBE_READ_TIMEOUT_SECS}s")))
 }
 
-pub(super) async fn read_response_bytes_limited(
+/// Read a response body, stopping with an error once `max` bytes are exceeded.
+pub async fn read_response_bytes_limited(
     response: reqwest::Response,
     max: usize,
 ) -> Result<Vec<u8>> {
@@ -144,6 +142,37 @@ pub(super) async fn read_response_bytes_limited(
             return Err(eyre!("response exceeds {max} byte limit"));
         }
         buf.extend_from_slice(&chunk);
+    }
+    Ok(buf)
+}
+
+/// Read a local file, returning an error if it is larger than `max`.
+pub async fn read_file_limited(path: &std::path::Path, max: usize) -> Result<Vec<u8>> {
+    let buf = read_file_prefix(path, max.saturating_add(1)).await?;
+    if buf.len() > max {
+        return Err(eyre!("file exceeds {max} byte limit: {}", path.display()));
+    }
+    Ok(buf)
+}
+
+/// Read at most `max` bytes from a local file.
+pub async fn read_file_prefix(path: &std::path::Path, max: usize) -> Result<Vec<u8>> {
+    use tokio::io::AsyncReadExt;
+    let mut file = tokio::fs::File::open(path)
+        .await
+        .wrap_err_with(|| format!("failed to read {}", path.display()))?;
+    let mut buf = Vec::new();
+    let mut tmp = [0u8; 8192];
+    while buf.len() < max {
+        let want = (max - buf.len()).min(tmp.len());
+        let n = file
+            .read(&mut tmp[..want])
+            .await
+            .wrap_err_with(|| format!("failed to read {}", path.display()))?;
+        if n == 0 {
+            break;
+        }
+        buf.extend_from_slice(&tmp[..n]);
     }
     Ok(buf)
 }

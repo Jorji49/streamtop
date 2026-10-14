@@ -1,10 +1,11 @@
 //! WHEP (WebRTC HTTP Egress Protocol) signaling probe without media decode.
 
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use color_eyre::eyre::{Result, WrapErr};
 use reqwest::Client;
 use serde::Serialize;
+use url::Url;
 
 const MIN_SDP_OFFER: &str = "v=0\r\n\
 o=- 0 0 IN IP4 127.0.0.1\r\n\
@@ -30,17 +31,60 @@ pub struct WhepProbeReport {
 }
 
 pub fn is_whep_url(url: &str) -> bool {
-    let lower = url.to_ascii_lowercase();
-    lower.contains("/whep") || lower.ends_with("whep")
+    let Ok(parsed) = Url::parse(url) else {
+        return false;
+    };
+    if parsed.scheme() != "http" && parsed.scheme() != "https" {
+        return false;
+    }
+    let Some(segments) = parsed.path_segments() else {
+        return false;
+    };
+    let segments: Vec<&str> = segments.filter(|part| !part.is_empty()).collect();
+    if segments.is_empty() {
+        return false;
+    }
+    let playlist = segments.iter().any(|part| is_playlist_segment(part));
+    if playlist {
+        return false;
+    }
+    segments
+        .iter()
+        .any(|part| part.eq_ignore_ascii_case("whep"))
+}
+
+fn push_mline_payload_types(rest: &str, out: &mut Vec<String>) {
+    // m=<media> <port> <proto> <fmt>...
+    // `rest` is the line with the "m=audio" / "m=video" prefix removed.
+    for pt in rest.split_whitespace().skip(2) {
+        if !pt.is_empty() {
+            out.push(pt.to_string());
+        }
+    }
+}
+
+fn is_playlist_segment(part: &str) -> bool {
+    let Some((_, ext)) = part.rsplit_once('.') else {
+        return false;
+    };
+    matches!(
+        ext.to_ascii_lowercase().as_str(),
+        "m3u8" | "m3u" | "mpd" | "ts"
+    )
 }
 
 /// POST SDP Offer to WHEP endpoint; inspect SDP Answer metadata only.
-pub async fn probe_whep(client: &Client, endpoint: &str) -> Result<WhepProbeReport> {
+pub async fn probe_whep(
+    client: &Client,
+    endpoint: &str,
+    timeout: Duration,
+) -> Result<WhepProbeReport> {
     let started = Instant::now();
     let response = client
         .post(endpoint)
         .header(reqwest::header::CONTENT_TYPE, "application/sdp")
         .header(reqwest::header::ACCEPT, "application/sdp")
+        .timeout(timeout)
         .body(MIN_SDP_OFFER)
         .send()
         .await
@@ -90,13 +134,9 @@ fn parse_sdp_answer(sdp: &str, report: &mut WhepProbeReport) {
                 report.stream_ids.push(id.to_string());
             }
         } else if let Some(m) = t.strip_prefix("m=audio") {
-            if let Some(pt) = m.split_whitespace().nth(3) {
-                report.audio_codecs.push(pt.to_string());
-            }
+            push_mline_payload_types(m, &mut report.audio_codecs);
         } else if let Some(m) = t.strip_prefix("m=video") {
-            if let Some(pt) = m.split_whitespace().nth(3) {
-                report.video_codecs.push(pt.to_string());
-            }
+            push_mline_payload_types(m, &mut report.video_codecs);
         }
     }
 }
@@ -108,7 +148,11 @@ mod tests {
     #[test]
     fn detects_whep_urls() {
         assert!(is_whep_url("https://cdn.example/whep/feed1"));
+        assert!(is_whep_url("https://cdn.example/live/whep"));
         assert!(!is_whep_url("https://cdn.example/live.m3u8"));
+        assert!(!is_whep_url("https://cdn.example/whep/live.m3u8"));
+        assert!(!is_whep_url("https://cdn.example/live.m3u8?next=/whep"));
+        assert!(!is_whep_url("https://cdn.example/notwhep"));
     }
 
     #[test]
@@ -116,7 +160,7 @@ mod tests {
         let sdp = "v=0\r\nm=video 9 UDP/TLS/RTP/SAVPF 96\r\na=rtpmap:96 H264/90000\r\na=msid:stream1 track1\r\na=candidate:1\r\n";
         let mut report = WhepProbeReport::default();
         parse_sdp_answer(sdp, &mut report);
-        assert!(!report.video_codecs.is_empty());
+        assert_eq!(report.video_codecs, ["96", "96"]);
         assert_eq!(report.ice_candidates, 1);
         assert_eq!(report.stream_ids, vec!["stream1"]);
     }

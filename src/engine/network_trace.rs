@@ -58,10 +58,14 @@ pub async fn traced_get(
     let path = if path.is_empty() { "/".into() } else { path };
 
     let dns_start = Instant::now();
-    let addrs = tokio::net::lookup_host((host.as_str(), port))
-        .await
-        .wrap_err("DNS lookup failed")?
-        .collect::<Vec<SocketAddr>>();
+    let addrs = tokio::time::timeout(
+        DEFAULT_TIMEOUT,
+        tokio::net::lookup_host((host.as_str(), port)),
+    )
+    .await
+    .map_err(|_| eyre!("DNS lookup timeout"))?
+    .wrap_err("DNS lookup failed")?
+    .collect::<Vec<SocketAddr>>();
     let dns_ms = dns_start.elapsed().as_millis() as u64;
     if addrs.is_empty() {
         return Err(eyre!("DNS returned no addresses for {host}"));
@@ -108,21 +112,10 @@ pub async fn traced_get(
             .wrap_err("TLS handshake failed")?;
         tls_ms = Some(tls_start.elapsed().as_millis() as u64);
 
-        let write_start = Instant::now();
-        tls.write_all(request.as_bytes()).await?;
-        tls.flush().await?;
-        let (st, hdrs, body_bytes, header_done) = read_http_response(&mut tls, max_body).await?;
-        let ttfb = write_start.elapsed().as_millis() as u64;
-        let ttfb_ms = header_done.unwrap_or(ttfb);
-        (st, hdrs, body_bytes, ttfb_ms)
+        exchange(&mut tls, &request, max_body, DEFAULT_TIMEOUT).await?
     } else {
         let mut stream = tcp;
-        let write_start = Instant::now();
-        stream.write_all(request.as_bytes()).await?;
-        stream.flush().await?;
-        let (st, hdrs, body_bytes, header_done) = read_http_response(&mut stream, max_body).await?;
-        let ttfb_ms = header_done.unwrap_or_else(|| write_start.elapsed().as_millis() as u64);
-        (st, hdrs, body_bytes, ttfb_ms)
+        exchange(&mut stream, &request, max_body, DEFAULT_TIMEOUT).await?
     };
 
     let download_ms = total_start.elapsed().as_millis() as u64;
@@ -144,6 +137,32 @@ pub async fn traced_get(
         download_ms: download_ms.max(1),
         chunked_transfer,
     })
+}
+
+async fn exchange<S>(
+    stream: &mut S,
+    request: &str,
+    max_body: Option<usize>,
+    timeout: Duration,
+) -> Result<(u16, HeaderMap, Vec<u8>, u64)>
+where
+    S: AsyncReadExt + AsyncWriteExt + Unpin,
+{
+    let write_start = Instant::now();
+    match tokio::time::timeout(timeout, async {
+        stream.write_all(request.as_bytes()).await?;
+        stream.flush().await?;
+        read_http_response(stream, max_body).await
+    })
+    .await
+    {
+        Err(_) => Err(eyre!("HTTP read timeout after {}s", timeout.as_secs())),
+        Ok(Err(err)) => Err(err),
+        Ok(Ok((status, headers, body, header_done))) => {
+            let ttfb = header_done.unwrap_or_else(|| write_start.elapsed().as_millis() as u64);
+            Ok((status, headers, body, ttfb))
+        }
+    }
 }
 
 fn build_tls_connector() -> TlsConnector {
@@ -322,17 +341,13 @@ pub async fn pinned_post_json(
             .await
             .map_err(|_| eyre!("TLS handshake timeout"))?
             .wrap_err("TLS handshake failed")?;
-        tls.write_all(request.as_bytes()).await?;
-        tls.flush().await?;
-        read_http_response(&mut tls, Some(65536)).await?
+        exchange(&mut tls, &request, Some(65536), timeout).await?
     } else {
         let mut tcp = tokio::time::timeout(timeout, TcpStream::connect(addr))
             .await
             .map_err(|_| eyre!("TCP connect timeout"))?
             .wrap_err("TCP connect failed")?;
-        tcp.write_all(request.as_bytes()).await?;
-        tcp.flush().await?;
-        read_http_response(&mut tcp, Some(65536)).await?
+        exchange(&mut tcp, &request, Some(65536), timeout).await?
     };
     Ok(status)
 }
@@ -385,17 +400,13 @@ pub async fn pinned_get_range(
             .await
             .map_err(|_| eyre!("TLS handshake timeout"))?
             .wrap_err("TLS handshake failed")?;
-        tls.write_all(request.as_bytes()).await?;
-        tls.flush().await?;
-        read_http_response(&mut tls, Some(max_body)).await?
+        exchange(&mut tls, &request, Some(max_body), timeout).await?
     } else {
         let mut tcp = tokio::time::timeout(timeout, TcpStream::connect(addr))
             .await
             .map_err(|_| eyre!("TCP connect timeout"))?
             .wrap_err("TCP connect failed")?;
-        tcp.write_all(request.as_bytes()).await?;
-        tcp.flush().await?;
-        read_http_response(&mut tcp, Some(max_body)).await?
+        exchange(&mut tcp, &request, Some(max_body), timeout).await?
     };
     Ok((status, started.elapsed().as_millis() as u64))
 }
