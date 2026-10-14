@@ -337,10 +337,10 @@ fn parse_json_catalog(text: &str, base: &str) -> Result<Vec<ChannelEntry>> {
 }
 
 fn parse_yaml_catalog(text: &str, base: &str) -> Result<Vec<ChannelEntry>> {
-    if let Ok(items) = serde_yaml::from_str::<Vec<CatalogItem>>(text) {
+    if let Ok(items) = serde_norway::from_str::<Vec<CatalogItem>>(text) {
         return items_to_channels(items, base);
     }
-    if let Ok(root) = serde_yaml::from_str::<CatalogRoot>(text) {
+    if let Ok(root) = serde_norway::from_str::<CatalogRoot>(text) {
         if !root.channels.is_empty() {
             return items_to_channels(root.channels, base);
         }

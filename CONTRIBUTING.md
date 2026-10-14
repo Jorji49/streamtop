@@ -14,6 +14,8 @@ on the probe window (P1/P2); no SRT/RTMP. Linter score penalties: RFC -15, stall
 
 ## Development setup
 
+MSRV is 1.88 (`rust-version` in `Cargo.toml`). CI uses the toolchain in `rust-toolchain.toml`.
+
 ```bash
 rustup toolchain install stable
 cargo test --locked

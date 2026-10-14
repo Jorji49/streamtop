@@ -10,7 +10,6 @@
 
 [![Awesome Ratatui](https://img.shields.io/badge/awesome-ratatui-e43716?style=for-the-badge&logo=rust&logoColor=white)](https://github.com/ratatui/awesome-ratatui)
 [![Awesome Rust](https://img.shields.io/badge/awesome-rust-dea584?style=for-the-badge&logo=rust&logoColor=white)](https://github.com/rust-unofficial/awesome-rust)
-[![Awesome IPTV](https://img.shields.io/badge/awesome-iptv-6a1b9a?style=for-the-badge&logo=vlcmediaplayer&logoColor=white)](https://github.com/iptv-org/awesome-iptv)
 
 [![Crates.io](https://img.shields.io/crates/v/streamtop?style=flat-square&color=007ec6&labelColor=1c1c1c)](https://crates.io/crates/streamtop)
 [![Release](https://img.shields.io/github/v/release/Jorji49/streamtop?label=release&style=flat-square&color=007ec6&labelColor=1c1c1c)](https://github.com/Jorji49/streamtop/releases/latest)
@@ -49,7 +48,7 @@ WHEP HTTP endpoints are the supported path for WebRTC egress signaling probes. L
 
 ### Wire and container probes
 
-* **`--probe-headers`**: fetch only the first bytes of each segment for fast TTFB and header checks
+* **Wire probe (default)**: each segment is range-requested (first bytes only) for TTFB and header checks. `--probe-headers` is the same behavior. `--full-segment` downloads the segment instead (up to 32 MB)
 * **GOP / FPS / resolution**: manifest vs bitstream comparison; mismatch badges in the TUI
 * **Audio**: ADTS, fMP4, MPEG-TS PMT from the probe window
 * **TR 101 290** (`--tr101290`): MPEG-TS P1/P2 on the probe window (sync, continuity, PCR, PAT/PMT)
@@ -102,6 +101,23 @@ brew tap Jorji49/tap
 brew install streamtop
 ```
 
+### Arch Linux
+
+`dist/aur/PKGBUILD` is the `streamtop-bin` package. It installs the Linux release tarball from GitHub Releases:
+
+```bash
+makepkg -si -p dist/aur/PKGBUILD
+```
+
+### Scoop
+
+```bash
+scoop bucket add streamtop https://github.com/Jorji49/streamtop
+scoop install streamtop
+```
+
+Winget manifests are in `dist/winget/`. They are not in the winget community index, so `winget install` is not a supported install path yet.
+
 ### Docker
 
 ```bash
@@ -145,7 +161,7 @@ streamtop "./channels.m3u"
 streamtop "https://example.com/live.ts.m3u8" --tr101290 --probe-sei
 ```
 
-`--probe-headers` requests only the first bytes of each segment (faster; enough for headers and wire checks).
+Segment fetches are range probes by default (first bytes only; enough for headers and wire checks). Pass `--full-segment` to download the segment body instead.
 
 ## UI overview
 
@@ -164,8 +180,8 @@ FPS prefers playlist `FRAME-RATE` / `@frameRate`, otherwise the bitstream when a
 ## Usage
 
 ```bash
-# Dashboard
-streamtop <URL> [--probe-headers] [-H "Key: Value"] [-A user-agent] [-i MS]
+# Dashboard (range probe is the default; --full-segment downloads the segment)
+streamtop <URL> [--probe-headers | --full-segment] [-H "Key: Value"] [-A user-agent] [-i MS]
 
 # Side-by-side compare
 streamtop --compare <URL_1> <URL_2> --probe-headers

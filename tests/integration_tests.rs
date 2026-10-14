@@ -154,7 +154,6 @@ fn dash_fixture_parses_widevine_content_protection() {
     assert!(summary.type_live);
     assert!(summary.drm.present);
     assert_eq!(summary.drm.method.as_deref(), Some("Widevine"));
-    assert!(!summary.variants.is_empty());
     // Representation omits timescale; must inherit 90000 from AdaptationSet → 10s
     assert!((summary.segment_duration_hint_secs - 10.0).abs() < 0.01);
     assert_eq!(summary.variants[0].frame_rate, Some(25.0));
@@ -191,7 +190,11 @@ async fn mock_chaos_subtitle_drift_integrates() {
     let probe = probe_subtitle_payload(&body);
     let sync = compute_subtitle_drift(&probe, Some(1000));
     assert!(sync.desync_warning);
-    assert!(!lint_subtitle_drift(&sync).is_empty());
+    let notes = lint_subtitle_drift(&sync);
+    assert!(
+        notes.iter().any(|note| note.contains("Subtitle PTS drift")),
+        "{notes:?}"
+    );
 }
 
 #[test]
@@ -294,12 +297,12 @@ async fn whep_mock_handshake_parses_201_sdp_answer() {
         .timeout(Duration::from_secs(5))
         .build()
         .expect("client");
-    let report = streamtop::engine::whep::probe_whep(&client, &endpoint)
+    let report = streamtop::engine::whep::probe_whep(&client, &endpoint, Duration::from_secs(5))
         .await
         .expect("whep probe");
     assert!(report.ready);
     assert_eq!(report.http_status, 201);
-    assert!(!report.video_codecs.is_empty());
+    assert!(report.video_codecs.iter().any(|codec| codec == "96"));
     assert_eq!(report.stream_ids, vec!["cam1"]);
     assert!(report.ice_candidates >= 1);
     assert!(report

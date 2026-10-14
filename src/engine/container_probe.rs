@@ -840,24 +840,31 @@ fn probe_mpeg_ts(bytes: &[u8]) -> WireProbeInfo {
 }
 
 fn packet_pid(pkt: &[u8]) -> u16 {
+    if pkt.len() < 3 {
+        return 0x1fff;
+    }
     (((pkt[1] as u16) & 0x1f) << 8) | pkt[2] as u16
 }
 
 fn has_pes_start(pkt: &[u8]) -> bool {
-    pkt[1] & 0x40 != 0
+    pkt.get(1).is_some_and(|b| b & 0x40 != 0)
 }
 
 fn ts_payload(pkt: &[u8]) -> Option<&[u8]> {
+    if pkt.len() < 188 || pkt.first() != Some(&0x47) {
+        return None;
+    }
     let adaptation = (pkt[3] >> 4) & 0x3;
     let off = if adaptation == 2 || adaptation == 3 {
-        5 + pkt[4] as usize
+        let afl = usize::from(*pkt.get(4)?);
+        5usize.saturating_add(afl)
     } else {
         4
     };
     if adaptation == 0 || off >= 188 {
         return None;
     }
-    Some(&pkt[off..188])
+    pkt.get(off..188)
 }
 
 fn parse_pat_pmt_pid(pkt: &[u8]) -> Option<u16> {
@@ -1657,6 +1664,9 @@ fn ts_pcr_pts_drift_ms(packets: &[&[u8]]) -> Option<f64> {
 }
 
 fn parse_ts_pcr(pkt: &[u8]) -> Option<u64> {
+    if pkt.len() < 188 {
+        return None;
+    }
     let adaptation = (pkt[3] >> 4) & 0x3;
     if adaptation != 2 && adaptation != 3 {
         return None;
@@ -1884,5 +1894,24 @@ mod tests {
         p2[3] = 0x13; // cc=3, expected 1
         let errors = ts_continuity_errors(&[&p1[..], &p2[..]]);
         assert!(errors >= 1);
+    }
+
+    #[test]
+    fn short_ts_packets_do_not_panic() {
+        let samples: &[&[u8]] = &[
+            &[],
+            &[0x47],
+            &[0x47, 0x40, 0x00],
+            &[0x47, 0x40, 0x00, 0x30, 0xff],
+        ];
+        for sample in samples {
+            let _ = probe_mpeg_ts(sample);
+            let _ = ts_payload(sample);
+            let _ = parse_ts_pcr(sample);
+            let _ = packet_pid(sample);
+            assert!(!has_pes_start(sample) || sample.len() > 1);
+        }
+        assert!(ts_payload(&[0x47]).is_none());
+        assert_eq!(packet_pid(&[0x47]), 0x1fff);
     }
 }

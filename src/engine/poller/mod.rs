@@ -31,7 +31,10 @@ mod http;
 mod segment_fetch;
 
 pub use hls_poll::collect_variants;
-pub use http::{build_audit_http_client, build_http_client};
+pub use http::{
+    build_audit_http_client, build_http_client, read_file_limited, read_file_prefix,
+    read_response_bytes_limited,
+};
 
 #[derive(Debug, Clone, Default)]
 pub struct DiagnosticOpts {

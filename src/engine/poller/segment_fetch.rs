@@ -34,7 +34,7 @@ use crate::models::{
 
 use super::ManifestPoller;
 
-use super::http::resolve_url;
+use super::http::{read_file_limited, read_file_prefix, resolve_url};
 
 #[derive(Debug)]
 pub(super) struct SegmentFetch {
@@ -787,17 +787,25 @@ pub(super) async fn read_local_segment(
     probe: bool,
 ) -> Result<SegmentFetch> {
     let started = Instant::now();
-    let data = tokio::fs::read(path)
+    let meta = tokio::fs::metadata(path)
         .await
         .wrap_err_with(|| format!("failed to read {}", path.display()))?;
-    let ttfb_ms = started.elapsed().as_millis() as u64;
-    let take = if probe {
-        data.len()
-            .min((DEEP_WIRE_PROBE_BYTES as usize).saturating_add(1))
+    let size_bytes = meta.len();
+    let cap = if probe {
+        (DEEP_WIRE_PROBE_BYTES as usize).saturating_add(1)
     } else {
-        data.len()
+        MAX_SEGMENT_BYTES
     };
-    let slice = &data[..take];
+    if !probe && size_bytes > cap as u64 {
+        return Err(eyre!("segment exceeds {cap} byte limit"));
+    }
+    let data = if probe {
+        read_file_prefix(path, cap).await?
+    } else {
+        read_file_limited(path, cap).await?
+    };
+    let ttfb_ms = started.elapsed().as_millis() as u64;
+    let slice = data.as_slice();
     let wire = deep_wire_probe(slice);
     let container = if wire.container == ContainerKind::Unknown {
         inspect_container(slice)
@@ -806,7 +814,7 @@ pub(super) async fn read_local_segment(
     };
     let download_ms = started.elapsed().as_millis() as u64;
     Ok(SegmentFetch {
-        size_bytes: data.len() as u64,
+        size_bytes,
         transferred_bytes: slice.len() as u64,
         ttfb_ms,
         download_ms: download_ms.max(1),

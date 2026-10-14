@@ -19,10 +19,13 @@ use url::Url;
 use crate::engine::dash::{looks_like_dash, parse_dash_mpd};
 use crate::engine::linter::parse_cdn_headers;
 use crate::engine::playlist_parser::local_path_from_url;
-use crate::engine::poller::{build_audit_http_client, collect_variants};
+use crate::engine::poller::{
+    build_audit_http_client, collect_variants, read_file_limited, read_file_prefix,
+    read_response_bytes_limited,
+};
 use crate::models::{
     AuditReport, AuditRow, AuditVerdict, ChannelEntry, AUDIT_CONCURRENCY, AUDIT_REPORT_CSV,
-    AUDIT_REPORT_JSON, RANGE_PROBE_BYTES, STALL_TTFB_MS,
+    AUDIT_REPORT_JSON, MAX_MANIFEST_BYTES, RANGE_PROBE_BYTES, STALL_TTFB_MS,
 };
 
 pub async fn run_audit(
@@ -307,9 +310,7 @@ fn token_error(status: u16) -> Option<String> {
 
 async fn fetch_manifest(client: &Client, url: &str) -> Result<(Vec<u8>, u16, Option<String>)> {
     if let Some(path) = local_path_from_url(url) {
-        let body = tokio::fs::read(&path)
-            .await
-            .wrap_err_with(|| format!("read {}", path.display()))?;
+        let body = read_file_limited(&path, MAX_MANIFEST_BYTES).await?;
         return Ok((body, 200, None));
     }
     let response = client
@@ -323,7 +324,7 @@ async fn fetch_manifest(client: &Client, url: &str) -> Result<(Vec<u8>, u16, Opt
         .get(reqwest::header::CONTENT_TYPE)
         .and_then(|v| v.to_str().ok())
         .map(std::string::ToString::to_string);
-    let body = response.bytes().await.unwrap_or_default().to_vec();
+    let body = read_response_bytes_limited(response, MAX_MANIFEST_BYTES).await?;
     Ok((body, status, ct))
 }
 
@@ -334,11 +335,7 @@ async fn fetch_bytes(client: &Client, url: &str) -> Result<Vec<u8>> {
 async fn range_probe(client: &Client, url: &str) -> Result<(u16, u64, String)> {
     if let Some(path) = local_path_from_url(url) {
         let started = Instant::now();
-        let data = tokio::fs::read(&path).await.unwrap_or_default();
-        let n = data
-            .len()
-            .min((RANGE_PROBE_BYTES as usize).saturating_add(1));
-        let _ = &data[..n];
+        let _ = read_file_prefix(&path, (RANGE_PROBE_BYTES as usize).saturating_add(1)).await?;
         let ttfb = started.elapsed().as_millis() as u64;
         return Ok((200, ttfb, "Local · ORIGIN?".into()));
     }
@@ -354,7 +351,8 @@ async fn range_probe(client: &Client, url: &str) -> Result<(u16, u64, String)> {
     let status = response.status().as_u16();
     let ttfb = started.elapsed().as_millis() as u64;
     let cdn = parse_cdn_headers(response.headers()).badge();
-    let _ = response.bytes().await;
+    let _ =
+        read_response_bytes_limited(response, (RANGE_PROBE_BYTES as usize).saturating_add(1)).await;
     Ok((status, ttfb, cdn))
 }
 

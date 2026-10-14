@@ -306,12 +306,15 @@ pub fn parse_scte35_bytes(data: &[u8]) -> Option<SpliceInfoSection> {
                         off += consumed;
                     }
                     if duration_flag && off + 5 <= cmd_end {
-                        let (ticks, auto_ret) = read_break_duration(&data[off..]);
-                        break_duration_secs = Some(ticks as f64 / 90_000.0);
-                        if break_auto_return.is_none() {
-                            break_auto_return = Some(auto_ret);
+                        if let Some((ticks, auto_ret)) = read_break_duration(&data[off..]) {
+                            break_duration_secs = Some(ticks as f64 / 90_000.0);
+                            if break_auto_return.is_none() {
+                                break_auto_return = Some(auto_ret);
+                            }
+                            off += 5;
+                        } else {
+                            parse_notes.push("break_duration truncated".into());
                         }
-                        off += 5;
                     }
                     let _ = off;
                 }
@@ -372,12 +375,17 @@ pub fn parse_scte35_bytes(data: &[u8]) -> Option<SpliceInfoSection> {
                         off += consumed;
                     }
                     if duration_flag && off + 5 <= cmd_end {
-                        let (ticks, auto_ret) = read_break_duration(&data[off..]);
-                        if break_duration_secs.is_none() {
-                            break_duration_secs = Some(ticks as f64 / 90_000.0);
-                            break_auto_return = Some(auto_ret);
+                        if let Some((ticks, auto_ret)) = read_break_duration(&data[off..]) {
+                            if break_duration_secs.is_none() {
+                                break_duration_secs = Some(ticks as f64 / 90_000.0);
+                                break_auto_return = Some(auto_ret);
+                            }
+                            off += 5;
+                        } else {
+                            parse_notes
+                                .push(format!("SpliceSchedule event {i} truncated break_duration"));
+                            break;
                         }
-                        off += 5;
                     }
                     // unique_program_id (16) + avail_num (8) + avails_expected (8)
                     if off + 4 <= cmd_end {
@@ -467,14 +475,15 @@ fn parse_splice_time(data: &[u8]) -> (Option<u64>, usize) {
     }
 }
 
-fn read_break_duration(data: &[u8]) -> (u64, bool) {
-    let auto_return = data.first().is_some_and(|b| b & 0x80 != 0);
-    let ticks = (((data[0] as u64) & 0x01) << 32)
-        | ((data[1] as u64) << 24)
-        | ((data[2] as u64) << 16)
-        | ((data[3] as u64) << 8)
-        | data[4] as u64;
-    (ticks, auto_return)
+fn read_break_duration(data: &[u8]) -> Option<(u64, bool)> {
+    let bytes = crate::engine::slice_util::subslice_len(data, 0, 5)?;
+    let auto_return = bytes[0] & 0x80 != 0;
+    let ticks = (((bytes[0] as u64) & 0x01) << 32)
+        | ((bytes[1] as u64) << 24)
+        | ((bytes[2] as u64) << 16)
+        | ((bytes[3] as u64) << 8)
+        | bytes[4] as u64;
+    Some((ticks, auto_return))
 }
 
 fn parse_segmentation_descriptor(body: &[u8]) -> Option<SegmentationDescriptor> {
@@ -750,5 +759,17 @@ mod tests {
         data[26] = 0;
         let parsed = parse_scte35_bytes(&data).expect("parse");
         assert_eq!(parsed.break_auto_return, Some(true));
+    }
+
+    #[test]
+    fn truncated_and_empty_payloads_do_not_panic() {
+        assert!(parse_scte35_bytes(&[]).is_none());
+        assert!(parse_scte35_bytes(&[0xfc]).is_none());
+        assert!(read_break_duration(&[]).is_none());
+        assert!(read_break_duration(&[0x80, 0, 0, 0]).is_none());
+        for len in 0..20 {
+            let data = vec![0xfc; len];
+            let _ = parse_scte35_bytes(&data);
+        }
     }
 }
