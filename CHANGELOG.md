@@ -11,6 +11,8 @@ Proposed release: **1.5.3**. Not published. `Cargo.toml` stays at 1.5.2 until a 
 - `cargo deny check` in CI
 - Rust 1.99 toolchain; MSRV 1.88 (ratatui 0.30)
 - Refresh GitHub Action pins (checkout v7, artifact upload v7 / download v8, Docker actions v4/v6/v7)
+- Correct the `docker/setup-buildx-action` v4.4.1 pin. The previous SHA was not a commit, so Docker Publish failed while resolving actions
+- Docker Publish builds on a main push and pushes an image only from a manual workflow dispatch
 
 ### Fixed
 
