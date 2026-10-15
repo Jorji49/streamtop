@@ -94,11 +94,30 @@ jobs:
         run: |
           set -euo pipefail
           TAG="v${VERSION}"
+          awk -v v="$VERSION" '
+            $0 ~ "^## \\[" v "\\]" {found=1; next}
+            found && /^## \[/ {exit}
+            found {print}
+          ' CHANGELOG.md > section.md
+          test -s section.md
+          {
+            echo "# streamtop v${VERSION}"
+            cat section.md
+            echo
+            echo "## Install"
+            echo
+            echo '```bash'
+            echo "cargo install streamtop --version ${VERSION}"
+            echo '```'
+            echo
+            echo "GitHub Release binaries attached below."
+          } > notes.md
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" release/* --clobber
+            gh release edit "$TAG" --notes-file notes.md
           else
             gh release create "$TAG" release/* \
               --title "streamtop v${VERSION}" \
-              --generate-notes \
+              --notes-file notes.md \
               --verify-tag
           fi
