@@ -319,3 +319,7 @@ Bind to loopback by default. For remote scrape targets, set `--metrics-token` or
 ## License
 
 [MIT](LICENSE).
+
+## See also
+
+[CloudScout](https://07x.nl/cloudscout/): a browser extension by the same author that shows cloud gaming, subscription, language and price info on Steam and Epic game pages.
