@@ -16,9 +16,22 @@
 [![Downloads](https://img.shields.io/crates/d/streamtop?style=flat-square&color=2ea44f&labelColor=1c1c1c)](https://crates.io/crates/streamtop)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue?style=flat-square&labelColor=1c1c1c)](LICENSE)
 
+
 <img width="1200" alt="streamtop HLS DASH IPTV terminal dashboard demo" src="https://github.com/user-attachments/assets/f4fbb3e2-f572-4003-bb5d-b22cbba52a80" />
 
 </div>
+
+
+<div align="center">
+  <a href="https://www.star-history.com/?repos=jorji49%2Fstreamtop&type=date&legend=top-left">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=jorji49/streamtop&type=date&theme=dark&legend=top-left" />
+      <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=jorji49/streamtop&type=date&theme=dark&legend=top-left" />
+      <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=jorji49/streamtop&type=date&legend=top-left" />
+    </picture>
+  </a>
+</div>
+
 
 ## What is streamtop?
 
