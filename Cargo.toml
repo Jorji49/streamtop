@@ -8,7 +8,7 @@ license = "MIT"
 readme = "README.md"
 repository = "https://github.com/Jorji49/streamtop"
 homepage = "https://github.com/Jorji49/streamtop"
-keywords = ["hls", "dash", "iptv", "streaming", "monitoring"]
+keywords = ["hls", "mpeg-dash", "iptv", "m3u8", "monitoring"]
 categories = ["command-line-utilities", "multimedia::video"]
 exclude = [
     ".github/**",
