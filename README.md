@@ -6,7 +6,7 @@
 
 **Terminal HLS, DASH, and IPTV stream monitor. Real-time health checks, wire probes, and production metrics from the command line.**
 
-<a title="This tool is Tool Of The Week on Terminal Trove, The HOME of all things in the terminal" href="https://terminaltrove.com"><img src="https://cdn.terminaltrove.com/media/badges/tool_of_the_week/png/terminal_trove_tool_of_the_week_gold_on_black_bg.png" alt="Terminal Trove Tool Of The Week" height="50" /></a>
+<a title="This tool is Tool Of The Week on Terminal Trove, The HOME of all things in the terminal" href="https://terminaltrove.com/streamtop/"><img src="https://cdn.terminaltrove.com/media/badges/tool_of_the_week/png/terminal_trove_tool_of_the_week_gold_on_black_bg.png" alt="Terminal Trove Tool Of The Week" height="50" /></a>
 
 [![Awesome Ratatui](https://img.shields.io/badge/awesome-ratatui-e43716?style=for-the-badge&logo=rust&logoColor=white)](https://github.com/ratatui/awesome-ratatui)
 [![Awesome Rust](https://img.shields.io/badge/awesome-rust-dea584?style=for-the-badge&logo=rust&logoColor=white)](https://github.com/rust-unofficial/awesome-rust)
@@ -20,6 +20,13 @@
 <img width="1200" alt="streamtop HLS DASH IPTV terminal dashboard demo" src="https://github.com/user-attachments/assets/f4fbb3e2-f572-4003-bb5d-b22cbba52a80" />
 
 </div>
+
+```bash
+cargo install streamtop
+streamtop "https://example.com/master.m3u8"
+```
+
+Prebuilt binaries for Linux x86_64, macOS (Apple Silicon and Intel) and Windows x86_64 are on [GitHub Releases](https://github.com/Jorji49/streamtop/releases/latest). Homebrew, Scoop, Docker and Arch Linux are covered in [Install](#install).
 
 
 <div align="center">
@@ -303,7 +310,7 @@ Non-loopback `--metrics-bind` requires a non-empty `--metrics-token` or `STREAMT
 | `Tab` | Channel overlay |
 | `?` | Help |
 | `/` | Regex log filter modal (Enter lock, Esc clear) |
-| `f` / `F` | Cycle preset log filter / clear regex filter |
+| `f` / `F` | Cycle preset log filter / clear log filter |
 | `t` | TR 101 290 overlay |
 | `s` | SEI / HDR / caption overlay |
 | `j` / `k` | Scroll log or channel list |
