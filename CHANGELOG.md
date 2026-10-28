@@ -1,5 +1,23 @@
 # Changelog
 
+## [1.5.4] - 2026-10-29
+
+### Fixed
+
+- ABR panel shows manifest vs wire mismatch rows even when the ladder has no warnings
+- Cycling preset log filters with `f` clears an active regex filter, so the preset is the filter actually applied. The log title says `filter` or `regex` to match
+- Event log and compare panes show a waiting or no-match line instead of an empty box
+- Compare pane truncation stays within the column width (a single ellipsis character instead of three dots)
+- Toast width counts characters instead of bytes
+- Help overlay and README describe `F` as clearing any log filter
+
+### Changed
+
+- Semver-compatible lockfile updates (backtrace, brotli, pest, rustix, unicode-width, xattr). oxideav-core stays at 0.1.41 because 0.1.42 needs Rust 1.95
+- GitHub Action pins refreshed (rust-cache v2.9.3, setup-python v7.1.0, docker/login-action v4.7.0, taiki-e/install-action v2.88.0)
+- README: install and first run command under the demo, Terminal Trove badge links to the streamtop page
+- AUR `PKGBUILD` declares `glibc` and `gcc-libs` runtime dependencies
+
 ## [1.5.3] - 2026-10-14
 
 ### Security
