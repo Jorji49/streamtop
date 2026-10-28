@@ -132,11 +132,8 @@ fn draw_abr_panel(frame: &mut Frame, app: &App, area: Rect) {
         return;
     }
 
-    let warn_lines: usize = if app.abr_health.warnings.is_empty() {
-        0
-    } else {
-        app.abr_health.warnings.len().min(3)
-    };
+    let mismatch_count = app.variants.iter().filter(|v| v.mismatch.is_some()).count();
+    let warn_lines: usize = (app.abr_health.warnings.len().min(2) + mismatch_count).min(3);
 
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -342,6 +339,22 @@ fn draw_log(frame: &mut Frame, app: &App, area: Rect) {
     let end = total.saturating_sub(scroll);
     let start = end.saturating_sub(visible);
 
+    if total == 0 {
+        let msg = if app.log_filter.is_some() {
+            "No events match the filter (F clears)"
+        } else {
+            "Waiting for events..."
+        };
+        frame.render_widget(
+            Paragraph::new(msg)
+                .alignment(Alignment::Center)
+                .style(Style::default().fg(Color::DarkGray))
+                .block(rounded(log_block_title(app))),
+            area,
+        );
+        return;
+    }
+
     let lines: Vec<Line> = filtered[start..end]
         .iter()
         .map(|entry| {
@@ -377,10 +390,11 @@ fn log_block_title(app: &App) -> String {
     if app.log_filter_edit {
         return format!(" Log filter: /{}_ ", app.log_filter_draft);
     }
-    app.log_filter.as_ref().map_or_else(
-        || " Diagnostics / Event Log ".into(),
-        |pat| format!(" Diagnostics / Event Log [regex: /{pat}/] "),
-    )
+    match (&app.log_filter, &app.log_filter_regex) {
+        (Some(pat), Some(_)) => format!(" Diagnostics / Event Log [regex: /{pat}/] "),
+        (Some(pat), None) => format!(" Diagnostics / Event Log [filter: {pat}] "),
+        (None, _) => " Diagnostics / Event Log ".into(),
+    }
 }
 
 fn category_style(cat: DiagCategory, level: LogLevel) -> (&'static str, Color) {
@@ -609,7 +623,8 @@ fn draw_sei_panel(frame: &mut Frame, area: Rect, app: &App) {
 }
 
 fn draw_toast(frame: &mut Frame, area: Rect, msg: &str) {
-    let width = (msg.len() as u16).saturating_add(4).min(area.width);
+    let msg_width = u16::try_from(msg.chars().count()).unwrap_or(u16::MAX);
+    let width = msg_width.saturating_add(4).min(area.width);
     let x = area.x + area.width.saturating_sub(width) / 2;
     let y = area.y + 1;
     let rect = Rect {

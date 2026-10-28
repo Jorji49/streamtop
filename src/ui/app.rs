@@ -532,10 +532,13 @@ impl App {
                     Some("DRIFT") => Some("CC_ERROR".into()),
                     _ => None,
                 };
+                self.log_filter_regex = None;
+                self.log_scroll = 0;
             }
             KeyCode::Char('F') => {
                 self.log_filter = None;
                 self.log_filter_regex = None;
+                self.log_scroll = 0;
             }
             KeyCode::Char('/') => {
                 self.log_filter_edit = true;
