@@ -732,7 +732,10 @@ fn draw_pane(
         } else {
             " Waiting for events..."
         };
-        logs.push(Line::from(Span::styled(msg, Style::default().fg(Color::DarkGray))));
+        logs.push(Line::from(Span::styled(
+            msg,
+            Style::default().fg(Color::DarkGray),
+        )));
     }
     frame.render_widget(
         Paragraph::new(logs).block(Block::default().title(log_title)),
