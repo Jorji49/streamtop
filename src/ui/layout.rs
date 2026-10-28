@@ -503,7 +503,7 @@ pub fn draw_help(frame: &mut Frame, area: Rect, picker_context: bool) {
             Line::from("  p            Quick Play (mpv / ffplay, non-blocking)"),
             Line::from("  Space        Save diagnostics/<channel>_<time>.json"),
             Line::from("  e            Export incident bundle (HTTP tx + spec violations)"),
-            Line::from("  f / F        Cycle preset log filter / clear regex filter"),
+            Line::from("  f / F        Cycle preset log filter / clear log filter"),
             Line::from("  /            Regex log filter modal (Enter lock, Esc clear)"),
             Line::from("  Tab          Channel switcher overlay"),
             Line::from("  Esc          Back to channel picker"),
