@@ -716,7 +716,7 @@ fn draw_pane(
         || " Log (j/k) ".into(),
         |pat| format!(" Log [filter: {pat}] (j/k) "),
     );
-    let logs: Vec<Line> = filtered
+    let mut logs: Vec<Line> = filtered
         .iter()
         .rev()
         .skip(scroll)
@@ -726,6 +726,14 @@ fn draw_pane(
         .rev()
         .map(|m| Line::from(truncate_url(m, (area.width as usize).saturating_sub(4))))
         .collect();
+    if logs.is_empty() && visible > 1 {
+        let msg = if log_filter.is_some() {
+            " No events match the filter"
+        } else {
+            " Waiting for events..."
+        };
+        logs.push(Line::from(Span::styled(msg, Style::default().fg(Color::DarkGray))));
+    }
     frame.render_widget(
         Paragraph::new(logs).block(Block::default().title(log_title)),
         chunks[2],
@@ -749,7 +757,7 @@ fn truncate_url(s: &str, max: usize) -> String {
         return s.to_string();
     }
     let t: String = s.chars().take(max.saturating_sub(1)).collect();
-    format!("{t}...")
+    format!("{t}…")
 }
 
 #[cfg(test)]
