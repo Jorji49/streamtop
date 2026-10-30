@@ -28,18 +28,6 @@ streamtop "https://example.com/master.m3u8"
 
 Prebuilt binaries for Linux x86_64, macOS (Apple Silicon and Intel) and Windows x86_64 are on [GitHub Releases](https://github.com/Jorji49/streamtop/releases/latest). Homebrew, Scoop, Docker and Arch Linux are covered in [Install](#install).
 
-
-<div align="center">
-  <a href="https://www.star-history.com/?repos=jorji49%2Fstreamtop&type=date&legend=top-left">
-    <picture>
-      <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=jorji49/streamtop&type=date&theme=dark&legend=top-left" />
-      <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=jorji49/streamtop&type=date&theme=dark&legend=top-left" />
-      <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=jorji49/streamtop&type=date&legend=top-left" />
-    </picture>
-  </a>
-</div>
-
-
 ## What is streamtop?
 
 **streamtop** is a Rust CLI and terminal UI for monitoring live video streams. Point it at an HLS playlist (`.m3u8`), MPEG-DASH manifest (`.mpd`), IPTV channel list (`.m3u`), or WHEP HTTP endpoint and get segment timing, codec wire data, ad markers, and health scores without opening a browser or GUI player.
