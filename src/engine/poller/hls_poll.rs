@@ -32,6 +32,8 @@ pub(super) struct LlHlsBlockingState {
     pub(super) blocking_msn: Option<u64>,
     pub(super) blocking_part: Option<u64>,
     pub(super) part_interval_ms: Option<u64>,
+    /// Last media playlist carried `#EXT-X-ENDLIST` (VOD or ended event).
+    pub(super) ended: bool,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -63,6 +65,7 @@ impl ManifestPoller {
         let mut buffer_clock = Instant::now();
         let mut audio_url: Option<Url> = None;
         let mut seen_ads: HashSet<String> = HashSet::new();
+        let mut announced_endlist = false;
 
         loop {
             let now = Instant::now();
@@ -71,7 +74,8 @@ impl ManifestPoller {
             vbuf.drain_elapsed(elapsed);
             self.send_event(StreamEvent::Buffer(vbuf));
 
-            if target_duration > 0 {
+            // A playlist with EXT-X-ENDLIST never grows, so "no new segment" is expected.
+            if target_duration > 0 && !ll_hls_state.ended {
                 linter.check_stalling(target_duration, now);
             }
 
@@ -99,7 +103,20 @@ impl ManifestPoller {
                 Ok(td) => {
                     target_duration = td;
                     consecutive_errors = 0;
-                    self.send_event(StreamEvent::Status(StreamStatus::live("Live")));
+                    if ll_hls_state.ended {
+                        if !announced_endlist {
+                            announced_endlist = true;
+                            self.emit_log(
+                                LogLevel::Info,
+                                DiagCategory::Info,
+                                "Playlist has EXT-X-ENDLIST: VOD or ended event. \
+                                 Stall checks are off; use --vod to check every variant.",
+                            );
+                        }
+                        self.send_event(StreamEvent::Status(StreamStatus::vod("VOD")));
+                    } else {
+                        self.send_event(StreamEvent::Status(StreamStatus::live("Live")));
+                    }
                 }
                 Err(err) => {
                     consecutive_errors = consecutive_errors.saturating_add(1);
@@ -386,6 +403,7 @@ impl ManifestPoller {
         variants: &mut Vec<AbrVariant>,
     ) -> Result<u64> {
         let now = Instant::now();
+        ll_hls_state.ended = media.end_list;
         let window_segments = media.segments.len() as u32;
         let window_secs: f64 = media.segments.iter().map(|s| f64::from(s.duration)).sum();
         let has_pdt = media.segments.iter().any(|s| s.program_date_time.is_some());
@@ -581,7 +599,10 @@ impl ManifestPoller {
             self.send_event(StreamEvent::AdBreak(ad));
         }
 
-        if !has_pdt {
+        if media.end_list {
+            // No live edge, so live latency does not apply.
+            self.send_event(StreamEvent::Latency(LatencyState::Unknown));
+        } else if !has_pdt {
             self.send_event(StreamEvent::Latency(LatencyState::Estimated(estimated_ms)));
             if !*announced_estimate {
                 let secs = estimated_ms as f64 / 1000.0;
@@ -658,7 +679,7 @@ impl ManifestPoller {
                     media_url,
                     segment,
                     seq,
-                    estimated_ms,
+                    (!media.end_list).then_some(estimated_ms),
                     linter,
                     vbuf,
                     buffer_clock,

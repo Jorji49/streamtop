@@ -5,7 +5,7 @@ use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use color_eyre::eyre::Result;
-use crossterm::style::{Color, ResetColor, SetForegroundColor};
+use crossterm::style::Color;
 use serde::Serialize;
 use tokio::sync::mpsc;
 use tokio::time::{timeout, Instant};
@@ -23,7 +23,7 @@ use crate::ui::app::SessionOpts;
 
 /// Stable machine-readable schema id for `--summary --summary-format json`.
 pub const SUMMARY_SCHEMA: &str = "streamtop.summary.v1";
-pub const SUMMARY_SCHEMA_VERSION: u32 = 6;
+pub const SUMMARY_SCHEMA_VERSION: u32 = 7;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SummaryFormat {
@@ -74,6 +74,9 @@ pub struct SummaryJson {
     pub doh_ms: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub part_dl_duration_ratio: Option<f32>,
+    /// Most recent fetch or parse error, with secrets redacted.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_error: Option<String>,
 }
 
 pub fn build_summary_json(
@@ -101,6 +104,7 @@ pub fn build_summary_json(
     spec_violations: Option<Vec<crate::models::SpecViolation>>,
     doh_ms: Option<u64>,
     part_dl_duration_ratio: Option<f32>,
+    last_error: Option<String>,
 ) -> SummaryJson {
     SummaryJson {
         schema: SUMMARY_SCHEMA,
@@ -131,6 +135,7 @@ pub fn build_summary_json(
         spec_violations,
         doh_ms,
         part_dl_duration_ratio,
+        last_error: last_error.map(|e| crate::engine::redact::redact_text(&e)),
     }
 }
 
@@ -213,6 +218,7 @@ pub async fn run_summary(
     let mut abr_health = crate::models::AbrHealth::default();
     let mut last_doh_ms: Option<u64> = None;
     let mut last_part_rtf: Option<f32> = None;
+    let mut last_error: Option<String> = None;
 
     let deadline = Instant::now() + Duration::from_secs(timeout_secs.max(1));
     while Instant::now() < deadline {
@@ -255,7 +261,12 @@ pub async fn run_summary(
                 StreamEvent::Tr101290(r) => tr101290 = Some(r),
                 StreamEvent::SeiProbe(s) => sei_metadata = Some(s),
                 StreamEvent::Finding(f) => {
-                    spec_findings.push(f.clone());
+                    let duplicate = spec_findings
+                        .iter()
+                        .any(|seen| seen.rule == f.rule && seen.message == f.message);
+                    if !duplicate {
+                        spec_findings.push(f.clone());
+                    }
                     if f.category == DiagCategory::Stalling {
                         origin_stalls = origin_stalls.saturating_add(1);
                     }
@@ -263,19 +274,12 @@ pub async fn run_summary(
                         critical_rfc_errors = critical_rfc_errors.saturating_add(1);
                     }
                 }
-                StreamEvent::Error(_)
-                | StreamEvent::Log {
-                    level: crate::models::LogLevel::Error,
-                    ..
-                } => {
+                StreamEvent::Error(msg) => {
                     errors = errors.saturating_add(1);
+                    last_error = Some(msg);
                 }
-                StreamEvent::Log {
-                    category: DiagCategory::Stalling,
-                    ..
-                } => {
-                    origin_stalls = origin_stalls.saturating_add(1);
-                }
+                // Findings are also mirrored as Log lines; count them once,
+                // from the Finding / Error events above.
                 StreamEvent::Log {
                     category: DiagCategory::AvSync,
                     message,
@@ -304,18 +308,22 @@ pub async fn run_summary(
     let ttfb = last_ttfb.map_or_else(|| "-".into(), |ms| format!("{ms}ms"));
 
     let http_ok = matches!(last_http_status, Some(200 | 206));
-    let ok = matches!(status.kind, StreamStatusKind::Live)
+    if !saw_segment {
+        // Nothing was downloaded, so there is nothing to score.
+        health = HealthReport {
+            score: 0,
+            label: "No data".into(),
+            deductions: vec!["no media segment was fetched".into()],
+        };
+    }
+    let ok = matches!(status.kind, StreamStatusKind::Live | StreamStatusKind::Vod)
         && health.score >= 85
         && critical_rfc_errors == 0
         && origin_stalls == 0
         && http_ok
         && saw_segment;
 
-    let status_label = match status.kind {
-        StreamStatusKind::Live => "LIVE",
-        StreamStatusKind::Degraded => "DEGRADED",
-        StreamStatusKind::Error => "ERROR",
-    };
+    let status_label = status.kind.label();
 
     let spec_violations = if spec_findings.is_empty() {
         None
@@ -355,16 +363,14 @@ pub async fn run_summary(
                 spec_violations,
                 last_doh_ms,
                 last_part_rtf,
+                last_error.clone(),
             );
             println!("{}", serde_json::to_string(&payload)?);
         }
         SummaryFormat::Text => {
             let verdict = if ok { "PASS" } else { "FAIL" };
             let color = if ok { Color::Green } else { Color::Red };
-            let mut out = std::io::stdout();
-            crossterm::execute!(out, SetForegroundColor(color))?;
-            print!("{verdict}");
-            crossterm::execute!(out, ResetColor)?;
+            crate::engine::term_color::print_colored(verdict, color);
             println!(
                 "  SHI={:>3} ({})  status={}  latency={}  CDN={}  TTFB={}  HTTP={}  stalls={}  rfc_err={}  url={}",
                 health.score,
@@ -378,6 +384,11 @@ pub async fn run_summary(
                 critical_rfc_errors,
                 redact_url(&url)
             );
+            if !ok {
+                if let Some(err) = &last_error {
+                    println!("  last_error: {}", crate::engine::redact::redact_text(err));
+                }
+            }
         }
         SummaryFormat::Sarif => {
             let violations = spec_violations.unwrap_or_default();
@@ -448,6 +459,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         let v = serde_json::to_value(&payload).unwrap();
         assert_eq!(v["schema"], SUMMARY_SCHEMA);
@@ -466,7 +478,7 @@ mod tests {
         let schema: serde_json::Value =
             serde_json::from_str(include_str!("../../schemas/summary.v1.json")).unwrap();
         assert_eq!(schema["title"], SUMMARY_SCHEMA);
-        assert_eq!(schema["properties"]["schema_version"]["const"], 6);
+        assert_eq!(schema["properties"]["schema_version"]["const"], 7);
 
         let health = HealthReport::perfect();
         let payload = build_summary_json(
@@ -494,8 +506,10 @@ mod tests {
             None,
             None,
             None,
+            Some("HTTP 404 Not Found - https://example.test/v.m3u8?token=abc".into()),
         );
         let value = serde_json::to_value(payload).unwrap();
+        assert!(!value["last_error"].as_str().unwrap().contains("abc"));
         let required = schema["required"].as_array().unwrap();
         for key in required {
             let key = key.as_str().unwrap();

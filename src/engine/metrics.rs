@@ -281,12 +281,6 @@ pub fn update_metrics(snap: &mut MetricsSnapshot, event: &StreamEvent) {
                     .saturating_add(1);
             }
         }
-        StreamEvent::Log {
-            category: DiagCategory::Stalling,
-            ..
-        } => {
-            snap.origin_stalls_total = snap.origin_stalls_total.saturating_add(1);
-        }
         StreamEvent::Log { message, .. } if message.contains("[MISMATCH]") => {
             snap.codec_mismatch_total = snap.codec_mismatch_total.saturating_add(1);
         }
@@ -720,6 +714,29 @@ pub fn default_metrics_bind() -> IpAddr {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn stall_finding_and_its_log_mirror_count_once() {
+        use crate::models::{DiagCategory, DiagSeverity, DiagnosticFinding, LogLevel};
+        let mut snap = MetricsSnapshot::default();
+        let f = DiagnosticFinding {
+            category: DiagCategory::Stalling,
+            severity: DiagSeverity::Warn,
+            rule: "ORIGIN_STALL".into(),
+            message: "no new segment".into(),
+            reason: None,
+        };
+        update_metrics(
+            &mut snap,
+            &StreamEvent::Log {
+                level: LogLevel::Warn,
+                category: DiagCategory::Stalling,
+                message: "no new segment".into(),
+            },
+        );
+        update_metrics(&mut snap, &StreamEvent::Finding(f));
+        assert_eq!(snap.origin_stalls_total, 1);
+    }
+
     use super::*;
 
     #[test]

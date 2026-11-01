@@ -799,6 +799,20 @@ pub enum StreamStatusKind {
     Live,
     Error,
     Degraded,
+    /// Playlist carries `#EXT-X-ENDLIST`: VOD or an event that has ended.
+    Vod,
+}
+
+impl StreamStatusKind {
+    /// Upper-case label used in summaries, reports and the TUI.
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Live => "LIVE",
+            Self::Error => "ERROR",
+            Self::Degraded => "DEGRADED",
+            Self::Vod => "VOD",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -818,6 +832,13 @@ impl StreamStatus {
     pub fn error(message: impl Into<String>) -> Self {
         Self {
             kind: StreamStatusKind::Error,
+            message: message.into(),
+        }
+    }
+
+    pub fn vod(message: impl Into<String>) -> Self {
+        Self {
+            kind: StreamStatusKind::Vod,
             message: message.into(),
         }
     }

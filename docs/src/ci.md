@@ -8,13 +8,17 @@ streamtop <URL> --summary --summary-format json --timeout 10
 
 `--summary` listens for `--timeout` seconds (default 8) and prints a verdict. It returns PASS only when:
 
-* the stream is LIVE,
+* the status is LIVE, or VOD for a playlist with `#EXT-X-ENDLIST`,
 * the linter score is at least 85,
 * no critical RFC errors or origin stalls were seen,
 * the last HTTP status was 200 or 206,
 * at least one segment was fetched.
 
-Any failed condition returns FAIL and a non-zero exit code. The JSON contract is `streamtop.summary.v1`; the schema is `schemas/summary.v1.json` and `schema_version` is currently 6.
+Any failed condition returns FAIL and a non-zero exit code. On FAIL the text output adds a `last_error:` line and the JSON adds `last_error` when a fetch or parse failed. If no segment was fetched, the score is 0 with the label `No data`.
+
+The JSON contract is `streamtop.summary.v1`; the schema is `schemas/summary.v1.json` and `schema_version` is currently 7. Version 7 added the `VOD` status and the `last_error` field.
+
+Colors are used only when stdout is a terminal and `NO_COLOR` is not set.
 
 Formats: `text` (default), `json`, `sarif`.
 

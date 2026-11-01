@@ -21,7 +21,7 @@ use crate::engine::summary::SUMMARY_SCHEMA_VERSION;
 use crate::engine::ManifestPoller;
 use crate::models::{
     AbrHealth, CdnStats, DiagnosticSummary, HealthReport, HttpTransaction, LatencyState, LogEntry,
-    PlaylistMeta, StreamEvent, StreamSnapshot, StreamStatusKind, EVENT_CHANNEL_CAPACITY,
+    PlaylistMeta, StreamEvent, StreamSnapshot, EVENT_CHANNEL_CAPACITY,
 };
 use crate::ui::app::SessionOpts;
 
@@ -159,11 +159,7 @@ async fn collect_report_data(
         let _ = exporter.flush_all().await;
     }
 
-    let status_label = match status.kind {
-        StreamStatusKind::Live => "LIVE",
-        StreamStatusKind::Degraded => "DEGRADED",
-        StreamStatusKind::Error => "ERROR",
-    };
+    let status_label = status.kind.label();
     let now = Utc::now();
     let timeline: Vec<String> = log
         .iter()

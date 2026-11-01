@@ -744,12 +744,7 @@ fn draw_pane(
 }
 
 fn status_tag(s: &StreamStatus) -> &'static str {
-    use crate::models::StreamStatusKind;
-    match s.kind {
-        StreamStatusKind::Live => "LIVE",
-        StreamStatusKind::Error => "ERROR",
-        StreamStatusKind::Degraded => "DEGRADED",
-    }
+    s.kind.label()
 }
 
 fn truncate_url(s: &str, max: usize) -> String {

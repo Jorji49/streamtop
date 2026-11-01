@@ -43,6 +43,7 @@ fn status_badge(app: &App) -> (&'static str, Color, Color) {
         StreamStatusKind::Live => ("LIVE", Color::Black, Color::LightGreen),
         StreamStatusKind::Error => ("ERROR", Color::White, Color::Red),
         StreamStatusKind::Degraded => ("DEGRADED", Color::Black, Color::Yellow),
+        StreamStatusKind::Vod => ("VOD", Color::Black, Color::Cyan),
     }
 }
 

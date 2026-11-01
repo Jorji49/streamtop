@@ -848,11 +848,7 @@ impl App {
             || "n/a".into(),
             |p| format_dvr_window(p.window_segments, p.window_secs),
         );
-        let status = match self.status.kind {
-            crate::models::StreamStatusKind::Live => "LIVE",
-            crate::models::StreamStatusKind::Error => "ERROR",
-            crate::models::StreamStatusKind::Degraded => "DEGRADED",
-        };
+        let status = self.status.kind.label();
 
         let health = self.health.clone();
         let now = chrono::Utc::now();
@@ -942,11 +938,7 @@ impl App {
     fn export_incident(&mut self) -> Result<()> {
         let now = chrono::Utc::now();
         let channel = self.channel_name.clone();
-        let status = match self.status.kind {
-            crate::models::StreamStatusKind::Live => "LIVE",
-            crate::models::StreamStatusKind::Error => "ERROR",
-            crate::models::StreamStatusKind::Degraded => "DEGRADED",
-        };
+        let status = self.status.kind.label();
         let health = self.health.clone();
         let title = format!(
             "streamtop incident @ {}",

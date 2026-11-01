@@ -237,7 +237,7 @@ impl ManifestPoller {
         media_url: &Url,
         segment: &m3u8_rs::MediaSegment,
         media_sequence: u64,
-        estimated_ms: u64,
+        estimated_ms: Option<u64>,
         linter: &mut SpecLinter,
         vbuf: &mut VirtualBuffer,
         buffer_clock: &mut Instant,
@@ -295,14 +295,16 @@ impl ManifestPoller {
             self.emit_log(LogLevel::Warn, DiagCategory::Abr, w);
         }
 
-        let (latency, latency_ms) = segment.program_date_time.as_ref().map_or_else(
-            || (LatencyState::Estimated(estimated_ms), Some(estimated_ms)),
-            |pdt| {
+        // `estimated_ms` is None for playlists without a live edge (EXT-X-ENDLIST).
+        let (latency, latency_ms) = match (estimated_ms, segment.program_date_time.as_ref()) {
+            (None, _) => (LatencyState::Unknown, None),
+            (Some(_), Some(pdt)) => {
                 let ms = (Utc::now() - pdt.with_timezone(&Utc)).num_milliseconds();
                 let ms = if ms < 0 { 0 } else { ms as u64 };
                 (LatencyState::Measured(ms), Some(ms))
-            },
-        );
+            }
+            (Some(est), None) => (LatencyState::Estimated(est), Some(est)),
+        };
 
         let mut wire = fetch.wire.clone();
         if segment.duration > 0.0 {

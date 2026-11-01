@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use color_eyre::eyre::{eyre, Result, WrapErr};
-use crossterm::style::{Color, ResetColor, SetForegroundColor};
+use crossterm::style::Color;
 use futures::stream::{self, StreamExt};
 use m3u8_rs::{MediaPlaylist, Playlist};
 use reqwest::Client;
@@ -73,7 +73,7 @@ pub async fn run_vod(url: String, session: SessionOpts, format: SummaryFormat) -
     } else if report.health.score < 85 {
         "DEGRADED"
     } else {
-        "LIVE"
+        "VOD"
     };
 
     match format {
@@ -103,6 +103,9 @@ pub async fn run_vod(url: String, session: SessionOpts, format: SummaryFormat) -
                 None,
                 None,
                 None,
+                (report.errors > 0)
+                    .then(|| report.issues.last().cloned())
+                    .flatten(),
             );
             println!("{}", serde_json::to_string_pretty(&doc)?);
         }
@@ -373,13 +376,14 @@ fn normalize_codec(c: &str) -> String {
 fn print_vod_text(url: &str, ok: bool, report: &VodReport, status: &str) {
     let verdict = if ok { "PASS" } else { "FAIL" };
     let color = if ok { Color::Green } else { Color::Red };
-    let mut out = std::io::stdout();
-    let _ = crossterm::execute!(out, SetForegroundColor(color));
-    println!(
-        "VOD {verdict} | {status} | health={} ({}) | checked={} | errors={}",
-        report.health.score, report.health.label, report.variants_checked, report.errors
+    crate::engine::term_color::print_colored(
+        &format!(
+            "VOD {verdict} | {status} | health={} ({}) | checked={} | errors={}",
+            report.health.score, report.health.label, report.variants_checked, report.errors
+        ),
+        color,
     );
-    let _ = crossterm::execute!(out, ResetColor);
+    println!();
     println!("url: {url}");
     for issue in &report.issues {
         println!("  - {issue}");
