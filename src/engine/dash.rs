@@ -1,5 +1,6 @@
 //! DASH MPD parsing.
 
+use std::fmt::Write as _;
 use std::time::Duration;
 
 use color_eyre::eyre::{eyre, Result};
@@ -35,6 +36,28 @@ pub struct DashSummary {
     pub active_period_id: Option<String>,
     pub drm: DrmInfo,
     pub ll_dash: LlDashInfo,
+    /// Newest available media segment of the probed Representation, for
+    /// dynamic MPDs that use a SegmentTemplate.
+    pub live_edge: Option<DashLiveEdge>,
+}
+
+/// A media segment near the live edge of a dynamic MPD.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DashLiveEdge {
+    pub url: String,
+    /// `$Number$` (or `$Time$` for timeline templates without numbers). It
+    /// changes when the origin publishes a new segment.
+    pub key: u64,
+    /// Wall-clock time (Unix ms) the segment became available, if known.
+    pub available_unix_ms: Option<i64>,
+}
+
+/// Inputs needed to place the live edge on the wall clock.
+#[derive(Debug, Clone, Copy)]
+struct LiveClock {
+    ast_unix_ms: Option<i64>,
+    now_unix_ms: i64,
+    period_start_secs: f64,
 }
 
 pub fn looks_like_dash(url: &str, body: &[u8], content_type: Option<&str>) -> bool {
@@ -60,6 +83,10 @@ pub fn looks_like_dash(url: &str, body: &[u8], content_type: Option<&str>) -> bo
 }
 
 pub fn parse_dash_mpd(xml: &str, base: &Url) -> Result<DashSummary> {
+    parse_dash_mpd_at(xml, base, chrono::Utc::now().timestamp_millis())
+}
+
+fn parse_dash_mpd_at(xml: &str, base: &Url, now_unix_ms: i64) -> Result<DashSummary> {
     let mpd = parse(xml).map_err(|e| eyre!("DASH MPD parse error: {e}"))?;
 
     let suggested = mpd.suggestedPresentationDelay.as_ref().map(duration_secs);
@@ -78,6 +105,10 @@ pub fn parse_dash_mpd(xml: &str, base: &Url) -> Result<DashSummary> {
         .as_ref()
         .map(chrono::DateTime::to_rfc3339);
     let publish_time = mpd.publishTime.as_ref().map(chrono::DateTime::to_rfc3339);
+    let ast_unix_ms = mpd
+        .availabilityStartTime
+        .as_ref()
+        .map(chrono::DateTime::timestamp_millis);
 
     let mut root = base.clone();
     if let Some(b) = mpd.base_url.first() {
@@ -105,9 +136,19 @@ pub fn parse_dash_mpd(xml: &str, base: &Url) -> Result<DashSummary> {
     let mut segment_duration_hint_secs: f32 = 2.0;
     let mut best_bw: u64 = 0;
     let mut drm = DrmInfo::default();
+    let mut live_edge = None;
+    let last_period_idx = mpd.periods.len() - 1;
 
-    for period in &mpd.periods {
-        let period_out = parse_period(period, &root);
+    for (idx, period) in mpd.periods.iter().enumerate() {
+        let clock = (type_live && idx == last_period_idx).then(|| LiveClock {
+            ast_unix_ms,
+            now_unix_ms,
+            period_start_secs: period.start.map_or(0.0, |d| d.as_secs_f64()),
+        });
+        let period_out = parse_period(period, &root, clock);
+        if period_out.live_edge.is_some() {
+            live_edge.clone_from(&period_out.live_edge);
+        }
         for lang in period_out.audio_languages {
             if !audio_languages.contains(&lang) {
                 audio_languages.push(lang);
@@ -170,6 +211,7 @@ pub fn parse_dash_mpd(xml: &str, base: &Url) -> Result<DashSummary> {
         active_period_id,
         drm,
         ll_dash,
+        live_edge,
     })
 }
 
@@ -180,9 +222,10 @@ struct PeriodParseOut {
     segment_duration_hint_secs: f32,
     best_bw: u64,
     drm: DrmInfo,
+    live_edge: Option<DashLiveEdge>,
 }
 
-fn parse_period(period: &Period, root: &Url) -> PeriodParseOut {
+fn parse_period(period: &Period, root: &Url, clock: Option<LiveClock>) -> PeriodParseOut {
     let mut period_base = root.clone();
     if let Some(b) = period.BaseURL.first() {
         if let Some(joined) = join_url(&period_base, &b.base) {
@@ -198,6 +241,7 @@ fn parse_period(period: &Period, root: &Url) -> PeriodParseOut {
     let mut segment_duration_hint_secs: f32 = 2.0;
     let mut best_bw: u64 = 0;
     let mut drm = DrmInfo::default();
+    let mut live_edge = None;
 
     for adaptation in &period.adaptations {
         merge_drm(&mut drm, &adaptation.ContentProtection);
@@ -251,6 +295,7 @@ fn parse_period(period: &Period, root: &Url) -> PeriodParseOut {
                 if let Some(d) = segment_duration_from(adaptation, rep) {
                     segment_duration_hint_secs = d;
                 }
+                live_edge = clock.and_then(|c| live_edge_segment(&adapt_base, adaptation, rep, c));
             }
 
             variants.push(AbrVariant {
@@ -273,6 +318,7 @@ fn parse_period(period: &Period, root: &Url) -> PeriodParseOut {
         segment_duration_hint_secs,
         best_bw,
         drm,
+        live_edge,
     }
 }
 
@@ -406,6 +452,135 @@ fn representation_probe_url(
         return join_url(base, &b.base);
     }
     None
+}
+
+/// Find the newest media segment that should be available now.
+///
+/// `SegmentTimeline`: the last `S` entry. `duration` templates: one segment
+/// behind the last complete one, which leaves room for a few seconds of clock
+/// skew between this host and the packager.
+fn live_edge_segment(
+    base: &Url,
+    adaptation: &AdaptationSet,
+    rep: &Representation,
+    clock: LiveClock,
+) -> Option<DashLiveEdge> {
+    let rep_st = rep.SegmentTemplate.as_ref();
+    let adapt_st = adaptation.SegmentTemplate.as_ref();
+    let st = rep_st.or(adapt_st)?;
+    let media = rep_st
+        .and_then(|s| s.media.as_ref())
+        .or_else(|| adapt_st.and_then(|s| s.media.as_ref()))?;
+    let timescale = rep_st
+        .and_then(|s| s.timescale)
+        .or_else(|| adapt_st.and_then(|s| s.timescale))
+        .unwrap_or(1)
+        .max(1);
+    let start_number = rep_st
+        .and_then(|s| s.startNumber)
+        .or_else(|| adapt_st.and_then(|s| s.startNumber))
+        .unwrap_or(1);
+    let pto = rep_st
+        .and_then(|s| s.presentationTimeOffset)
+        .or_else(|| adapt_st.and_then(|s| s.presentationTimeOffset))
+        .unwrap_or(0);
+    let ts = timescale as f64;
+    let avail_at = |end_ticks: u64| -> Option<i64> {
+        let ast = clock.ast_unix_ms?;
+        let secs = clock.period_start_secs + (end_ticks.saturating_sub(pto) as f64) / ts;
+        Some(ast + (secs * 1000.0).round() as i64)
+    };
+
+    let (number, time, available_unix_ms) = if let Some(tl) = st.SegmentTimeline.as_ref() {
+        let mut cursor: u64 = 0;
+        let mut count: u64 = 0;
+        let mut last: Option<(u64, u64)> = None;
+        for s in &tl.segments {
+            if let Some(t) = s.t {
+                cursor = t;
+            }
+            // A negative repeat means "until the next S or the period end";
+            // the live edge is then the first segment of the run.
+            let repeats = u64::try_from(s.r.unwrap_or(0)).unwrap_or(0);
+            let last_start = cursor.saturating_add(s.d.saturating_mul(repeats));
+            last = Some((last_start, s.d));
+            count = count.saturating_add(repeats + 1);
+            cursor = last_start.saturating_add(s.d);
+        }
+        let (t, d) = last?;
+        let number = start_number + count.saturating_sub(1);
+        (number, t, avail_at(t.saturating_add(d)))
+    } else {
+        let dur_ticks = rep_st
+            .and_then(|s| s.duration)
+            .or_else(|| adapt_st.and_then(|s| s.duration))?;
+        if !(dur_ticks.is_finite() && dur_ticks > 0.0) {
+            return None;
+        }
+        let ast = clock.ast_unix_ms?;
+        let dur_secs = dur_ticks / ts;
+        let elapsed = (clock.now_unix_ms - ast) as f64 / 1000.0 - clock.period_start_secs;
+        if !(elapsed.is_finite() && elapsed > 0.0) {
+            return None;
+        }
+        let complete = (elapsed / dur_secs).floor();
+        if complete < 2.0 || complete > 1e15 {
+            return None;
+        }
+        let index = complete as u64 - 2;
+        let time = pto.saturating_add((index as f64 * dur_ticks).round() as u64);
+        let end_secs = clock.period_start_secs + (index + 1) as f64 * dur_secs;
+        (
+            start_number + index,
+            time,
+            Some(ast + (end_secs * 1000.0).round() as i64),
+        )
+    };
+
+    let filled = substitute_template_var(
+        &substitute_template_var(&fill_template(media, rep), "Number", number),
+        "Time",
+        time,
+    );
+    let uses_number = media.contains("$Number");
+    Some(DashLiveEdge {
+        url: join_url(base, &filled)?,
+        key: if uses_number { number } else { time },
+        available_unix_ms,
+    })
+}
+
+/// Replace `$Name$` and `$Name%0Nd$` in a SegmentTemplate string.
+fn substitute_template_var(tmpl: &str, name: &str, value: u64) -> String {
+    let mut out = String::with_capacity(tmpl.len());
+    let mut rest = tmpl;
+    let open = format!("${name}");
+    while let Some(idx) = rest.find(&open) {
+        out.push_str(&rest[..idx]);
+        let after = &rest[idx + open.len()..];
+        if let Some(tail) = after.strip_prefix('$') {
+            out.push_str(&value.to_string());
+            rest = tail;
+            continue;
+        }
+        if let Some(fmt) = after.strip_prefix('%') {
+            if let Some(end) = fmt.find('$') {
+                let spec = &fmt[..end];
+                if let Some(width) = spec
+                    .strip_suffix('d')
+                    .and_then(|w| w.trim_start_matches('0').parse::<usize>().ok().or(Some(0)))
+                {
+                    let _ = write!(out, "{value:0width$}");
+                    rest = &fmt[end + 1..];
+                    continue;
+                }
+            }
+        }
+        out.push_str(&open);
+        rest = after;
+    }
+    out.push_str(rest);
+    out
 }
 
 fn fill_template(tmpl: &str, rep: &Representation) -> String {
@@ -724,6 +899,79 @@ pub fn audit_dash_iop(xml: &str, summary: &DashSummary) -> Vec<DiagnosticFinding
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn template_vars_with_width() {
+        assert_eq!(
+            substitute_template_var("a/$Number$.m4s", "Number", 42),
+            "a/42.m4s"
+        );
+        assert_eq!(
+            substitute_template_var("a/$Number%05d$.m4s", "Number", 42),
+            "a/00042.m4s"
+        );
+        assert_eq!(
+            substitute_template_var("t$Time$-$Number$", "Time", 7),
+            "t7-$Number$"
+        );
+    }
+
+    const LIVE_NUMBER_MPD: &str = r#"<?xml version="1.0"?>
+<MPD xmlns="urn:mpeg:dash:schema:mpd:2011" type="dynamic" availabilityStartTime="1970-01-01T00:00:00Z" publishTime="1970-01-01T00:00:00Z" minimumUpdatePeriod="PT2S" minBufferTime="PT2S" profiles="urn:mpeg:dash:profile:isoff-live:2011">
+ <Period id="p0" start="PT0S">
+  <AdaptationSet contentType="video" mimeType="video/mp4" segmentAlignment="true">
+   <SegmentTemplate media="$RepresentationID$/$Number%05d$.m4s" initialization="$RepresentationID$/init.mp4" duration="2" timescale="1" startNumber="0"/>
+   <Representation id="V300" bandwidth="300000" width="640" height="360" codecs="avc1.64001e"/>
+  </AdaptationSet>
+  <AdaptationSet contentType="audio" mimeType="audio/mp4" lang="en">
+   <Representation id="A48" bandwidth="48000" codecs="mp4a.40.2"/>
+  </AdaptationSet>
+ </Period>
+</MPD>"#;
+
+    #[test]
+    fn live_edge_number_template_follows_wall_clock() {
+        let base = Url::parse("https://ex.com/live/manifest.mpd").unwrap();
+        // 101 s after AST with 2 s segments: 50 complete, edge is index 48.
+        let s = parse_dash_mpd_at(LIVE_NUMBER_MPD, &base, 101_000).unwrap();
+        let edge = s.live_edge.expect("live edge");
+        assert_eq!(edge.key, 48);
+        assert_eq!(edge.url, "https://ex.com/live/V300/00048.m4s");
+        assert_eq!(edge.available_unix_ms, Some(98_000));
+        let later = parse_dash_mpd_at(LIVE_NUMBER_MPD, &base, 103_000).unwrap();
+        assert_eq!(later.live_edge.unwrap().key, 49);
+    }
+
+    #[test]
+    fn live_edge_timeline_uses_last_s() {
+        let xml = r#"<?xml version="1.0"?>
+<MPD xmlns="urn:mpeg:dash:schema:mpd:2011" type="dynamic" availabilityStartTime="2026-01-01T00:00:00Z" minBufferTime="PT2S" profiles="urn:mpeg:dash:profile:isoff-live:2011">
+ <Period id="p0" start="PT0S">
+  <AdaptationSet contentType="video" mimeType="video/mp4">
+   <SegmentTemplate media="v/$Time$.m4s" initialization="v/init.mp4" timescale="90000">
+    <SegmentTimeline><S t="900000" d="180000" r="2"/><S d="90000"/></SegmentTimeline>
+   </SegmentTemplate>
+   <Representation id="v" bandwidth="1000000" width="1280" height="720" codecs="avc1.64001f"/>
+  </AdaptationSet>
+ </Period>
+</MPD>"#;
+        let base = Url::parse("https://ex.com/a.mpd").unwrap();
+        let s = parse_dash_mpd_at(xml, &base, 0).unwrap();
+        let edge = s.live_edge.expect("live edge");
+        // 900000 + 3 * 180000 = 1440000
+        assert_eq!(edge.key, 1_440_000);
+        assert_eq!(edge.url, "https://ex.com/v/1440000.m4s");
+    }
+
+    #[test]
+    fn static_mpd_has_no_live_edge() {
+        let xml = LIVE_NUMBER_MPD.replace("type=\"dynamic\"", "type=\"static\"");
+        let base = Url::parse("https://ex.com/a.mpd").unwrap();
+        assert!(parse_dash_mpd_at(&xml, &base, 101_000)
+            .unwrap()
+            .live_edge
+            .is_none());
+    }
 
     #[test]
     fn detect_mpd_url() {

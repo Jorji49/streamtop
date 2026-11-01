@@ -20,7 +20,7 @@ FPS comes from the playlist `FRAME-RATE` or `@frameRate` when present, otherwise
 * **AES-128**: `#EXT-X-KEY` fetch and in-memory decrypt so encrypted TS/fMP4 can be inspected.
 * **SCTE-35**: HLS tags (`EXT-X-DATERANGE`, `EXT-X-CUE-OUT`, `EXT-OATCLS-SCTE35`, `EXT-X-SCTE35`), DASH inband `emsg`, and mismatches between the two.
 * **CDN edge**: HIT/MISS from edge headers for Cloudflare, CloudFront, Akamai, Fastly, BunnyCDN, Azure CDN, Google Cloud CDN, JOCDN, Medianova, Edgio, Lumen, and Gcore.
-* **Glass-to-glass estimate**: from PRFT, HLS PDT, or DASH publish time. This is an estimate, not player end-to-end latency.
+* **Glass-to-glass estimate**: from PRFT, HLS PDT, or the DASH segment availability time (MPD publish time as a fallback). This is an estimate, not player end-to-end latency.
 * **Buffer model**: rebuffer probability from observed download-to-duration ratios.
 
 ## Keys

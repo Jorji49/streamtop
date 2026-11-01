@@ -237,7 +237,13 @@ impl ManifestPoller {
                 for w in &abr_health.warnings {
                     self.emit_log(LogLevel::Warn, DiagCategory::Abr, w.clone());
                 }
-                for finding in lint_variant_alignment(&marked) {
+                for finding in lint_variant_alignment(
+                    &marked,
+                    master
+                        .alternatives
+                        .iter()
+                        .any(|m| m.media_type == m3u8_rs::AlternativeMediaType::Audio),
+                ) {
                     self.send_event(StreamEvent::Finding(finding));
                 }
 

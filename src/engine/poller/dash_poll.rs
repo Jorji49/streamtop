@@ -29,6 +29,9 @@ impl ManifestPoller {
         let mut target_duration: u64 = 2;
         let mut last_mup: Option<f64> = None;
         let mut last_period_id: Option<String> = None;
+        let mut last_edge_key: Option<u64> = None;
+        let mut is_static = false;
+        let mut announced_static = false;
 
         loop {
             let now = Instant::now();
@@ -37,7 +40,7 @@ impl ManifestPoller {
             vbuf.drain_elapsed(elapsed);
             self.send_event(StreamEvent::Buffer(vbuf));
 
-            if target_duration > 0 {
+            if target_duration > 0 && !is_static {
                 linter.check_stalling(target_duration, now);
             }
 
@@ -52,16 +55,30 @@ impl ManifestPoller {
                     &mut announced_audio,
                     &mut announced_ast,
                     &mut last_period_id,
+                    &mut last_edge_key,
                 )
                 .await
             {
-                Ok((td, mup)) => {
+                Ok((td, mup, live)) => {
                     target_duration = td;
                     if let Some(m) = mup {
                         last_mup = Some(m);
                     }
                     consecutive_errors = 0;
-                    self.send_event(StreamEvent::Status(StreamStatus::live("Live")));
+                    is_static = !live;
+                    if live {
+                        self.send_event(StreamEvent::Status(StreamStatus::live("Live")));
+                    } else {
+                        if !announced_static {
+                            self.emit_log(
+                                LogLevel::Info,
+                                DiagCategory::Info,
+                                "MPD type is static: VOD. Stall checks are off.".to_string(),
+                            );
+                            announced_static = true;
+                        }
+                        self.send_event(StreamEvent::Status(StreamStatus::vod("VOD")));
+                    }
                 }
                 Err(err) => {
                     consecutive_errors = consecutive_errors.saturating_add(1);
@@ -117,7 +134,8 @@ impl ManifestPoller {
         announced_audio: &mut bool,
         announced_ast: &mut bool,
         last_period_id: &mut Option<String>,
-    ) -> Result<(u64, Option<f64>)> {
+        last_edge_key: &mut Option<u64>,
+    ) -> Result<(u64, Option<f64>, bool)> {
         let (body, _) = self.fetch_manifest(self.source_url.as_str()).await?;
         let xml = String::from_utf8_lossy(&body);
         let summary = parse_dash_mpd(&xml, &self.source_url)?;
@@ -158,7 +176,9 @@ impl ManifestPoller {
         for w in &abr_health.warnings {
             self.emit_log(LogLevel::Warn, DiagCategory::Abr, w.clone());
         }
-        for finding in lint_variant_alignment(&summary.variants) {
+        for finding in
+            lint_variant_alignment(&summary.variants, !summary.audio_languages.is_empty())
+        {
             self.send_event(StreamEvent::Finding(finding));
         }
 
@@ -204,7 +224,9 @@ impl ManifestPoller {
             *announced_ast = true;
         }
 
-        let latency = if let Some(spd) = summary.suggested_presentation_delay_secs {
+        let latency = if !summary.type_live {
+            LatencyState::Unknown
+        } else if let Some(spd) = summary.suggested_presentation_delay_secs {
             LatencyState::Estimated((spd * 1000.0).round() as u64)
         } else if let Some(mbt) = summary.min_buffer_time_secs {
             LatencyState::Estimated((mbt * 1000.0).round() as u64)
@@ -247,7 +269,16 @@ impl ManifestPoller {
             self.send_event(StreamEvent::AdBreak(ad));
         }
 
-        let should_probe = publish_changed || *probe_seq == 0;
+        // Prefer the newest media segment: it changes every segment duration
+        // on a healthy origin. Without a SegmentTemplate, fall back to
+        // MPD@publishTime changes and the first Representation URL.
+        let should_probe = match &summary.live_edge {
+            Some(edge) => *last_edge_key != Some(edge.key),
+            None => publish_changed || *probe_seq == 0,
+        };
+        if let Some(edge) = &summary.live_edge {
+            *last_edge_key = Some(edge.key);
+        }
         if should_probe {
             *probe_seq = probe_seq.saturating_add(1);
         }
@@ -277,8 +308,10 @@ impl ManifestPoller {
         }
 
         let probe_url = summary
-            .probe_url
-            .clone()
+            .live_edge
+            .as_ref()
+            .map(|e| e.url.clone())
+            .or_else(|| summary.probe_url.clone())
             .or_else(|| variants.first().map(|v| v.uri.clone()))
             .ok_or_else(|| eyre!("DASH MPD has no probeable Representation URL"))?;
 
@@ -351,10 +384,17 @@ impl ManifestPoller {
                 otel.record_wire_parse(&fetch.segment_url, &fetch.wire);
             }
             let dash_avail_ms = summary
-                .publish_time
+                .live_edge
                 .as_ref()
-                .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
-                .map(|dt| dt.timestamp_millis());
+                .and_then(|e| e.available_unix_ms)
+                .or_else(|| {
+                    summary
+                        .publish_time
+                        .as_ref()
+                        .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
+                        .map(|dt| dt.timestamp_millis())
+                })
+                .filter(|ms| plausible_wall_clock_ms(*ms));
             self.emit_g2g(&fetch.wire, None, dash_avail_ms, fetch.ttfb_ms);
             Self::merge_wire_pssh(&mut dash_drm, &fetch.wire);
 
@@ -437,6 +477,18 @@ impl ManifestPoller {
             renditions: MediaRenditions::default(),
         }));
 
-        Ok((target.max(1), summary.minimum_update_period_secs))
+        Ok((
+            target.max(1),
+            summary.minimum_update_period_secs,
+            summary.type_live,
+        ))
     }
+}
+
+/// A timestamp within one hour of now. Test packagers often set
+/// `publishTime` or `availabilityStartTime` to 1970, which would turn into a
+/// glass-to-glass figure of decades.
+fn plausible_wall_clock_ms(ms: i64) -> bool {
+    let now = chrono::Utc::now().timestamp_millis();
+    (now - ms).abs() <= 3_600_000
 }

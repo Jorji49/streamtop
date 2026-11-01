@@ -447,7 +447,12 @@ pub fn analyze_abr_ladder(variants: &[AbrVariant]) -> AbrHealth {
 }
 
 /// Flag master-playlist variant misalignment (audio missing, bandwidth vs resolution).
-pub fn lint_variant_alignment(variants: &[AbrVariant]) -> Vec<DiagnosticFinding> {
+/// `separate_audio`: the manifest declares audio outside the video variants
+/// (HLS `EXT-X-MEDIA TYPE=AUDIO`, DASH audio AdaptationSet).
+pub fn lint_variant_alignment(
+    variants: &[AbrVariant],
+    separate_audio: bool,
+) -> Vec<DiagnosticFinding> {
     let mut out = Vec::new();
     let has_video = variants.iter().any(|v| {
         v.codecs
@@ -459,7 +464,7 @@ pub fn lint_variant_alignment(variants: &[AbrVariant]) -> Vec<DiagnosticFinding>
             .as_deref()
             .is_some_and(|c| c.contains("mp4a") && !c.contains("avc") && !c.contains("hvc"))
     });
-    if has_video && !has_audio_only {
+    if has_video && !has_audio_only && !separate_audio {
         let any_audio_track = variants
             .iter()
             .any(|v| v.codecs.as_deref().is_some_and(|c| c.contains("mp4a")));
@@ -1122,5 +1127,31 @@ mod cdn_tests {
         let mut fmp4 = vec![0u8; 2048];
         fmp4[4..8].copy_from_slice(b"moof");
         assert_eq!(inspect_container(&fmp4), ContainerKind::Fmp4);
+    }
+}
+
+#[cfg(test)]
+mod alignment_tests {
+    use super::*;
+
+    fn video_only() -> Vec<AbrVariant> {
+        vec![AbrVariant {
+            bandwidth: 3_000_000,
+            resolution: Some("1280x720".into()),
+            codecs: Some("avc1.64001f".into()),
+            frame_rate: None,
+            uri: "v.m3u8".into(),
+            selected: true,
+            from_wire: false,
+            mismatch: None,
+        }]
+    }
+
+    #[test]
+    fn audio_missing_only_without_separate_audio() {
+        let flagged = lint_variant_alignment(&video_only(), false);
+        assert!(flagged.iter().any(|f| f.rule == "ABR_AUDIO_MISSING"));
+        let ok = lint_variant_alignment(&video_only(), true);
+        assert!(!ok.iter().any(|f| f.rule == "ABR_AUDIO_MISSING"));
     }
 }
