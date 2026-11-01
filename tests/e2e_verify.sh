@@ -59,7 +59,7 @@ run_summary() {
     cat "$TMP/stderr.txt" >&2 || true
     return 1
   fi
-  if ! python3 "$ROOT/tests/e2e/validate_summary.py" "$out"; then
+  if ! python3 "$ROOT/tests/e2e/validate_summary.py" "$out" >&2; then
     fail "schema validation for $url"
     return 1
   fi
@@ -212,10 +212,10 @@ OUT=$(run_summary "$DASH_URL" --probe-headers --probe-drm) || true
 if [[ -f "${OUT:-}" ]]; then
   pass "DASH summary schema valid"
   SV=$(json_get ".schema_version" "$OUT")
-  if [[ "$SV" == "6" ]]; then
-    pass "summary schema v6"
+  if [[ "$SV" == "7" ]]; then
+    pass "summary schema v7"
   else
-    fail "expected schema_version 6, got $SV"
+    fail "expected schema_version 7, got $SV"
   fi
 fi
 

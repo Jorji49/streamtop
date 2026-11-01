@@ -225,7 +225,7 @@ try {
     if ($Out) {
         Pass 'DASH summary schema valid'
         $Sv = Get-JsonField $Out 'schema_version'
-        if ($Sv -eq '6') { Pass 'summary schema v6' } else { Fail "expected schema_version 6, got $Sv" }
+        if ($Sv -eq '7') { Pass 'summary schema v7' } else { Fail "expected schema_version 7, got $Sv" }
     }
 
     Log 'ClearKey cbcs staging smoke'

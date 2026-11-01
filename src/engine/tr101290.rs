@@ -405,9 +405,13 @@ pub fn probe_container_tr101290(
     }
 }
 
-/// Three sync bytes at 188-byte spacing from the start of the window.
+/// Three sync bytes at 188-byte spacing, starting in the first two packets of
+/// the window. A broken first packet still counts, random data does not.
 fn looks_like_ts(bytes: &[u8]) -> bool {
-    bytes.len() >= 3 * TS_PACKET_SIZE && (0..3).all(|i| bytes[i * TS_PACKET_SIZE] == SYNC_BYTE)
+    (0..2 * TS_PACKET_SIZE).any(|o| {
+        o + 2 * TS_PACKET_SIZE < bytes.len()
+            && (0..3).all(|i| bytes[o + i * TS_PACKET_SIZE] == SYNC_BYTE)
+    })
 }
 
 fn packet_pid(pkt: &[u8]) -> u16 {
@@ -681,5 +685,14 @@ mod tests {
         let mut buf = vec![0u8; 4096];
         buf[188] = SYNC_BYTE;
         assert!(!looks_like_ts(&buf));
+    }
+
+    #[test]
+    fn broken_first_packet_is_still_ts() {
+        let mut buf = vec![0u8; 4 * TS_PACKET_SIZE];
+        for i in 1..4 {
+            buf[i * TS_PACKET_SIZE] = SYNC_BYTE;
+        }
+        assert!(looks_like_ts(&buf));
     }
 }
