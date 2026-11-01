@@ -71,3 +71,27 @@ git clone https://github.com/Jorji49/streamtop.git
 cd streamtop
 cargo install --path .
 ```
+
+## Shell completions and man page
+
+`streamtop completions <SHELL>` prints a completion script for bash, zsh, fish, elvish, or powershell. It covers the main flags and the `check`, `scte35`, `completions`, and `man` subcommands.
+
+```bash
+# bash
+streamtop completions bash > ~/.local/share/bash-completion/completions/streamtop
+# zsh (a directory in your fpath)
+streamtop completions zsh > ~/.zfunc/_streamtop
+# fish
+streamtop completions fish > ~/.config/fish/completions/streamtop.fish
+# PowerShell
+streamtop completions powershell >> $PROFILE
+```
+
+`streamtop man` prints the streamtop(1) man page as roff. `streamtop man check` prints the page for one subcommand.
+
+```bash
+mkdir -p ~/.local/share/man/man1
+streamtop man > ~/.local/share/man/man1/streamtop.1
+streamtop man check > ~/.local/share/man/man1/streamtop-check.1
+man streamtop
+```

@@ -310,3 +310,31 @@ async fn whep_mock_handshake_parses_201_sdp_answer() {
         .as_deref()
         .is_some_and(|l| l.contains("session1")));
 }
+
+#[test]
+fn completions_and_man_page_are_generated() {
+    let bin = env!("CARGO_BIN_EXE_streamtop");
+    for shell in ["bash", "zsh", "fish", "elvish", "powershell"] {
+        let out = std::process::Command::new(bin)
+            .args(["completions", shell])
+            .output()
+            .expect("run completions");
+        assert!(out.status.success(), "{shell}");
+        let text = String::from_utf8_lossy(&out.stdout);
+        assert!(text.contains("--summary"), "{shell}: main flags missing");
+        assert!(text.contains("fail-on-dead"), "{shell}: check flags missing");
+    }
+    let man = std::process::Command::new(bin)
+        .arg("man")
+        .output()
+        .expect("run man");
+    assert!(man.status.success());
+    let page = String::from_utf8_lossy(&man.stdout);
+    assert!(page.contains(".TH streamtop 1"), "{page}");
+    assert!(page.contains("streamtop\\-check(1)"));
+    let check = std::process::Command::new(bin)
+        .args(["man", "check"])
+        .output()
+        .expect("run man check");
+    assert!(String::from_utf8_lossy(&check.stdout).contains(".TH streamtop-check 1"));
+}

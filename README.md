@@ -34,7 +34,7 @@ scoop bucket add streamtop https://github.com/Jorji49/streamtop && scoop install
 docker run -it --rm ghcr.io/jorji49/streamtop:latest <URL>
 ```
 
-Prebuilt binaries for Linux (x86_64 and arm64, glibc and musl), macOS (Apple Silicon and Intel), and Windows x86_64 are on [GitHub Releases](https://github.com/Jorji49/streamtop/releases/latest). Arch Linux, winget, and source builds are covered in the [install guide](https://jorji49.github.io/streamtop/install.html).
+Prebuilt binaries for Linux (x86_64 and arm64, glibc and musl), macOS (Apple Silicon and Intel), and Windows x86_64 are on [GitHub Releases](https://github.com/Jorji49/streamtop/releases/latest). Arch Linux, winget, and source builds are covered in the [install guide](https://jorji49.github.io/streamtop/install.html). `streamtop completions <bash|zsh|fish|elvish|powershell>` prints a completion script and `streamtop man` prints the man page.
 
 ## Usage
 

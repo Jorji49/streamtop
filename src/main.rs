@@ -59,7 +59,7 @@ impl From<SummaryFormatArg> for SummaryFormat {
     name = "streamtop",
     version,
     about = "HLS/DASH/IPTV stream diagnostics TUI",
-    after_help = "Subcommands:\n  streamtop check <PLAYLIST>   Check every entry of an IPTV playlist (see streamtop check --help)\n  streamtop scte35 <PAYLOAD>   Decode a SCTE-35 splice_info_section (see streamtop scte35 --help)"
+    after_help = "Subcommands:\n  streamtop check <PLAYLIST>     Check every entry of an IPTV playlist (see streamtop check --help)\n  streamtop scte35 <PAYLOAD>     Decode a SCTE-35 splice_info_section (see streamtop scte35 --help)\n  streamtop completions <SHELL>  Print a completion script for bash, zsh, fish, elvish, or powershell\n  streamtop man                  Print the man page"
 )]
 #[allow(clippy::struct_excessive_bools)] // clap CLI flags
 struct Cli {
@@ -249,6 +249,12 @@ async fn main() -> Result<ExitCode> {
     match raw_args.get(1).and_then(|a| a.to_str()) {
         Some("check") => return run_check_cmd(CheckCli::parse_from(&raw_args[1..])).await,
         Some("scte35") => return run_scte35_cmd(&Scte35Cli::parse_from(&raw_args[1..])),
+        Some("completions") => {
+            return run_completions_cmd(&CompletionsCli::parse_from(&raw_args[1..]));
+        }
+        Some("man") => {
+            return run_man_cmd(&ManCli::parse_from(&raw_args[1..]));
+        }
         _ => {}
     }
 
@@ -566,6 +572,7 @@ async fn main() -> Result<ExitCode> {
 #[derive(Debug, Parser)]
 #[command(
     name = "streamtop check",
+    bin_name = "streamtop check",
     version,
     about = "Check every entry of an IPTV playlist (M3U, JSON, YAML) or a single HLS/DASH URL",
     after_help = "Verdicts: LIVE (manifest and first segment answer), STALL (slow or empty), ERROR (dead).\nExit code: 0, or 1 with --fail-on-dead when an entry is dead (or stalled with --strict)."
@@ -705,6 +712,7 @@ async fn run_check_cmd(args: CheckCli) -> Result<ExitCode> {
 #[derive(Debug, Parser)]
 #[command(
     name = "streamtop scte35",
+    bin_name = "streamtop scte35",
     version,
     about = "Decode a SCTE-35 splice_info_section from Base64, hex, or an HLS tag line",
     after_help = "Examples:\n  streamtop scte35 /DAvAAAAAAAA///wFAVIAACPf+/+c2nALv4AUsz1AAAAAAAKAAhDVUVJAAABNWLbowo=\n  streamtop scte35 0xFC302F...\n  echo '#EXT-OATCLS-SCTE35:/DAv...' | streamtop scte35 -"
@@ -715,6 +723,79 @@ struct Scte35Cli {
     /// Print JSON instead of text
     #[arg(long = "json")]
     json: bool,
+}
+
+/// `streamtop completions`: print a shell completion script.
+#[derive(Debug, Parser)]
+#[command(
+    name = "streamtop completions",
+    bin_name = "streamtop completions",
+    version,
+    about = "Print a shell completion script to stdout",
+    after_help = "Examples:\n  streamtop completions bash > ~/.local/share/bash-completion/completions/streamtop\n  streamtop completions zsh > \"${fpath[1]}/_streamtop\"\n  streamtop completions fish > ~/.config/fish/completions/streamtop.fish\n  streamtop completions powershell >> $PROFILE"
+)]
+struct CompletionsCli {
+    /// Target shell
+    #[arg(value_enum)]
+    shell: clap_complete::Shell,
+}
+
+/// `streamtop man`: print a man page.
+#[derive(Debug, Parser)]
+#[command(
+    name = "streamtop man",
+    bin_name = "streamtop man",
+    version,
+    about = "Print the streamtop(1) man page, or a subcommand page, as roff to stdout",
+    after_help = "Examples:\n  streamtop man > /usr/local/share/man/man1/streamtop.1\n  streamtop man check > /usr/local/share/man/man1/streamtop-check.1"
+)]
+struct ManCli {
+    /// Subcommand page instead of the main page
+    #[arg(value_parser = ["check", "scte35", "completions", "man"])]
+    subcommand: Option<String>,
+}
+
+/// The full command tree, used only for completions and the man page. The
+/// real dispatch of subcommands happens on `argv[1]` in `main`.
+fn full_command() -> clap::Command {
+    use clap::CommandFactory;
+    Cli::command()
+        .args_conflicts_with_subcommands(true)
+        .disable_help_subcommand(true)
+        .subcommand(CheckCli::command().name("check"))
+        .subcommand(Scte35Cli::command().name("scte35"))
+        .subcommand(CompletionsCli::command().name("completions"))
+        .subcommand(ManCli::command().name("man"))
+}
+
+fn run_completions_cmd(args: &CompletionsCli) -> Result<ExitCode> {
+    let mut cmd = full_command();
+    clap_complete::generate(args.shell, &mut cmd, "streamtop", &mut io::stdout());
+    Ok(ExitCode::SUCCESS)
+}
+
+fn run_man_cmd(args: &ManCli) -> Result<ExitCode> {
+    let cmd = full_command();
+    let page = match args.subcommand.as_deref() {
+        None => cmd,
+        Some(name) => {
+            let (page, bin) = match name {
+                "check" => ("streamtop-check", "streamtop check"),
+                "scte35" => ("streamtop-scte35", "streamtop scte35"),
+                "completions" => ("streamtop-completions", "streamtop completions"),
+                _ => ("streamtop-man", "streamtop man"),
+            };
+            cmd.find_subcommand(name)
+                .cloned()
+                .ok_or_else(|| eyre!("unknown subcommand {name}"))?
+                .name(page)
+                .bin_name(bin)
+        }
+    };
+    clap_mangen::Man::new(page)
+        .render(&mut io::stdout())
+        .wrap_err("write man page")?;
+    Ok(ExitCode::SUCCESS)
 }
 
 fn run_scte35_cmd(args: &Scte35Cli) -> Result<ExitCode> {
