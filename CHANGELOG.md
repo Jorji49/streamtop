@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+
+- `streamtop completions` and `streamtop man` no longer panic or print an error when stdout is closed early (for example `| head`).
+
 ## [1.7.0] - 2026-11-01
 
 ### Added

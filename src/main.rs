@@ -249,9 +249,7 @@ async fn main() -> Result<ExitCode> {
         Some("check") => return run_check_cmd(CheckCli::parse_from(&raw_args[1..])).await,
         Some("scte35") => return run_scte35_cmd(&Scte35Cli::parse_from(&raw_args[1..])),
         Some("completions") => {
-            return Ok(run_completions_cmd(&CompletionsCli::parse_from(
-                &raw_args[1..],
-            )));
+            return run_completions_cmd(&CompletionsCli::parse_from(&raw_args[1..]));
         }
         Some("man") => {
             return run_man_cmd(&ManCli::parse_from(&raw_args[1..]));
@@ -785,10 +783,21 @@ fn full_command() -> clap::Command {
         .subcommand(ManCli::command().name("man"))
 }
 
-fn run_completions_cmd(args: &CompletionsCli) -> ExitCode {
+fn run_completions_cmd(args: &CompletionsCli) -> Result<ExitCode> {
     let mut cmd = full_command();
-    clap_complete::generate(args.shell, &mut cmd, "streamtop", &mut io::stdout());
-    ExitCode::SUCCESS
+    let mut buf = Vec::new();
+    clap_complete::generate(args.shell, &mut cmd, "streamtop", &mut buf);
+    write_stdout_quiet(&buf).wrap_err("write completion script")?;
+    Ok(ExitCode::SUCCESS)
+}
+
+/// Write to stdout; a closed pipe (for example `| head`) is not an error.
+fn write_stdout_quiet(buf: &[u8]) -> io::Result<()> {
+    let mut out = io::stdout().lock();
+    match out.write_all(buf).and_then(|()| out.flush()) {
+        Err(e) if e.kind() == io::ErrorKind::BrokenPipe => Ok(()),
+        other => other,
+    }
 }
 
 fn run_man_cmd(args: &ManCli) -> Result<ExitCode> {
@@ -809,9 +818,11 @@ fn run_man_cmd(args: &ManCli) -> Result<ExitCode> {
                 .bin_name(bin)
         }
     };
+    let mut buf = Vec::new();
     clap_mangen::Man::new(page)
-        .render(&mut io::stdout())
-        .wrap_err("write man page")?;
+        .render(&mut buf)
+        .wrap_err("render man page")?;
+    write_stdout_quiet(&buf).wrap_err("write man page")?;
     Ok(ExitCode::SUCCESS)
 }
 
