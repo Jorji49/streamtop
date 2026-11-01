@@ -111,10 +111,12 @@ brew install streamtop
 
 ### Arch Linux
 
-`dist/aur/PKGBUILD` is the `streamtop-bin` package. It installs the Linux release tarball from GitHub Releases:
+`streamtop-bin` is not on the AUR yet. `dist/aur/PKGBUILD` builds the same package locally from the Linux release tarball on GitHub Releases:
 
 ```bash
-makepkg -si -p dist/aur/PKGBUILD
+git clone https://github.com/Jorji49/streamtop.git
+cd streamtop/dist/aur
+makepkg -si
 ```
 
 ### Scoop
