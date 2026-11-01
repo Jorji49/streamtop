@@ -14,6 +14,7 @@ jobs:
       - name: Tap repository
         run: |
           brew tap Jorji49/tap
+          brew trust jorji49/tap
 
       - name: Audit formula syntax and metadata
         run: |
