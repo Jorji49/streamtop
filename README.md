@@ -80,7 +80,3 @@ Bug reports and pull requests are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md
 ## License
 
 [MIT](LICENSE).
-
-## See also
-
-[CloudScout](https://07x.nl/cloudscout/): a browser extension by the same author that shows cloud gaming, subscription, language and price info on Steam and Epic game pages.
