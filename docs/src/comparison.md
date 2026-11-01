@@ -13,7 +13,7 @@ streamtop overlaps with several established tools. None of them is a replacement
 | MPEG-TS depth | Probe window only (TR 101 290 P1/P2) | Whole-stream analysis, PSI/SI tables, PCR and continuity checks, many plugins | Demux and decode | SCTE-35 sections in TS | None |
 | UDP / multicast / SRT | No | Yes | Yes (via FFmpeg protocols) | UDP and multicast for TS | No |
 | Media decode | No | No (transport level) | Yes | No | Via ffprobe |
-| SCTE-35 | Reads HLS tags, DASH `emsg`, flags mismatches | Splice monitoring and injection plugins | Exposes data streams, no SCTE-35 semantics | Full decode and encode, the main purpose | No |
+| SCTE-35 | Decodes HLS tags and DASH `emsg` live, flags mismatches; `streamtop scte35` decodes one cue | Splice monitoring and injection plugins | Exposes data streams, no SCTE-35 semantics | Full decode and encode, the main purpose | No |
 | CDN / HTTP timing | DNS, TCP, TLS, TTFB, CDN HIT/MISS per segment | No | No | No | No |
 | Prometheus / OTLP | Yes | No | No | No | No |
 | CI verdicts | PASS/FAIL JSON, SARIF, budgets | Exit codes from scripts | Exit codes from scripts | No | Results written to an output directory |
@@ -24,9 +24,9 @@ streamtop overlaps with several established tools. None of them is a replacement
 
 **Use ffprobe** when you need exact codec and container parameters from one file or URL, or anything that needs decoding. ffprobe reads a snapshot; it does not track a live playlist over time, and it does not report HTTP timing or CDN behavior.
 
-**Use threefive** when the job is SCTE-35 itself: decoding cues from TS, HLS, base64, hex, or XML, encoding new cues, or injecting them. streamtop decodes the cues it finds while monitoring, but it does not encode or inject.
+**Use threefive** when the job is SCTE-35 itself: decoding cues from TS, HLS, base64, hex, or XML, encoding new cues, or injecting them. streamtop decodes the cues it finds while monitoring, and `streamtop scte35` decodes a single Base64 or hex cue, but it does not encode, inject, or verify the CRC.
 
-**Use iptv-checker** when you want per-channel status plus ffprobe stream metadata (codecs, resolution) for a playlist, with retries, delays, and proxy support. streamtop `--audit` checks reachability and segment TTFB without ffprobe and writes a JSON/CSV report.
+**Use iptv-checker** when you want per-channel status plus ffprobe stream metadata (codecs, resolution) for a playlist, with retries, delays, and proxy support. `streamtop check` probes reachability and segment TTFB without ffprobe, prints a table, JSON, or CSV, and can write the working entries to a new M3U with `--alive-out`.
 
 **Use streamtop** when you are watching a live HLS or DASH channel over minutes or hours and want to see segment timing, CDN edge behavior, stalls, ABR ladder versus bitstream mismatches, and ad markers in one terminal view, or when you want that as Prometheus metrics or a CI gate.
 

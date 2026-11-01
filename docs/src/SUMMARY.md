@@ -6,6 +6,7 @@
 - [Quick start](quick-start.md)
 - [Dashboard and keys](dashboard.md)
 - [IPTV playlist checking](iptv.md)
+- [SCTE-35 decoding](scte35.md)
 - [Headless and CI](ci.md)
 - [Exports](exports.md)
 - [Metrics, agent, and alerts](metrics.md)

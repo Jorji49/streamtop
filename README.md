@@ -43,9 +43,14 @@ Prebuilt binaries for Linux (x86_64 and arm64, glibc and musl), macOS (Apple Sil
 streamtop "https://example.com/master.m3u8"
 streamtop "https://example.com/manifest.mpd" --tr101290 --probe-sei
 
-# IPTV list: channel picker, or check every channel
+# IPTV list: channel picker
 streamtop ./channels.m3u
-streamtop ./channels.m3u --audit
+
+# Check every entry: table, JSON or CSV, a playlist of working ones, exit 1 on dead
+streamtop check ./channels.m3u --alive-out working.m3u --fail-on-dead
+
+# Decode one SCTE-35 cue (Base64, hex, or an HLS tag line)
+streamtop scte35 "/DAvAAAAAAAA///wFAVIAACPf+/+c2nALv4AUsz1AAAAAAAKAAhDVUVJAAABNWLbowo="
 
 # Headless PASS/FAIL for CI (JSON or SARIF)
 streamtop <URL> --summary --summary-format json --timeout 10
@@ -60,7 +65,8 @@ streamtop <URL> --prometheus
 * Segment DNS / TCP / TLS / TTFB timing and CDN HIT/MISS for 12 CDNs
 * ABR ladder versus the bitstream: resolution, FPS, GOP, audio
 * TR 101 290 P1/P2 on MPEG-TS, SEI captions and HDR metadata
-* SCTE-35 in HLS tags and DASH `emsg`, with mismatch detection
+* IPTV playlist checks with `streamtop check`
+* SCTE-35 in HLS tags and DASH `emsg`, with mismatch detection, and `streamtop scte35` for single cues
 * Side-by-side compare and multi-CDN live-edge skew
 * Exports: HTML/JSON reports, HAR, curl, SARIF, Grafana dashboard
 * Prometheus, OpenTelemetry, webhooks, and a multi-stream agent

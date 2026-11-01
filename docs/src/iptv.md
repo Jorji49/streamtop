@@ -44,6 +44,35 @@ Headers and User-Agent apply to every channel:
 streamtop ./channels.m3u --audit -H "Referer: https://example.com" -A "Mozilla/5.0"
 ```
 
+## streamtop check
+
+`streamtop check` is the scriptable version of `--audit`. It takes a playlist file or URL (M3U, JSON, YAML, or a single HLS/DASH URL), probes every entry concurrently with a per-entry time limit, and prints a table, JSON, or CSV. It writes no files unless you ask for them.
+
+```bash
+streamtop check ./channels.m3u
+streamtop check "https://example.com/playlist.m3u" --timeout 5 --concurrency 50
+streamtop check ./channels.m3u --format json > report.json
+streamtop check ./channels.m3u --format csv --output report.csv
+streamtop check ./channels.m3u --alive-out working.m3u
+streamtop check ./channels.m3u --fail-on-dead      # exit 1 if any entry is dead
+```
+
+| Option | Default | Meaning |
+|---|---|---|
+| `-t, --timeout SECS` | 10 | Time limit for one entry (playlist, variant, and segment probe together). An entry that runs over is `ERROR` with `timeout after Ns` |
+| `-j, --concurrency N` | 25 | Entries probed at the same time |
+| `-f, --format` | `table` | `table`, `json`, or `csv` |
+| `-o, --output FILE` | stdout | Write the report to a file. With `table`, writes JSON |
+| `--alive-out FILE` | | Write an M3U with the entries that are not dead, keeping `tvg-id`, `tvg-logo`, and `group-title` |
+| `--fail-on-dead` | off | Exit 1 when any entry is `ERROR` |
+| `--strict` | off | Treat `STALL` as dead for `--fail-on-dead` and `--alive-out` |
+| `-H, --header` | | Extra HTTP header, repeatable |
+| `-A, --user-agent` | | User-Agent override |
+
+JSON and CSV reports redact URLs and tokens, like the `--audit` files. The `--alive-out` playlist keeps the original URLs, because it is meant to be played.
+
+Without `--fail-on-dead`, `check` exits 0 even when entries are dead, so it can be used for reporting. `--audit` always exits 1 on any `ERROR` or `STALL`.
+
 ## Notes
 
 * A `LIVE` verdict means the playlist and one segment were reachable. It does not decode video, so a channel that serves a black frame still counts as live.

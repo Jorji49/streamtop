@@ -1,5 +1,22 @@
 # Changelog
 
+## [1.6.0] - 2026-11-01
+
+### Added
+
+- `streamtop check <playlist|url>`: probes every playlist entry concurrently with a per-entry timeout (`--timeout`, `--concurrency`) and prints a table, JSON, or CSV (`--format`, `--output`). `--alive-out FILE` writes an M3U with the entries that are not dead, `--fail-on-dead` exits 1 when any entry is dead, `--strict` counts stalls as dead
+- `streamtop scte35 <payload>`: decodes one SCTE-35 `splice_info_section` from Base64, hex (with or without `0x`), an HLS tag line, or stdin, as text or `--json`
+- Documentation site at https://jorji49.github.io/streamtop/ (install, usage, IPTV checking, SCTE-35, CI, comparison with other tools, limits, FAQ)
+
+### Fixed
+
+- SCTE-35 UPID type names follow SCTE-35 Table 21 (for example 0x08 is TI and 0x0A is EIDR; before, names from 0x06 on were shifted)
+- SCTE-35 segmentation type names follow Table 23 (0x36 and 0x37 are Distributor Placement Opportunity, 0x22 and 0x23 are Break Start and End, 0x19 is Program Start In Progress, 0x40 is Unscheduled Event Start). Added the missing types
+
+### Changed
+
+- README shortened; details moved to the documentation site
+
 ## [1.5.5] - 2026-11-01
 
 ### Added

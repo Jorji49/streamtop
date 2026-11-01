@@ -4,7 +4,7 @@ use std::fs::File;
 use std::io::Write;
 use std::path::Path;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use chrono::Utc;
 use color_eyre::eyre::{eyre, Result, WrapErr};
@@ -37,6 +37,24 @@ pub async fn run_audit(
     run_audit_to(source_label, channels, headers, user_agent, Path::new(".")).await
 }
 
+/// Tuning for [`probe_channels`].
+#[derive(Debug, Clone, Copy)]
+pub struct ProbeOptions {
+    /// Number of channels probed at the same time.
+    pub concurrency: usize,
+    /// Upper bound for one channel (manifest, variant, and segment probe).
+    pub timeout: Option<Duration>,
+}
+
+impl Default for ProbeOptions {
+    fn default() -> Self {
+        Self {
+            concurrency: AUDIT_CONCURRENCY,
+            timeout: None,
+        }
+    }
+}
+
 async fn run_audit_to(
     source_label: &str,
     channels: Vec<ChannelEntry>,
@@ -44,13 +62,38 @@ async fn run_audit_to(
     user_agent: Option<String>,
     output_dir: &Path,
 ) -> Result<AuditReport> {
-    let client = Arc::new(build_audit_http_client(&headers, user_agent.as_deref())?);
-    let sem = Arc::new(Semaphore::new(AUDIT_CONCURRENCY));
-    let total = channels.len();
-
     eprintln!(
-        "streamtop audit: {total} channels, {AUDIT_CONCURRENCY} workers, Range bytes=0-{RANGE_PROBE_BYTES}"
+        "streamtop audit: {} channels, {AUDIT_CONCURRENCY} workers, Range bytes=0-{RANGE_PROBE_BYTES}",
+        channels.len()
     );
+    let report = probe_channels(
+        source_label,
+        channels,
+        &headers,
+        user_agent.as_deref(),
+        ProbeOptions::default(),
+    )
+    .await?;
+
+    print_matrix(&report)?;
+    write_json(&report, &output_dir.join(AUDIT_REPORT_JSON))?;
+    write_csv(&report, &output_dir.join(AUDIT_REPORT_CSV))?;
+    println!("Wrote {AUDIT_REPORT_JSON} and {AUDIT_REPORT_CSV}");
+    Ok(report)
+}
+
+/// Probe every channel concurrently and return the report. Prints nothing and writes no files.
+pub async fn probe_channels(
+    source_label: &str,
+    channels: Vec<ChannelEntry>,
+    headers: &[String],
+    user_agent: Option<&str>,
+    opts: ProbeOptions,
+) -> Result<AuditReport> {
+    let client = Arc::new(build_audit_http_client(headers, user_agent)?);
+    let concurrency = opts.concurrency.max(1);
+    let sem = Arc::new(Semaphore::new(concurrency));
+    let total = channels.len();
 
     let mut jobs = Vec::with_capacity(total);
     for (idx, ch) in channels.into_iter().enumerate() {
@@ -58,49 +101,33 @@ async fn run_audit_to(
         let sem = Arc::clone(&sem);
         jobs.push(async move {
             let Ok(_permit) = sem.acquire().await else {
-                return (
-                    idx,
-                    AuditRow {
-                        name: ch.name.clone(),
-                        group: ch.group.clone(),
-                        url: ch.url.clone(),
-                        verdict: AuditVerdict::Error,
-                        http_status: None,
-                        protocol: None,
-                        cdn: "-".into(),
-                        ttfb_ms: None,
-                        bitrate_profiles: Vec::new(),
-                        has_pdt: false,
-                        error: Some("audit worker interrupted".into()),
-                    },
-                );
+                return (idx, error_row(&ch, "audit worker interrupted".into()));
             };
-            let row = audit_one(&client, &ch).await;
+            let row = match opts.timeout {
+                Some(limit) => tokio::time::timeout(limit, audit_one(&client, &ch))
+                    .await
+                    .unwrap_or_else(|_| {
+                        error_row(&ch, format!("timeout after {}s", limit.as_secs_f64()))
+                    }),
+                None => audit_one(&client, &ch).await,
+            };
             (idx, row)
         });
     }
 
     let mut indexed: Vec<(usize, AuditRow)> = stream::iter(jobs)
-        .buffer_unordered(AUDIT_CONCURRENCY)
+        .buffer_unordered(concurrency)
         .collect()
         .await;
     indexed.sort_by_key(|(i, _)| *i);
     let rows: Vec<AuditRow> = indexed.into_iter().map(|(_, r)| r).collect();
 
-    let live = rows
-        .iter()
-        .filter(|r| r.verdict == AuditVerdict::Live)
-        .count();
-    let errors = rows
-        .iter()
-        .filter(|r| r.verdict == AuditVerdict::Error)
-        .count();
-    let stalls = rows
-        .iter()
-        .filter(|r| r.verdict == AuditVerdict::Stall)
-        .count();
+    let count = |v: AuditVerdict| rows.iter().filter(|r| r.verdict == v).count();
+    let live = count(AuditVerdict::Live);
+    let errors = count(AuditVerdict::Error);
+    let stalls = count(AuditVerdict::Stall);
 
-    let report = AuditReport {
+    Ok(AuditReport {
         captured_at: Utc::now(),
         source: source_label.to_string(),
         total,
@@ -108,30 +135,29 @@ async fn run_audit_to(
         errors,
         stalls,
         channels: rows,
-    };
+    })
+}
 
-    print_matrix(&report)?;
-    write_json(&report, &output_dir.join(AUDIT_REPORT_JSON))?;
-    write_csv(&report, &output_dir.join(AUDIT_REPORT_CSV))?;
-    Ok(report)
+fn error_row(ch: &ChannelEntry, error: String) -> AuditRow {
+    AuditRow {
+        name: ch.name.clone(),
+        group: ch.group.clone(),
+        url: ch.url.clone(),
+        verdict: AuditVerdict::Error,
+        http_status: None,
+        protocol: None,
+        cdn: "-".into(),
+        ttfb_ms: None,
+        bitrate_profiles: Vec::new(),
+        has_pdt: false,
+        error: Some(error),
+    }
 }
 
 async fn audit_one(client: &Client, ch: &ChannelEntry) -> AuditRow {
     match audit_one_inner(client, ch).await {
         Ok(row) => row,
-        Err(err) => AuditRow {
-            name: ch.name.clone(),
-            group: ch.group.clone(),
-            url: ch.url.clone(),
-            verdict: AuditVerdict::Error,
-            http_status: None,
-            protocol: None,
-            cdn: "-".into(),
-            ttfb_ms: None,
-            bitrate_profiles: Vec::new(),
-            has_pdt: false,
-            error: Some(format!("{err:#}")),
-        },
+        Err(err) => error_row(ch, format!("{err:#}")),
     }
 }
 
@@ -356,7 +382,8 @@ async fn range_probe(client: &Client, url: &str) -> Result<(u16, u64, String)> {
     Ok((status, ttfb, cdn))
 }
 
-fn print_matrix(report: &AuditReport) -> Result<()> {
+/// Print the colored channel table and totals to stdout.
+pub fn print_matrix(report: &AuditReport) -> Result<()> {
     println!();
     color_line(
         Color::Cyan,
@@ -414,7 +441,6 @@ fn print_matrix(report: &AuditReport) -> Result<()> {
     print!(", ");
     color_span(Color::Yellow, &format!("{} Stall", report.stalls))?;
     println!();
-    println!("Wrote {AUDIT_REPORT_JSON} and {AUDIT_REPORT_CSV}");
     Ok(())
 }
 
@@ -454,6 +480,13 @@ fn truncate(s: &str, max: usize) -> String {
 }
 
 fn write_json(report: &AuditReport, path: &Path) -> Result<()> {
+    let json = render_json(report)?;
+    std::fs::write(path, json).wrap_err_with(|| format!("write {}", path.display()))?;
+    Ok(())
+}
+
+/// Pretty JSON for a report, with URLs, tokens, and secrets redacted.
+pub fn render_json(report: &AuditReport) -> Result<String> {
     let mut report = report.clone();
     report.source = crate::engine::redact::redact_url(&report.source);
     for ch in &mut report.channels {
@@ -463,13 +496,16 @@ fn write_json(report: &AuditReport, path: &Path) -> Result<()> {
         }
     }
     let json = serde_json::to_string_pretty(&report).wrap_err("audit json")?;
-    let json = crate::engine::redact::redact_text(&json);
-    std::fs::write(path, json).wrap_err_with(|| format!("write {}", path.display()))?;
-    Ok(())
+    Ok(crate::engine::redact::redact_text(&json))
 }
 
 fn write_csv(report: &AuditReport, path: &Path) -> Result<()> {
     let mut f = File::create(path).wrap_err("audit csv")?;
+    render_csv(report, &mut f)
+}
+
+/// CSV for a report, with URLs and error text redacted.
+pub fn render_csv(report: &AuditReport, f: &mut impl Write) -> Result<()> {
     writeln!(
         f,
         "name,group,url,verdict,http_status,protocol,cdn,ttfb_ms,bitrate_profiles,has_pdt,error"
@@ -587,6 +623,40 @@ seg.ts
             "verdict={:?}",
             row.verdict
         );
+    }
+
+    #[tokio::test]
+    async fn probe_channels_applies_per_entry_timeout() {
+        let app = Router::new().route(
+            "/slow.m3u8",
+            get(|| async {
+                tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                MEDIA.to_string()
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let handle = tokio::spawn(async move {
+            axum::serve(listener, app).await.ok();
+        });
+        let channels = vec![ChannelEntry {
+            name: "slow".into(),
+            url: format!("http://{addr}/slow.m3u8"),
+            group: None,
+            logo: None,
+            tvg_id: None,
+        }];
+        let opts = ProbeOptions {
+            concurrency: 4,
+            timeout: Some(Duration::from_millis(200)),
+        };
+        let report = probe_channels("t", channels, &[], None, opts)
+            .await
+            .expect("probe");
+        handle.abort();
+        assert_eq!(report.errors, 1);
+        let err = report.channels[0].error.as_deref().unwrap_or_default();
+        assert!(err.starts_with("timeout after"), "{err}");
     }
 
     #[test]

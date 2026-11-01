@@ -13,8 +13,11 @@ use crossterm::execute;
 use crossterm::terminal::{disable_raw_mode, LeaveAlternateScreen};
 use reqwest::Client;
 
-use streamtop::engine::audit::run_audit;
+use streamtop::engine::audit::{
+    print_matrix, probe_channels, render_json, run_audit, ProbeOptions,
+};
 use streamtop::engine::budget::{run_budget, BudgetOpts};
+use streamtop::engine::check::{alive_m3u, render_report, should_fail, CheckFormat};
 use streamtop::engine::config::session_from_profile;
 use streamtop::engine::export::{build_curl, capture_for_export, write_har};
 use streamtop::engine::export_cli::{parse_export_spec, ExportFormat, ExportPlan};
@@ -26,6 +29,7 @@ use streamtop::engine::playlist_parser::{
 use streamtop::engine::poller::{
     build_http_client, read_file_limited, read_response_bytes_limited,
 };
+use streamtop::engine::scte35::{decode_cli_input, parse_scte35_bytes, render_text};
 use streamtop::engine::summary::{run_summary, SummaryFormat};
 use streamtop::engine::vod::run_vod;
 use streamtop::models::{ChannelEntry, MAX_MANIFEST_BYTES};
@@ -54,7 +58,8 @@ impl From<SummaryFormatArg> for SummaryFormat {
 #[command(
     name = "streamtop",
     version,
-    about = "HLS/DASH/IPTV stream diagnostics TUI"
+    about = "HLS/DASH/IPTV stream diagnostics TUI",
+    after_help = "Subcommands:\n  streamtop check <PLAYLIST>   Check every entry of an IPTV playlist (see streamtop check --help)\n  streamtop scte35 <PAYLOAD>   Decode a SCTE-35 splice_info_section (see streamtop scte35 --help)"
 )]
 #[allow(clippy::struct_excessive_bools)] // clap CLI flags
 struct Cli {
@@ -220,6 +225,13 @@ async fn main() -> Result<ExitCode> {
 
     color_eyre::install()?;
     install_panic_hook();
+
+    let raw_args: Vec<std::ffi::OsString> = std::env::args_os().collect();
+    match raw_args.get(1).and_then(|a| a.to_str()) {
+        Some("check") => return run_check_cmd(CheckCli::parse_from(&raw_args[1..])).await,
+        Some("scte35") => return run_scte35_cmd(&Scte35Cli::parse_from(&raw_args[1..])),
+        _ => {}
+    }
 
     let cli = Cli::parse();
 
@@ -529,6 +541,186 @@ async fn main() -> Result<ExitCode> {
 
     restore_terminal_global();
     exit.wrap_err("streamtop ended with an error")
+}
+
+/// `streamtop check`: probe every entry of a playlist and report working and dead ones.
+#[derive(Debug, Parser)]
+#[command(
+    name = "streamtop check",
+    version,
+    about = "Check every entry of an IPTV playlist (M3U, JSON, YAML) or a single HLS/DASH URL",
+    after_help = "Verdicts: LIVE (manifest and first segment answer), STALL (slow or empty), ERROR (dead).\nExit code: 0, or 1 with --fail-on-dead when an entry is dead (or stalled with --strict)."
+)]
+struct CheckCli {
+    /// Playlist file or URL (.m3u, .m3u8, .json, .yaml), or a single stream URL
+    input: String,
+    /// Per-entry time limit in seconds (manifest, variant and segment probe together)
+    #[arg(
+        short = 't',
+        long = "timeout",
+        default_value_t = 10.0,
+        value_name = "SECS"
+    )]
+    timeout_secs: f64,
+    /// Number of entries probed at the same time
+    #[arg(short = 'j', long = "concurrency", default_value_t = streamtop::models::AUDIT_CONCURRENCY, value_name = "N")]
+    concurrency: usize,
+    /// Output format
+    #[arg(short = 'f', long = "format", value_enum, default_value_t = CheckFormat::Table)]
+    format: CheckFormat,
+    /// Write the report to FILE instead of stdout (json and csv formats)
+    #[arg(short = 'o', long = "output", value_name = "FILE")]
+    output: Option<std::path::PathBuf>,
+    /// Write an M3U playlist with the entries that are not dead
+    #[arg(long = "alive-out", value_name = "FILE")]
+    alive_out: Option<std::path::PathBuf>,
+    /// Exit with code 1 when any entry is dead
+    #[arg(long = "fail-on-dead")]
+    fail_on_dead: bool,
+    /// Treat STALL as dead for --fail-on-dead and --alive-out
+    #[arg(long = "strict")]
+    strict: bool,
+    /// Extra HTTP header (repeatable). Format: "Key: Value"
+    #[arg(short = 'H', long = "header", value_name = "KEY: VALUE")]
+    headers: Vec<String>,
+    /// Override the User-Agent header
+    #[arg(short = 'A', long = "user-agent", value_name = "UA")]
+    user_agent: Option<String>,
+}
+
+async fn run_check_cmd(args: CheckCli) -> Result<ExitCode> {
+    if !(args.timeout_secs.is_finite() && args.timeout_secs > 0.0) {
+        return Err(eyre!("--timeout must be a positive number of seconds"));
+    }
+    if args.concurrency == 0 {
+        return Err(eyre!("--concurrency must be at least 1"));
+    }
+    let client = build_http_client(&args.headers, args.user_agent.as_deref())?;
+    let (origin, body, content_type) = load_input(&client, &args.input).await?;
+    let parsed = detect_and_parse(&origin, &body, content_type.as_deref())
+        .wrap_err("failed to detect input type (HLS / DASH / IPTV / catalog)")?;
+    let (origin, channels) = match parsed {
+        ParsedInput::IptvChannels { origin, channels } => (origin, channels),
+        ParsedInput::SingleStream { origin, url } => {
+            let name = url
+                .rsplit('/')
+                .next()
+                .filter(|s| !s.is_empty())
+                .unwrap_or("stream")
+                .to_string();
+            let entry = ChannelEntry {
+                name,
+                url,
+                group: None,
+                logo: None,
+                tvg_id: None,
+            };
+            (origin, vec![entry])
+        }
+    };
+    if channels.is_empty() {
+        return Err(eyre!("playlist has no entries"));
+    }
+
+    eprintln!(
+        "streamtop check: {} entries, {} workers, {}s timeout",
+        channels.len(),
+        args.concurrency,
+        args.timeout_secs
+    );
+    let opts = ProbeOptions {
+        concurrency: args.concurrency,
+        timeout: Some(Duration::from_secs_f64(args.timeout_secs)),
+    };
+    let report = probe_channels(
+        &origin,
+        channels.clone(),
+        &args.headers,
+        args.user_agent.as_deref(),
+        opts,
+    )
+    .await?;
+
+    match render_report(&report, args.format)? {
+        None => {
+            print_matrix(&report)?;
+            if let Some(path) = &args.output {
+                std::fs::write(path, render_json(&report)?)
+                    .wrap_err_with(|| format!("write {}", path.display()))?;
+                eprintln!("Wrote {}", path.display());
+            }
+        }
+        Some(text) => {
+            if let Some(path) = &args.output {
+                std::fs::write(path, text).wrap_err_with(|| format!("write {}", path.display()))?;
+                eprintln!("Wrote {}", path.display());
+            } else {
+                let mut out = io::stdout().lock();
+                out.write_all(text.as_bytes())?;
+                if !text.ends_with('\n') {
+                    writeln!(out)?;
+                }
+            }
+        }
+    }
+    if args.format != CheckFormat::Table {
+        eprintln!(
+            "{} entries: {} live, {} dead, {} stall",
+            report.total, report.live, report.errors, report.stalls
+        );
+    }
+    if let Some(path) = &args.alive_out {
+        std::fs::write(path, alive_m3u(&channels, &report, args.strict))
+            .wrap_err_with(|| format!("write {}", path.display()))?;
+        eprintln!("Wrote {}", path.display());
+    }
+
+    Ok(if args.fail_on_dead && should_fail(&report, args.strict) {
+        ExitCode::from(1)
+    } else {
+        ExitCode::SUCCESS
+    })
+}
+
+/// `streamtop scte35`: decode one SCTE-35 `splice_info_section`.
+#[derive(Debug, Parser)]
+#[command(
+    name = "streamtop scte35",
+    version,
+    about = "Decode a SCTE-35 splice_info_section from Base64, hex, or an HLS tag line",
+    after_help = "Examples:\n  streamtop scte35 /DAvAAAAAAAA///wFAVIAACPf+/+c2nALv4AUsz1AAAAAAAKAAhDVUVJAAABNWLbowo=\n  streamtop scte35 0xFC302F...\n  echo '#EXT-OATCLS-SCTE35:/DAv...' | streamtop scte35 -"
+)]
+struct Scte35Cli {
+    /// Base64 or hex payload, an HLS tag line, or - to read from stdin
+    payload: String,
+    /// Print JSON instead of text
+    #[arg(long = "json")]
+    json: bool,
+}
+
+fn run_scte35_cmd(args: &Scte35Cli) -> Result<ExitCode> {
+    let raw = if args.payload == "-" {
+        let mut buf = String::new();
+        io::Read::read_to_string(&mut io::stdin().lock(), &mut buf).wrap_err("read stdin")?;
+        buf
+    } else {
+        args.payload.clone()
+    };
+    let bytes = decode_cli_input(&raw).map_err(|e| eyre!("cannot decode payload: {e}"))?;
+    let Some(section) = parse_scte35_bytes(&bytes) else {
+        eprintln!(
+            "not a valid splice_info_section ({} bytes, first byte 0x{:02x})",
+            bytes.len(),
+            bytes.first().copied().unwrap_or(0)
+        );
+        return Ok(ExitCode::from(1));
+    };
+    if args.json {
+        println!("{}", serde_json::to_string_pretty(&section)?);
+    } else {
+        print!("{}", render_text(&section));
+    }
+    Ok(ExitCode::SUCCESS)
 }
 
 async fn load_input(client: &Client, input: &str) -> Result<(String, Vec<u8>, Option<String>)> {

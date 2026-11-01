@@ -5,6 +5,7 @@ pub mod audit;
 pub mod budget;
 pub mod cdn_telemetry;
 pub mod channel_stats;
+pub mod check;
 pub mod config;
 pub mod container_probe;
 pub mod dai_validator;

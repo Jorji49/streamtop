@@ -155,44 +155,83 @@ impl SpliceInfoSection {
 }
 
 pub fn upid_type_name(id: u8) -> &'static str {
+    // SCTE-35 Table 21 (segmentation_upid_type).
     match id {
         0x00 => "Not Used",
         0x01 => "User Defined",
         0x02 => "ISCI",
         0x03 => "Ad-ID",
         0x04 => "UMID",
-        0x05 => "ISAN",
-        0x06 => "Tribune Media",
-        0x07 => "Advisory",
-        0x08 => "EIDR",
-        0x09 => "ATSC Content Identifier",
-        0x0a => "MPU",
-        0x0b => "MID",
-        0x0c => "ADS Information",
-        0x0d => "URI",
-        0x0e => "UUID",
+        0x05 => "ISAN (deprecated)",
+        0x06 => "ISAN",
+        0x07 => "TID",
+        0x08 => "TI",
+        0x09 => "ADI",
+        0x0a => "EIDR",
+        0x0b => "ATSC Content Identifier",
+        0x0c => "MPU",
+        0x0d => "MID",
+        0x0e => "ADS Information",
+        0x0f => "URI",
+        0x10 => "UUID",
+        0x11 => "SCR",
         _ => "Reserved",
     }
 }
 
 pub fn segmentation_type_name(id: u8) -> String {
-    match id {
-        0x00 => "Not Indicated".into(),
-        0x10 => "Program Start".into(),
-        0x11 => "Program End".into(),
-        0x20 => "Chapter Start".into(),
-        0x21 => "Chapter End".into(),
-        0x30 => "Provider Ad Start".into(),
-        0x31 => "Provider Ad End".into(),
-        0x32 => "Distributor Ad Start".into(),
-        0x33 => "Distributor Ad End".into(),
-        0x34 => "Placement Opportunity Start".into(),
-        0x35 => "Placement Opportunity End".into(),
-        0x36 => "Break Start".into(),
-        0x37 => "Break End".into(),
-        0x40 => "Program Start In Progress".into(),
-        other => format!("Type 0x{other:02X}"),
-    }
+    // SCTE-35 Table 23 (segmentation_type_id). 0x34/0x35 keep the short provider name.
+    let name = match id {
+        0x00 => "Not Indicated",
+        0x01 => "Content Identification",
+        0x02 => "Call Ad Server",
+        0x10 => "Program Start",
+        0x11 => "Program End",
+        0x12 => "Program Early Termination",
+        0x13 => "Program Breakaway",
+        0x14 => "Program Resumption",
+        0x15 => "Program Runover Planned",
+        0x16 => "Program Runover Unplanned",
+        0x17 => "Program Overlap Start",
+        0x18 => "Program Blackout Override",
+        0x19 => "Program Start In Progress",
+        0x20 => "Chapter Start",
+        0x21 => "Chapter End",
+        0x22 => "Break Start",
+        0x23 => "Break End",
+        0x24 => "Opening Credit Start",
+        0x25 => "Opening Credit End",
+        0x26 => "Closing Credit Start",
+        0x27 => "Closing Credit End",
+        0x30 => "Provider Ad Start",
+        0x31 => "Provider Ad End",
+        0x32 => "Distributor Ad Start",
+        0x33 => "Distributor Ad End",
+        0x34 => "Placement Opportunity Start",
+        0x35 => "Placement Opportunity End",
+        0x36 => "Distributor Placement Opportunity Start",
+        0x37 => "Distributor Placement Opportunity End",
+        0x38 => "Provider Overlay Placement Opportunity Start",
+        0x39 => "Provider Overlay Placement Opportunity End",
+        0x3a => "Distributor Overlay Placement Opportunity Start",
+        0x3b => "Distributor Overlay Placement Opportunity End",
+        0x3c => "Provider Promo Start",
+        0x3d => "Provider Promo End",
+        0x3e => "Distributor Promo Start",
+        0x3f => "Distributor Promo End",
+        0x40 => "Unscheduled Event Start",
+        0x41 => "Unscheduled Event End",
+        0x42 => "Alternate Content Opportunity Start",
+        0x43 => "Alternate Content Opportunity End",
+        0x44 => "Provider Ad Block Start",
+        0x45 => "Provider Ad Block End",
+        0x46 => "Distributor Ad Block Start",
+        0x47 => "Distributor Ad Block End",
+        0x50 => "Network Start",
+        0x51 => "Network End",
+        other => return format!("Type 0x{other:02X}"),
+    };
+    name.into()
 }
 
 /// Decode Base64 or Hex SCTE-35 payload into raw bytes.
@@ -223,6 +262,144 @@ pub fn decode_scte35_payload(raw: &str) -> Option<Vec<u8>> {
 }
 
 /// Extract SCTE-35 payload string from a playlist tag line.
+/// Decode user input for `streamtop scte35`: hex (with or without `0x`), Base64, or an
+/// HLS tag line such as `#EXT-OATCLS-SCTE35:...`.
+///
+/// Unlike [`decode_scte35_payload`], an all-hex string is always read as hex, because
+/// many hex strings are also valid Base64.
+pub fn decode_cli_input(raw: &str) -> Result<Vec<u8>, String> {
+    let mut s = raw.trim().trim_matches('"').trim().to_string();
+    if s.starts_with('#') {
+        if let Some(p) = extract_payload_from_tag(&s) {
+            s = p;
+        }
+    }
+    for key in ["SCTE35-OUT=", "SCTE35-IN=", "SCTE35-CMD=", "CUE="] {
+        if let Some((_, v)) = s.split_once(key) {
+            s = v
+                .split(',')
+                .next()
+                .unwrap_or_default()
+                .trim_matches('"')
+                .to_string();
+            break;
+        }
+    }
+    if s.starts_with('#') {
+        return Err("no SCTE-35 payload found in tag line".into());
+    }
+    let compact: String = s.chars().filter(|c| !c.is_whitespace()).collect();
+    let body = compact
+        .strip_prefix("0x")
+        .or_else(|| compact.strip_prefix("0X"))
+        .unwrap_or(&compact);
+    if body.is_empty() {
+        return Err("empty payload".into());
+    }
+    if body.chars().all(|c| c.is_ascii_hexdigit()) {
+        if !body.len().is_multiple_of(2) {
+            return Err("hex payload has an odd number of digits".into());
+        }
+        return (0..body.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&body[i..i + 2], 16).map_err(|e| e.to_string()))
+            .collect();
+    }
+    B64.decode(body)
+        .or_else(|_| base64::engine::general_purpose::URL_SAFE.decode(body))
+        .map_err(|e| format!("not valid hex or Base64: {e}"))
+}
+
+/// Multi-line, human-readable view of a decoded section for `streamtop scte35`.
+pub fn render_text(sec: &SpliceInfoSection) -> String {
+    use std::fmt::Write as _;
+    fn yn(b: bool) -> &'static str {
+        if b {
+            "yes"
+        } else {
+            "no"
+        }
+    }
+    let mut o = String::new();
+    let _ = writeln!(o, "table_id            0x{:02x}", sec.table_id);
+    let _ = writeln!(o, "protocol_version    {}", sec.protocol_version);
+    let cmd_id = match sec.splice_command_type {
+        SpliceCommandType::SpliceNull => 0x00,
+        SpliceCommandType::SpliceSchedule => 0x04,
+        SpliceCommandType::SpliceInsert => 0x05,
+        SpliceCommandType::TimeSignal => 0x06,
+        SpliceCommandType::BandwidthReservation => 0x07,
+        SpliceCommandType::Private(v) | SpliceCommandType::Unknown(v) => v,
+    };
+    let _ = writeln!(
+        o,
+        "splice_command      {} (0x{cmd_id:02x})",
+        sec.splice_command_type.as_str()
+    );
+    if let Some(id) = sec.splice_event_id {
+        let _ = writeln!(o, "splice_event_id     {id} (0x{id:08x})");
+    }
+    if let Some(v) = sec.out_of_network_indicator {
+        let _ = writeln!(o, "out_of_network      {}", yn(v));
+    }
+    if let (Some(ticks), Some(secs)) = (sec.pts_time, sec.pts_time_secs) {
+        let _ = writeln!(o, "pts_time            {ticks} ({secs:.6}s)");
+    }
+    if let Some(d) = sec.break_duration_secs {
+        let _ = writeln!(o, "break_duration      {d:.6}s");
+    }
+    if let Some(v) = sec.break_auto_return {
+        let _ = writeln!(o, "break_auto_return   {}", yn(v));
+    }
+    if let Some(n) = sec.splice_count {
+        let _ = writeln!(o, "splice_count        {n}");
+    }
+    for (i, d) in sec.descriptors.iter().enumerate() {
+        let _ = writeln!(o, "segmentation_descriptor[{i}]");
+        let _ = writeln!(
+            o,
+            "  event_id          {} (0x{:08x})",
+            d.segmentation_event_id, d.segmentation_event_id
+        );
+        let _ = writeln!(
+            o,
+            "  type              {} (0x{:02x})",
+            d.segmentation_type_name, d.segmentation_type_id
+        );
+        if let Some(v) = d.segmentation_duration_secs {
+            let _ = writeln!(o, "  duration          {v:.6}s");
+        }
+        if let Some(t) = d.upid_type {
+            let name = d.upid_type_name.as_deref().unwrap_or("-");
+            let _ = writeln!(o, "  upid_type         {name} (0x{t:02x})");
+        }
+        if let Some(h) = &d.upid_hex {
+            let _ = writeln!(o, "  upid              {h}");
+        }
+        if let (Some(n), Some(e)) = (d.segment_num, d.segments_expected) {
+            let _ = writeln!(o, "  segment           {n} of {e}");
+        }
+        if let (Some(n), Some(e)) = (d.sub_segment_num, d.sub_segments_expected) {
+            let _ = writeln!(o, "  sub_segment       {n} of {e}");
+        }
+        let _ = writeln!(
+            o,
+            "  delivery_not_restricted {}",
+            yn(d.delivery_not_restricted)
+        );
+        if let Some(v) = d.web_delivery_allowed {
+            let _ = writeln!(o, "  web_delivery_allowed    {}", yn(v));
+        }
+        if let Some(v) = d.no_regional_blackout {
+            let _ = writeln!(o, "  no_regional_blackout    {}", yn(v));
+        }
+    }
+    for n in &sec.parse_notes {
+        let _ = writeln!(o, "note                {n}");
+    }
+    o
+}
+
 pub fn extract_payload_from_tag(line: &str) -> Option<String> {
     let t = line.trim();
     if t.starts_with("#EXT-OATCLS-SCTE35") || t.starts_with("#EXT-X-SCTE35") {
@@ -771,5 +948,83 @@ mod tests {
             let data = vec![0xfc; len];
             let _ = parse_scte35_bytes(&data);
         }
+    }
+}
+
+#[cfg(test)]
+mod cli_tests {
+    use super::*;
+
+    // SCTE-35 2023 spec, sample 14.2 (time_signal, Provider Placement Opportunity Start).
+    const TS_B64: &str =
+        "/DA0AAAAAAAA///wBQb+cr0AUAAeAhxDVUVJSAAAjn/PAAGlmbAICAAAAAAsoKGKNAIAmsnRfg==";
+    // SCTE-35 2023 spec, sample 14.1 (splice_insert).
+    const INSERT_B64: &str = "/DAvAAAAAAAA///wFAVIAACPf+/+c2nALv4AUsz1AAAAAAAKAAhDVUVJAAABNWLbowo=";
+
+    fn hex_of(b64: &str) -> String {
+        use std::fmt::Write as _;
+        B64.decode(b64)
+            .unwrap()
+            .iter()
+            .fold(String::new(), |mut acc, b| {
+                let _ = write!(acc, "{b:02x}");
+                acc
+            })
+    }
+
+    #[test]
+    fn hex_base64_and_tag_inputs_match() {
+        let from_b64 = decode_cli_input(TS_B64).unwrap();
+        let hex = hex_of(TS_B64);
+        assert_eq!(decode_cli_input(&hex).unwrap(), from_b64);
+        assert_eq!(
+            decode_cli_input(&format!("0x{}", hex.to_uppercase())).unwrap(),
+            from_b64
+        );
+        assert_eq!(
+            decode_cli_input(&format!("#EXT-OATCLS-SCTE35:{TS_B64}")).unwrap(),
+            from_b64
+        );
+        assert_eq!(
+            decode_cli_input(&format!("SCTE35-OUT=0x{hex},X-FOO=1")).unwrap(),
+            from_b64
+        );
+        assert_eq!(
+            decode_cli_input(&format!("#EXT-X-DATERANGE:ID=\"1\",SCTE35-OUT=0x{hex}")).unwrap(),
+            from_b64
+        );
+        assert_eq!(
+            decode_cli_input(&format!("#EXT-X-SCTE35:CUE=\"{TS_B64}\",ID=\"1\"")).unwrap(),
+            from_b64
+        );
+        assert!(decode_cli_input("#EXT-X-CUE-IN").is_err());
+        assert!(decode_cli_input("abc").is_err());
+        assert!(decode_cli_input("  ").is_err());
+    }
+
+    #[test]
+    fn decodes_time_signal_sample() {
+        let sec = parse_scte35_bytes(&decode_cli_input(TS_B64).unwrap()).unwrap();
+        assert_eq!(sec.table_id, 0xfc);
+        assert_eq!(sec.splice_command_type, SpliceCommandType::TimeSignal);
+        assert_eq!(sec.pts_time, Some(0x0000_72bd_0050));
+        let d = &sec.descriptors[0];
+        assert_eq!(d.segmentation_event_id, 0x4800_008e);
+        assert_eq!(d.segmentation_type_id, 0x34);
+        assert!((d.segmentation_duration_secs.unwrap() - 307.0).abs() < 1e-6);
+        let text = render_text(&sec);
+        assert!(text.contains("Time Signal (0x06)"));
+        assert!(text.contains("(0x34)"));
+    }
+
+    #[test]
+    fn decodes_splice_insert_sample() {
+        let sec = parse_scte35_bytes(&decode_cli_input(INSERT_B64).unwrap()).unwrap();
+        assert_eq!(sec.splice_command_type, SpliceCommandType::SpliceInsert);
+        assert_eq!(sec.splice_event_id, Some(0x4800_008f));
+        assert_eq!(sec.out_of_network_indicator, Some(true));
+        assert_eq!(sec.break_auto_return, Some(true));
+        assert!((sec.break_duration_secs.unwrap() - 60.293_566_666).abs() < 1e-3);
+        assert!(render_text(&sec).contains("out_of_network      yes"));
     }
 }
