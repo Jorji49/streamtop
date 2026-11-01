@@ -1,0 +1,17 @@
+[book]
+title = "streamtop"
+authors = ["Ahmet Kayra Kama"]
+description = "Terminal monitor for live HLS, DASH, and IPTV streams"
+language = "en"
+src = "src"
+
+[output.html]
+site-url = "/streamtop/"
+git-repository-url = "https://github.com/Jorji49/streamtop"
+edit-url-template = "https://github.com/Jorji49/streamtop/edit/main/docs/{path}"
+default-theme = "light"
+preferred-dark-theme = "navy"
+no-section-label = true
+
+[output.html.search]
+enable = true

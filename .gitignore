@@ -52,3 +52,4 @@ __pycache__/
 *.pdb
 *.exe
 !**/src/**/*.exe
+/docs/book/

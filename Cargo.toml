@@ -7,7 +7,8 @@ description = "Terminal HLS, DASH, and IPTV stream monitor with wire probes, TR 
 license = "MIT"
 readme = "README.md"
 repository = "https://github.com/Jorji49/streamtop"
-homepage = "https://github.com/Jorji49/streamtop"
+homepage = "https://jorji49.github.io/streamtop/"
+documentation = "https://jorji49.github.io/streamtop/"
 keywords = ["hls", "mpeg-dash", "iptv", "m3u8", "monitoring"]
 categories = ["command-line-utilities", "multimedia::video"]
 exclude = [
@@ -18,6 +19,7 @@ exclude = [
     "Formula/**",
     "bucket/**",
     "dist/**",
+    "docs/**",
     "fuzz/**",
     "tests/**",
     "_typos.toml",
