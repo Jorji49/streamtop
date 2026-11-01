@@ -4,7 +4,7 @@
 
 # streamtop
 
-**Terminal HLS, DASH, and IPTV stream monitor. Real-time health checks, wire probes, and production metrics from the command line.**
+**Terminal HLS, DASH, and IPTV stream monitor with wire probes, health checks, SCTE-35, TR 101 290, and Prometheus metrics.**
 
 <a title="This tool is Tool Of The Week on Terminal Trove, The HOME of all things in the terminal" href="https://terminaltrove.com/streamtop/"><img src="https://cdn.terminaltrove.com/media/badges/tool_of_the_week/png/terminal_trove_tool_of_the_week_gold_on_black_bg.png" alt="Terminal Trove Tool Of The Week" height="50" /></a>
 
