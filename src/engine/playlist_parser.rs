@@ -470,3 +470,36 @@ https://edge.example/trt.m3u8
         }
     }
 }
+
+/// Readable error for a body that m3u8-rs rejected. The parser error itself
+/// prints the remaining input as a byte array, so it is not shown.
+pub fn hls_parse_error(context: &str, body: &[u8]) -> color_eyre::eyre::Report {
+    let text = String::from_utf8_lossy(body);
+    let trimmed = text.trim_start_matches('\u{feff}').trim_start();
+    let head: String = trimmed
+        .chars()
+        .take(60)
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect();
+    if trimmed.starts_with("#EXTM3U") {
+        color_eyre::eyre::eyre!(
+            "{context}: HLS playlist could not be parsed (starts with \"{head}\")"
+        )
+    } else {
+        color_eyre::eyre::eyre!(
+            "{context}: response is not an HLS playlist, it does not start with #EXTM3U (starts with \"{head}\")"
+        )
+    }
+}
+
+#[cfg(test)]
+mod parse_error_tests {
+    #[test]
+    fn html_body_is_named() {
+        let e = super::hls_parse_error("manifest", b"<!doctype html><html>");
+        let s = e.to_string();
+        assert!(s.contains("not an HLS playlist"), "{s}");
+        assert!(s.contains("<!doctype html>"), "{s}");
+        assert!(!s.contains("[60, 33"), "{s}");
+    }
+}

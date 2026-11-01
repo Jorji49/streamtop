@@ -211,8 +211,8 @@ impl ManifestPoller {
                  Use Channel Picker or --audit on this URL."
             ));
         }
-        let playlist =
-            m3u8_rs::parse_playlist_res(&body).map_err(|e| eyre!("manifest parse error: {e}"))?;
+        let playlist = m3u8_rs::parse_playlist_res(&body)
+            .map_err(|_| crate::engine::playlist_parser::hls_parse_error("manifest", &body))?;
 
         match playlist {
             Playlist::MasterPlaylist(master) => {

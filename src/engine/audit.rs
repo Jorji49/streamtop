@@ -198,7 +198,8 @@ async fn audit_hls(
     body: &[u8],
     manifest_status: u16,
 ) -> Result<AuditRow> {
-    let playlist = m3u8_rs::parse_playlist_res(body).map_err(|e| eyre!("HLS parse: {e}"))?;
+    let playlist = m3u8_rs::parse_playlist_res(body)
+        .map_err(|_| crate::engine::playlist_parser::hls_parse_error("HLS parse", body))?;
     let base = Url::parse(&ch.url).wrap_err("channel URL")?;
 
     let (profiles, media_url, has_pdt, empty) = match playlist {

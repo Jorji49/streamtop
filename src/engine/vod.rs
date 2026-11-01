@@ -131,7 +131,8 @@ async fn inspect_hls_vod(
     body: &[u8],
     report: &mut VodReport,
 ) -> Result<()> {
-    let playlist = m3u8_rs::parse_playlist_res(body).map_err(|e| eyre!("HLS parse error: {e}"))?;
+    let playlist = m3u8_rs::parse_playlist_res(body)
+        .map_err(|_| crate::engine::playlist_parser::hls_parse_error("HLS parse", body))?;
 
     match playlist {
         Playlist::MasterPlaylist(master) => {
