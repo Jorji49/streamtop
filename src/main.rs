@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-use std::io::{self, Write};
+use std::io::{self, IsTerminal, Write};
 use std::panic;
 use std::path::Path;
 use std::process::ExitCode;
@@ -221,7 +221,6 @@ struct Cli {
 /// Plain `Error: ...` reports for CLI users: no source location or env hints,
 /// and no ANSI when stderr is not a terminal or `NO_COLOR` is set.
 fn install_error_report_hook() -> Result<()> {
-    use std::io::IsTerminal;
     let color = std::io::stderr().is_terminal()
         && std::env::var_os("NO_COLOR").is_none_or(|v| v.is_empty());
     let theme = if color {
@@ -429,6 +428,7 @@ async fn main() -> Result<ExitCode> {
                 ExitCode::SUCCESS
             });
         }
+        require_terminal()?;
         MultiCdnApp::new(targets, session, cli.max_cdn_skew_ms)
             .run()
             .await?;
@@ -440,6 +440,7 @@ async fn main() -> Result<ExitCode> {
         if urls.len() != 2 {
             return Err(eyre!("--compare requires exactly two URLs"));
         }
+        require_terminal()?;
         CompareApp::run(urls[0].clone(), urls[1].clone(), session).await?;
         restore_terminal_global();
         return Ok(ExitCode::SUCCESS);
@@ -512,6 +513,7 @@ async fn main() -> Result<ExitCode> {
                     "--summary requires a single HLS/DASH stream URL; use --audit for channel lists"
                 ))
             } else {
+                require_terminal()?;
                 App::run_picker(origin, channels, session).await?;
                 Ok(ExitCode::SUCCESS)
             }
@@ -558,6 +560,7 @@ async fn main() -> Result<ExitCode> {
                 )
                 .await
             } else {
+                require_terminal()?;
                 App::run_diagnostics(origin, url, session).await?;
                 Ok(ExitCode::SUCCESS)
             }
@@ -911,6 +914,7 @@ async fn execute_export_plan(
                         .unwrap_or("")
                         .to_string(),
                 );
+                require_terminal()?;
                 App::run_diagnostics(input_label.to_string(), url.to_string(), s).await?;
             }
             ExportFormat::Sarif => {
@@ -933,6 +937,18 @@ async fn execute_export_plan(
         }
     }
     Ok(exit)
+}
+
+/// The dashboard needs an interactive terminal on stdin and stdout.
+fn require_terminal() -> Result<()> {
+    if std::io::stdout().is_terminal() && std::io::stdin().is_terminal() {
+        return Ok(());
+    }
+    Err(eyre!(
+        "the dashboard needs an interactive terminal. For scripts and CI use --summary, \
+         --audit, `streamtop check`, or a headless --export format (report-json, report-html, \
+         har, sarif, curl, grafana)"
+    ))
 }
 
 fn parse_budget_duration_ms(s: &str) -> Result<u64> {

@@ -56,11 +56,24 @@ pub struct SarifProperties {
 }
 
 pub fn build_sarif(findings: &[DiagnosticFinding], violations: &[SpecViolation]) -> SarifLog {
+    // Spec violations are usually derived from the findings. Report each
+    // problem once and take the standard from the matching violation.
+    let same =
+        |f: &DiagnosticFinding, v: &SpecViolation| f.rule == v.rule && f.message == v.message;
     let mut results = Vec::new();
     for f in findings {
-        results.push(finding_to_result(f));
+        let mut r = finding_to_result(f);
+        if let Some(v) = violations.iter().find(|v| same(f, v)) {
+            if let Some(p) = r.properties.as_mut() {
+                p.standard.clone_from(&v.standard);
+            }
+        }
+        results.push(r);
     }
-    for v in violations {
+    for v in violations
+        .iter()
+        .filter(|v| !findings.iter().any(|f| same(f, v)))
+    {
         results.push(SarifResult {
             rule_id: v.rule.clone(),
             level: sarif_level(&v.severity),
@@ -141,5 +154,21 @@ mod tests {
         assert!(json.contains("\"version\": \"2.1.0\""));
         assert!(json.contains("ERR_CDN_CACHE_MISS"));
         assert!(json.contains("\"ruleId\": \"ERR_CDN_CACHE_MISS\""));
+    }
+
+    #[test]
+    fn derived_violations_are_not_reported_twice() {
+        let f = DiagnosticFinding {
+            category: DiagCategory::Cdn,
+            severity: DiagSeverity::Warn,
+            rule: "CACHE_MISS".into(),
+            message: "seq=1 MISS".into(),
+            reason: Some("ERR_CDN_CACHE_MISS".into()),
+        };
+        let v = SpecViolation::from_finding(&f);
+        let log = build_sarif(std::slice::from_ref(&f), &[v]);
+        assert_eq!(log.runs[0].results.len(), 1);
+        let props = log.runs[0].results[0].properties.as_ref().expect("props");
+        assert_eq!(props.standard, "CDN");
     }
 }
