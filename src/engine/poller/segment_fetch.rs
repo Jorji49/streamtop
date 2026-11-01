@@ -87,7 +87,7 @@ impl ManifestPoller {
                 if let Some(report) =
                     probe_container_tr101290(&mut eng, probe_bytes, fetch.container, wall_ms)
                 {
-                    for check in &report.checks {
+                    for check in &eng.take_new_checks() {
                         if let Some(code) = DiagnosticReasonCode::from_tr101290_rule(&check.code) {
                             self.send_event(StreamEvent::Finding(
                                 DiagnosticFinding::with_reason_code(

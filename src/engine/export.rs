@@ -24,6 +24,8 @@ use crate::ui::app::SessionOpts;
 #[derive(Debug, Clone, Default)]
 pub struct ExportCapture {
     pub manifest_url: String,
+    /// A playlist was parsed, so the manifest request returned 2xx.
+    pub manifest_ok: bool,
     pub segment_url: Option<String>,
     pub probe_headers: bool,
     pub headers: Vec<String>,
@@ -66,7 +68,7 @@ pub fn build_har(cap: &ExportCapture) -> serde_json::Value {
     entries.push(har_entry(
         &cap.manifest_url,
         None,
-        None,
+        cap.manifest_ok.then_some(200),
         None,
         &cap.headers,
         cap.user_agent.as_deref(),
@@ -224,6 +226,7 @@ pub async fn capture_for_export(
                 cap.last_size_bytes = Some(s.size_bytes);
             }
             Ok(Some(StreamEvent::PlaylistMeta(m))) => {
+                cap.manifest_ok = true;
                 if !m.url.is_empty() {
                     cap.manifest_url = m.url;
                 }

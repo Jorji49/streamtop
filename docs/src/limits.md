@@ -3,7 +3,7 @@
 streamtop is a wire and container probe. It is not a decoder or a full transport stream analyzer.
 
 * **No media decode.** Probes read headers and the first bytes of segments (the probe window). A stream that sends black frames or silent audio can still look healthy.
-* **TR 101 290** covers P1 and P2 checks on the MPEG-TS probe window only, not an analysis of the whole multiplex. Use TSDuck for deep transport stream work.
+* **TR 101 290** covers P1 and P2 checks on the MPEG-TS probe window only (the first 64 KB of each probed segment), not an analysis of the whole multiplex. Windows are not contiguous, so continuity counter, PCR, and PTS checks restart at each segment and errors at segment boundaries are not seen. PAT and PMT repetition is measured on the PCR clock inside the window. CRC-32 and SI tables (SDT, NIT, EIT) are not checked. Use TSDuck for deep transport stream work.
 * **Glass-to-glass** is an estimate from HLS PDT, DASH segment availability time (or MPD publish time), and PRFT when present. DASH timestamps more than one hour from the local clock are ignored. It is not player end-to-end latency.
 * **WHEP** is signaling only (SDP offer and answer). There is no WebRTC media path.
 * **No SRT, RTMP, UDP, or multicast input.** `srt://` and `rtmp://` URLs are rejected at startup.

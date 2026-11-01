@@ -189,6 +189,7 @@ impl PaneState {
                 .playlist
                 .as_ref()
                 .map_or_else(|| self.url.clone(), |p| p.url.clone()),
+            manifest_ok: self.playlist.is_some(),
             segment_url: self.last_segment.as_ref().map(|s| s.uri.clone()),
             probe_headers: session.probe_headers,
             headers: session.headers.clone(),

@@ -998,6 +998,8 @@ impl SpecViolation {
         };
         let standard = if f.rule.starts_with("DASH_") {
             "DASH"
+        } else if f.rule.starts_with("P1_") || f.rule.starts_with("P2_") {
+            "TR 101 290"
         } else {
             match f.category {
                 DiagCategory::Rfc | DiagCategory::LlHls => "HLS",
