@@ -1,7 +1,7 @@
 # yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.28.0.schema.json
 
 PackageIdentifier: Jorji49.streamtop
-PackageVersion: 1.7.0
+PackageVersion: 1.7.1
 InstallerLocale: en-US
 InstallerType: zip
 NestedInstallerType: portable
@@ -9,10 +9,10 @@ NestedInstallerFiles:
   - RelativeFilePath: streamtop.exe
     PortableCommandAlias: streamtop
 UpgradeBehavior: install
-ReleaseDate: 2026-11-01
+ReleaseDate: 2026-11-02
 Installers:
   - Architecture: x64
-    InstallerUrl: https://github.com/Jorji49/streamtop/releases/download/v1.7.0/streamtop-windows-x86_64-1.7.0.zip
+    InstallerUrl: https://github.com/Jorji49/streamtop/releases/download/v1.7.1/streamtop-windows-x86_64-1.7.1.zip
     InstallerSha256: D941A02925FF54E7E67927F0F6872F27B49ED26A4FFEA5CEF017D8F7C3F7E829
 ManifestType: installer
 ManifestVersion: 1.28.0

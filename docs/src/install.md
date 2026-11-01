@@ -58,7 +58,7 @@ Images for linux/amd64 and linux/arm64 are on GitHub Container Registry:
 docker run -it --rm ghcr.io/jorji49/streamtop:latest <URL>
 ```
 
-Release tags are also published, for example `ghcr.io/jorji49/streamtop:v1.7.0`.
+Release tags are also published, for example `ghcr.io/jorji49/streamtop:v1.7.1`.
 
 Prometheus metrics on a non-loopback bind require a token:
 
