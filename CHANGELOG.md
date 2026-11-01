@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.5.5] - 2026-11-01
+
+### Added
+
+- Prebuilt Linux binaries for `aarch64-unknown-linux-gnu`, `x86_64-unknown-linux-musl` and `aarch64-unknown-linux-musl`. `cargo binstall streamtop` picks them up on those targets
+
+### Changed
+
+- README: Arch Linux steps build the local `PKGBUILD` from its own directory
+
 ## [1.5.4] - 2026-10-29
 
 ### Fixed

@@ -26,7 +26,7 @@ cargo install streamtop
 streamtop "https://example.com/master.m3u8"
 ```
 
-Prebuilt binaries for Linux x86_64, macOS (Apple Silicon and Intel) and Windows x86_64 are on [GitHub Releases](https://github.com/Jorji49/streamtop/releases/latest). Homebrew, Scoop, Docker and Arch Linux are covered in [Install](#install).
+Prebuilt binaries for Linux (x86_64 and arm64, glibc and musl), macOS (Apple Silicon and Intel) and Windows x86_64 are on [GitHub Releases](https://github.com/Jorji49/streamtop/releases/latest). Homebrew, Scoop, Docker and Arch Linux are covered in [Install](#install).
 
 ## What is streamtop?
 
@@ -131,7 +131,7 @@ Winget manifests are in `dist/winget/`. They are not in the winget community ind
 ### Docker
 
 ```bash
-docker run -it --rm ghcr.io/jorji49/streamtop:v1.5.4 <URL>
+docker run -it --rm ghcr.io/jorji49/streamtop:v1.5.5 <URL>
 docker run -it --rm ghcr.io/jorji49/streamtop:latest <URL>
 ```
 
@@ -140,7 +140,7 @@ Metrics on a non-loopback bind require a token:
 ```bash
 docker run --rm -p 9184:9184 \
   -e STREAMTOP_METRICS_TOKEN=change-me \
-  ghcr.io/jorji49/streamtop:v1.5.4 \
+  ghcr.io/jorji49/streamtop:v1.5.5 \
   <URL> --prometheus --metrics-bind 0.0.0.0 \
   --metrics-token "$STREAMTOP_METRICS_TOKEN"
 ```
