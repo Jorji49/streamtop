@@ -71,6 +71,26 @@ jobs:
           python3 scripts/verify_release.py --assets-dir release
           sha256sum release/* > release/SHA256SUMS
 
+      - name: Wait for tag CI (crates.io publish) to finish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          # Moving the tag while the tag CI run is active makes its checkout fail
+          # and skips the crates.io publish job.
+          for _ in $(seq 1 90); do
+            ACTIVE=$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?branch=v${VERSION}&per_page=20" \
+              --jq '[.workflow_runs[] | select(.status != "completed")] | length')
+            if [ "$ACTIVE" = 0 ]; then
+              exit 0
+            fi
+            echo "tag CI still running for v${VERSION}; waiting"
+            sleep 60
+          done
+          echo "::error::tag CI for v${VERSION} did not finish within 90 minutes"
+          exit 1
+
       - name: Tag verified tree
         env:
           GH_TOKEN: ${{ github.token }}
