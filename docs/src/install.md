@@ -2,6 +2,14 @@
 
 Prebuilt binaries for Linux (x86_64 and arm64, glibc and musl), macOS (Apple Silicon and Intel), and Windows x86_64 are on [GitHub Releases](https://github.com/Jorji49/streamtop/releases/latest). Each release includes `SHA256SUMS`.
 
+```bash
+# Linux x86_64 (static musl build); use the -gnu archive for glibc
+curl -LO https://github.com/Jorji49/streamtop/releases/latest/download/streamtop-x86_64-unknown-linux-musl.tar.gz
+curl -LO https://github.com/Jorji49/streamtop/releases/latest/download/SHA256SUMS
+sha256sum -c --ignore-missing SHA256SUMS
+tar xzf streamtop-x86_64-unknown-linux-musl.tar.gz
+```
+
 ## cargo
 
 ```bash

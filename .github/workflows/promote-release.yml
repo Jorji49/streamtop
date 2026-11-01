@@ -69,7 +69,7 @@ jobs:
             -name 'streamtop-*.tar.gz' \
             \) -exec cp -t release {} +
           python3 scripts/verify_release.py --assets-dir release
-          sha256sum release/* > release/SHA256SUMS
+          (cd release && sha256sum -- streamtop-* > SHA256SUMS)
 
       - name: Wait for tag CI (crates.io publish) to finish
         env:

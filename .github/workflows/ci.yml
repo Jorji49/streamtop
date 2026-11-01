@@ -370,7 +370,7 @@ jobs:
                 -name 'streamtop-*.tar.gz' -o -name 'streamtop-*.zip' \
               \) -exec cp -t release {} +
           fi
-          sha256sum release/* > release/SHA256SUMS
+          (cd release && sha256sum -- streamtop-* > SHA256SUMS)
           python3 scripts/verify_release.py --assets-dir release
           ls -la release/
 

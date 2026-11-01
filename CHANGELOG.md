@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- `SHA256SUMS` lists bare file names, so `sha256sum -c` works in the download directory (the v1.7.0 file was replaced with the corrected one).
 - `streamtop completions` and `streamtop man` no longer panic or print an error when stdout is closed early (for example `| head`).
 
 ## [1.7.0] - 2026-11-01
