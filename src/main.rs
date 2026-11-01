@@ -706,8 +706,8 @@ async fn run_check_cmd(args: CheckCli) -> Result<ExitCode> {
     }
     if args.format != CheckFormat::Table {
         eprintln!(
-            "{} entries: {} live, {} dead, {} stall",
-            report.total, report.live, report.errors, report.stalls
+            "{} entries: {} live, {} vod, {} dead, {} stall",
+            report.total, report.live, report.vod, report.errors, report.stalls
         );
     }
     if let Some(path) = &args.alive_out {

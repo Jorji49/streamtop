@@ -33,6 +33,7 @@ Verdicts:
 | Verdict | Meaning |
 |---------|---------|
 | `LIVE` | Playlist and segment returned 2xx/3xx and the segment TTFB was under 2500 ms |
+| `VOD` | Same as `LIVE`, but the playlist is on-demand (HLS `#EXT-X-ENDLIST` or a static MPD). Counted as working |
 | `STALL` | Segment TTFB was 2500 ms or more, or the media playlist had no segments |
 | `ERROR` | HTTP 401, 403, 404, 5xx, a network error, a timeout, or a playlist that could not be parsed |
 
@@ -63,7 +64,7 @@ streamtop check ./channels.m3u --fail-on-dead      # exit 1 if any entry is dead
 | `-j, --concurrency N` | 25 | Entries probed at the same time |
 | `-f, --format` | `table` | `table`, `json`, or `csv` |
 | `-o, --output FILE` | stdout | Write the report to a file. With `table`, writes JSON |
-| `--alive-out FILE` | | Write an M3U with the entries that are not dead, keeping `tvg-id`, `tvg-logo`, and `group-title` |
+| `--alive-out FILE` | | Write an M3U with the entries that are not dead (`LIVE`, `VOD`, and `STALL` unless `--strict`), keeping `tvg-id`, `tvg-logo`, and `group-title` |
 | `--fail-on-dead` | off | Exit 1 when any entry is `ERROR` |
 | `--strict` | off | Treat `STALL` as dead for `--fail-on-dead` and `--alive-out` |
 | `-H, --header` | | Extra HTTP header, repeatable |

@@ -75,6 +75,8 @@ pub enum AuditVerdict {
     Live,
     Error,
     Stall,
+    /// Reachable on-demand playlist (HLS `#EXT-X-ENDLIST` or static MPD).
+    Vod,
 }
 
 impl AuditVerdict {
@@ -83,6 +85,7 @@ impl AuditVerdict {
             Self::Live => "LIVE",
             Self::Error => "ERROR",
             Self::Stall => "STALL",
+            Self::Vod => "VOD",
         }
     }
 }
@@ -113,6 +116,9 @@ pub struct AuditReport {
     pub source: String,
     pub total: usize,
     pub live: usize,
+    /// Reachable VOD entries (not counted in `live`).
+    #[serde(default)]
+    pub vod: usize,
     pub errors: usize,
     pub stalls: usize,
     pub channels: Vec<AuditRow>,

@@ -38,7 +38,7 @@ pub fn should_fail(report: &AuditReport, strict: bool) -> bool {
     report.errors > 0 || (strict && report.stalls > 0)
 }
 
-/// Build an M3U playlist with the entries that are not dead (LIVE, plus STALL unless `strict`).
+/// Build an M3U playlist with the entries that are not dead (LIVE and VOD, plus STALL unless `strict`).
 ///
 /// `channels` must be the list that produced `report`, in the same order.
 /// URLs are written unredacted because the output is meant to be played.
@@ -46,7 +46,7 @@ pub fn alive_m3u(channels: &[ChannelEntry], report: &AuditReport, strict: bool) 
     let mut out = String::from("#EXTM3U\n");
     for (ch, row) in channels.iter().zip(&report.channels) {
         let keep = match row.verdict {
-            AuditVerdict::Live => true,
+            AuditVerdict::Live | AuditVerdict::Vod => true,
             AuditVerdict::Stall => !strict,
             AuditVerdict::Error => false,
         };
@@ -117,6 +117,7 @@ mod tests {
             source: "list.m3u".into(),
             total: rows.len(),
             live: n(AuditVerdict::Live),
+            vod: n(AuditVerdict::Vod),
             errors: n(AuditVerdict::Error),
             stalls: n(AuditVerdict::Stall),
             channels: rows,
@@ -164,5 +165,15 @@ mod tests {
         let v: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert_eq!(v["live"], 1);
         assert!(render_report(&rep, CheckFormat::Table).unwrap().is_none());
+    }
+
+    #[test]
+    fn vod_entries_are_alive() {
+        let chans = vec![ch("a", "https://cdn/a.m3u8"), ch("b", "https://cdn/b.m3u8")];
+        let rep = report(&chans, &[AuditVerdict::Vod, AuditVerdict::Error]);
+        assert_eq!(rep.vod, 1);
+        let m3u = alive_m3u(&chans, &rep, true);
+        assert!(m3u.contains("https://cdn/a.m3u8"), "{m3u}");
+        assert!(!m3u.contains("https://cdn/b.m3u8"), "{m3u}");
     }
 }

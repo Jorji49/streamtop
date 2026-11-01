@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Changed
+
+- `streamtop check` and `--audit` report a reachable on-demand entry as `VOD` instead of `LIVE`. The JSON report has a new `vod` count; VOD entries count as working for `--fail-on-dead` and `--alive-out`.
+- The `check` table header prints the capture time in whole seconds (UTC).
+
 ### Fixed
 
 - `cargo install streamtop` from crates.io failed to compile: the reqwest `http3` feature needs `--cfg reqwest_unstable`, which was only set in the repository's `.cargo/config.toml` and is not read for registry installs. The feature is removed. reqwest 0.12 only uses HTTP/3 with prior knowledge, which streamtop never enabled, so connections were HTTP/1.1 or HTTP/2 before and after this change.

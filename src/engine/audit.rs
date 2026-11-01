@@ -124,6 +124,7 @@ pub async fn probe_channels(
 
     let count = |v: AuditVerdict| rows.iter().filter(|r| r.verdict == v).count();
     let live = count(AuditVerdict::Live);
+    let vod = count(AuditVerdict::Vod);
     let errors = count(AuditVerdict::Error);
     let stalls = count(AuditVerdict::Stall);
 
@@ -132,6 +133,7 @@ pub async fn probe_channels(
         source: source_label.to_string(),
         total,
         live,
+        vod,
         errors,
         stalls,
         channels: rows,
@@ -202,7 +204,7 @@ async fn audit_hls(
         .map_err(|_| crate::engine::playlist_parser::hls_parse_error("HLS parse", body))?;
     let base = Url::parse(&ch.url).wrap_err("channel URL")?;
 
-    let (profiles, media_url, has_pdt, empty) = match playlist {
+    let (profiles, media_url, has_pdt, empty, vod) = match playlist {
         Playlist::MasterPlaylist(master) => {
             let variants = collect_variants(&master.variants, &base);
             let bws: Vec<u64> = variants.iter().map(|v| v.bandwidth).collect();
@@ -216,13 +218,13 @@ async fn audit_hls(
             let pdt = media.segments.iter().any(|s| s.program_date_time.is_some());
             let empty = media.segments.is_empty();
             let media_url = last_segment_url(&base, &best.uri, &media)?;
-            (bws, media_url, pdt, empty)
+            (bws, media_url, pdt, empty, media.end_list)
         }
         Playlist::MediaPlaylist(media) => {
             let pdt = media.segments.iter().any(|s| s.program_date_time.is_some());
             let empty = media.segments.is_empty();
             let media_url = last_segment_url(&base, &ch.url, &media)?;
-            (Vec::new(), media_url, pdt, empty)
+            (Vec::new(), media_url, pdt, empty, media.end_list)
         }
     };
 
@@ -247,7 +249,7 @@ async fn audit_hls(
         name: ch.name.clone(),
         group: ch.group.clone(),
         url: ch.url.clone(),
-        verdict: classify_probe(probe_status, ttfb),
+        verdict: mark_vod(classify_probe(probe_status, ttfb), vod),
         http_status: Some(normalize_status(probe_status.max(manifest_status))),
         protocol: Some("HLS".into()),
         cdn,
@@ -277,7 +279,7 @@ async fn audit_dash(
         name: ch.name.clone(),
         group: ch.group.clone(),
         url: ch.url.clone(),
-        verdict: classify_probe(probe_status, ttfb),
+        verdict: mark_vod(classify_probe(probe_status, ttfb), !summary.type_live),
         http_status: Some(normalize_status(probe_status.max(manifest_status))),
         protocol: Some("DASH".into()),
         cdn,
@@ -308,6 +310,14 @@ fn normalize_status(status: u16) -> u16 {
         200
     } else {
         status
+    }
+}
+
+/// A reachable on-demand entry is reported as VOD instead of LIVE.
+const fn mark_vod(verdict: AuditVerdict, vod: bool) -> AuditVerdict {
+    match verdict {
+        AuditVerdict::Live if vod => AuditVerdict::Vod,
+        v => v,
     }
 }
 
@@ -391,7 +401,9 @@ pub fn print_matrix(report: &AuditReport) {
         &format!(
             "Audit  |  {}  |  {}",
             crate::engine::redact::redact_url(&report.source),
-            report.captured_at.to_rfc3339()
+            report
+                .captured_at
+                .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
         ),
     );
     println!(
@@ -415,6 +427,7 @@ pub fn print_matrix(report: &AuditReport) {
             AuditVerdict::Live => Color::Green,
             AuditVerdict::Stall => Color::Yellow,
             AuditVerdict::Error => Color::Red,
+            AuditVerdict::Vod => Color::Cyan,
         };
         print!(
             "{:<4} {:<28} {:<12} {:<6} {:<6} {:>7} {:<22} ",
@@ -428,7 +441,7 @@ pub fn print_matrix(report: &AuditReport) {
         );
         color_line(color, row.verdict.as_str());
         if let Some(err) = &row.error {
-            if row.verdict != AuditVerdict::Live {
+            if !matches!(row.verdict, AuditVerdict::Live | AuditVerdict::Vod) {
                 println!("     {}", crate::engine::redact::redact_text(err));
             }
         }
@@ -437,6 +450,8 @@ pub fn print_matrix(report: &AuditReport) {
     println!();
     print!("Total {} channels: ", report.total);
     color_span(Color::Green, &format!("{} Live", report.live));
+    print!(", ");
+    color_span(Color::Cyan, &format!("{} VOD", report.vod));
     print!(", ");
     color_span(Color::Red, &format!("{} Error", report.errors));
     print!(", ");
@@ -649,6 +664,7 @@ seg.ts
             source: "https://ex/list.m3u?token=sekrit".into(),
             total: 1,
             live: 0,
+            vod: 0,
             errors: 1,
             stalls: 0,
             channels: vec![AuditRow {
