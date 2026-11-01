@@ -75,7 +75,7 @@ async fn run_audit_to(
     )
     .await?;
 
-    print_matrix(&report)?;
+    print_matrix(&report);
     write_json(&report, &output_dir.join(AUDIT_REPORT_JSON))?;
     write_csv(&report, &output_dir.join(AUDIT_REPORT_CSV))?;
     println!("Wrote {AUDIT_REPORT_JSON} and {AUDIT_REPORT_CSV}");
@@ -384,7 +384,7 @@ async fn range_probe(client: &Client, url: &str) -> Result<(u16, u64, String)> {
 }
 
 /// Print the colored channel table and totals to stdout.
-pub fn print_matrix(report: &AuditReport) -> Result<()> {
+pub fn print_matrix(report: &AuditReport) {
     println!();
     color_line(
         Color::Cyan,
@@ -393,7 +393,7 @@ pub fn print_matrix(report: &AuditReport) -> Result<()> {
             crate::engine::redact::redact_url(&report.source),
             report.captured_at.to_rfc3339()
         ),
-    )?;
+    );
     println!(
         "{:<4} {:<28} {:<12} {:<6} {:<6} {:>7} {:<22} Verdict",
         "#", "Channel", "Group", "HTTP", "PDT", "TTFB", "CDN"
@@ -426,7 +426,7 @@ pub fn print_matrix(report: &AuditReport) -> Result<()> {
             ttfb,
             cdn
         );
-        color_line(color, row.verdict.as_str())?;
+        color_line(color, row.verdict.as_str());
         if let Some(err) = &row.error {
             if row.verdict != AuditVerdict::Live {
                 println!("     {}", crate::engine::redact::redact_text(err));
@@ -436,24 +436,21 @@ pub fn print_matrix(report: &AuditReport) -> Result<()> {
 
     println!();
     print!("Total {} channels: ", report.total);
-    color_span(Color::Green, &format!("{} Live", report.live))?;
+    color_span(Color::Green, &format!("{} Live", report.live));
     print!(", ");
-    color_span(Color::Red, &format!("{} Error", report.errors))?;
+    color_span(Color::Red, &format!("{} Error", report.errors));
     print!(", ");
-    color_span(Color::Yellow, &format!("{} Stall", report.stalls))?;
+    color_span(Color::Yellow, &format!("{} Stall", report.stalls));
     println!();
-    Ok(())
 }
 
-fn color_line(color: Color, text: &str) -> Result<()> {
+fn color_line(color: Color, text: &str) {
     crate::engine::term_color::print_colored(text, color);
     println!();
-    Ok(())
 }
 
-fn color_span(color: Color, text: &str) -> Result<()> {
+fn color_span(color: Color, text: &str) {
     crate::engine::term_color::print_colored(text, color);
-    Ok(())
 }
 
 fn truncate(s: &str, max: usize) -> String {

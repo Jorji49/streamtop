@@ -249,7 +249,9 @@ async fn main() -> Result<ExitCode> {
         Some("check") => return run_check_cmd(CheckCli::parse_from(&raw_args[1..])).await,
         Some("scte35") => return run_scte35_cmd(&Scte35Cli::parse_from(&raw_args[1..])),
         Some("completions") => {
-            return run_completions_cmd(&CompletionsCli::parse_from(&raw_args[1..]));
+            return Ok(run_completions_cmd(&CompletionsCli::parse_from(
+                &raw_args[1..],
+            )));
         }
         Some("man") => {
             return run_man_cmd(&ManCli::parse_from(&raw_args[1..]));
@@ -404,6 +406,18 @@ async fn main() -> Result<ExitCode> {
             metrics_token.as_deref(),
         )
         .wrap_err("metrics bind security check failed")?;
+        if cli.summary
+            || cli.audit
+            || export_plan.wants_any()
+            || cli.multi_cdn.is_some()
+            || cli.compare.is_some()
+            || cli.vod.is_some()
+        {
+            return Err(eyre!(
+                "--prometheus runs a long-lived exporter until Ctrl+C; it cannot be combined with \
+                 --summary, --audit, --export, --multi-cdn, --compare, or --vod. Run them as separate commands"
+            ));
+        }
     }
 
     if let Some(raw) = &cli.multi_cdn {
@@ -672,7 +686,7 @@ async fn run_check_cmd(args: CheckCli) -> Result<ExitCode> {
 
     match render_report(&report, args.format)? {
         None => {
-            print_matrix(&report)?;
+            print_matrix(&report);
             if let Some(path) = &args.output {
                 std::fs::write(path, render_json(&report)?)
                     .wrap_err_with(|| format!("write {}", path.display()))?;
@@ -771,10 +785,10 @@ fn full_command() -> clap::Command {
         .subcommand(ManCli::command().name("man"))
 }
 
-fn run_completions_cmd(args: &CompletionsCli) -> Result<ExitCode> {
+fn run_completions_cmd(args: &CompletionsCli) -> ExitCode {
     let mut cmd = full_command();
     clap_complete::generate(args.shell, &mut cmd, "streamtop", &mut io::stdout());
-    Ok(ExitCode::SUCCESS)
+    ExitCode::SUCCESS
 }
 
 fn run_man_cmd(args: &ManCli) -> Result<ExitCode> {

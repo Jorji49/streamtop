@@ -267,10 +267,12 @@ impl ManifestPoller {
         // Prefer the newest media segment: it changes every segment duration
         // on a healthy origin. Without a SegmentTemplate, fall back to
         // MPD@publishTime changes and the first Representation URL.
-        let should_probe = match &summary.live_edge {
-            Some(edge) => *last_edge_key != Some(edge.key),
-            None => publish_changed || *probe_seq == 0,
-        };
+        let should_probe = summary
+            .live_edge
+            .as_ref()
+            .map_or(publish_changed || *probe_seq == 0, |edge| {
+                *last_edge_key != Some(edge.key)
+            });
         if let Some(edge) = &summary.live_edge {
             *last_edge_key = Some(edge.key);
         }

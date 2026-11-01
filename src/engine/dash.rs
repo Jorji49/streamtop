@@ -529,7 +529,7 @@ fn live_edge_segment(
         }
         let index = complete as u64 - 2;
         let time = pto.saturating_add((index as f64 * dur_ticks).round() as u64);
-        let end_secs = clock.period_start_secs + (index + 1) as f64 * dur_secs;
+        let end_secs = ((index + 1) as f64).mul_add(dur_secs, clock.period_start_secs);
         (
             start_number + index,
             time,

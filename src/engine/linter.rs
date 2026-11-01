@@ -447,6 +447,7 @@ pub fn analyze_abr_ladder(variants: &[AbrVariant]) -> AbrHealth {
 }
 
 /// Flag master-playlist variant misalignment (audio missing, bandwidth vs resolution).
+///
 /// `separate_audio`: the manifest declares audio outside the video variants
 /// (HLS `EXT-X-MEDIA TYPE=AUDIO`, DASH audio AdaptationSet).
 pub fn lint_variant_alignment(

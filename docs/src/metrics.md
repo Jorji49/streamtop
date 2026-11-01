@@ -11,6 +11,8 @@ curl -H "Authorization: Bearer $STREAMTOP_METRICS_TOKEN" http://host:9184/metric
 
 A non-loopback `--metrics-bind` requires a non-empty `--metrics-token` or `STREAMTOP_METRICS_TOKEN`. Only the `Authorization: Bearer` header is accepted; a `?token=` query is rejected.
 
+`--prometheus` runs until Ctrl+C. It does not open the dashboard, and it cannot be combined with `--summary`, `--audit`, `--export`, `--multi-cdn`, `--compare`, or `--vod`.
+
 `streamtop --export grafana` writes a dashboard JSON for these metrics.
 
 ## Multi-stream agent
