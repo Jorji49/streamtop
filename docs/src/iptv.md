@@ -77,4 +77,4 @@ Without `--fail-on-dead`, `check` exits 0 even when entries are dead, so it can 
 
 * A `LIVE` verdict means the playlist and one segment were reachable. It does not decode video, so a channel that serves a black frame still counts as live.
 * Some IPTV servers block unknown User-Agents or require a Referer. Pass them with `-A` and `-H`.
-* The worker count is fixed at 25, so on large lists with many unreachable hosts the run time is set mostly by the 5 second timeout.
+* `--audit` always uses 25 workers and a 5 second limit per HTTP request, so on large lists with many unreachable hosts the run time is set mostly by those timeouts. `check` lets you set the worker count with `-j` and a limit per entry with `--timeout`.

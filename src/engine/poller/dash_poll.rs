@@ -197,30 +197,25 @@ impl ManifestPoller {
         }
 
         if !*announced_ast {
-            if let Some(ast) = &summary.availability_start_time {
-                self.emit_log(
-                    LogLevel::Info,
-                    DiagCategory::Info,
-                    format!(
-                        "MPD AST={} | SPD={:?}s | minBufferTime={:?}s | live={}",
-                        ast,
-                        summary.suggested_presentation_delay_secs,
-                        summary.min_buffer_time_secs,
-                        summary.type_live
-                    ),
-                );
-            } else {
-                self.emit_log(
-                    LogLevel::Info,
-                    DiagCategory::Info,
-                    format!(
-                        "MPD SPD={:?}s | minBufferTime={:?}s | live={}",
-                        summary.suggested_presentation_delay_secs,
-                        summary.min_buffer_time_secs,
-                        summary.type_live
-                    ),
-                );
-            }
+            let secs = |v: Option<f64>| v.map_or_else(|| "-".to_string(), |s| format!("{s}s"));
+            let ast = summary
+                .availability_start_time
+                .as_ref()
+                .map_or_else(String::new, |a| format!("AST={a} | "));
+            self.emit_log(
+                LogLevel::Info,
+                DiagCategory::Info,
+                format!(
+                    "MPD {ast}type={} | SPD={} | minBufferTime={}",
+                    if summary.type_live {
+                        "dynamic"
+                    } else {
+                        "static"
+                    },
+                    secs(summary.suggested_presentation_delay_secs),
+                    secs(summary.min_buffer_time_secs),
+                ),
+            );
             *announced_ast = true;
         }
 

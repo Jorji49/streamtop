@@ -322,7 +322,10 @@ fn completions_and_man_page_are_generated() {
         assert!(out.status.success(), "{shell}");
         let text = String::from_utf8_lossy(&out.stdout);
         assert!(text.contains("--summary"), "{shell}: main flags missing");
-        assert!(text.contains("fail-on-dead"), "{shell}: check flags missing");
+        assert!(
+            text.contains("fail-on-dead"),
+            "{shell}: check flags missing"
+        );
     }
     let man = std::process::Command::new(bin)
         .arg("man")
