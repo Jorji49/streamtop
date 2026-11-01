@@ -1,4 +1,4 @@
-# yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.6.0.schema.json
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.28.0.schema.json
 
 PackageIdentifier: Jorji49.streamtop
 PackageVersion: 1.5.5
@@ -13,6 +13,6 @@ ReleaseDate: 2026-11-01
 Installers:
   - Architecture: x64
     InstallerUrl: https://github.com/Jorji49/streamtop/releases/download/v1.5.5/streamtop-windows-x86_64-1.5.5.zip
-    InstallerSha256: 98D19096F3B98FFA6E13417EE226E0AB85B2855039D52D6718A6E81DDA1D9732
+    InstallerSha256: F71AE6EFE0B392D9EF990EE49B55CC8DD7F9D7647CA7B4F75068B2A8CCB66B6D
 ManifestType: installer
-ManifestVersion: 1.6.0
+ManifestVersion: 1.28.0
