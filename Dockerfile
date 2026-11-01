@@ -5,7 +5,6 @@ RUN apk add --no-cache musl-dev
 
 WORKDIR /app
 COPY Cargo.toml Cargo.lock ./
-COPY .cargo ./.cargo
 COPY src ./src
 
 RUN cargo build --release --locked \
