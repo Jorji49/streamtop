@@ -1,5 +1,32 @@
 # Changelog
 
+## [1.7.0] - 2026-11-01
+
+### Added
+
+- `streamtop completions <bash|zsh|fish|powershell|elvish>` prints a shell completion script
+- `streamtop man [check|scte35|completions]` prints a roff man page
+- SCTE-35: `archive_allowed` and `device_restrictions` are decoded from the segmentation descriptor
+- Summary JSON `schema_version` 7: `last_error`, VOD status, and `schemas/summary.v1.json` updated to match
+
+### Fixed
+
+- TR 101 290: PSI parsing reads the table after the pointer field and all PAT programs. PAT/PMT repetition and PCR intervals are measured on the PCR clock inside each segment window, and continuity, PTS and PCR state restarts per window, so gaps between segments are no longer reported as errors. The discontinuity indicator, duplicate packets and the 33-bit PCR wrap are handled. Orphan PIDs and sync loss are reported once
+- DASH: the poller probes the live-edge media segment, a static MPD is reported as VOD, and glass-to-glass latency uses segment availability. `ABR_AUDIO_MISSING` is no longer raised when audio is in its own AdaptationSet or `EXT-X-MEDIA` group
+- SCTE-35 segmentation type names for 0x34 and 0x35 follow Table 23
+- `--summary` reports VOD streams as VOD instead of a failure, shows `No data` health when nothing was measured, and does not count the same finding twice
+- SARIF output reports each finding once
+- HAR export records the manifest status
+- A response that is not a playlist (for example an HTML page) gives a short error instead of a parser byte dump
+- The dashboard, picker and compare views exit with a clear message when there is no terminal, instead of a raw-mode error
+- `--prometheus` combined with `--summary`, `--audit`, `--export`, `--multi-cdn`, `--compare` or `--vod` is rejected; before, the other flags were silently ignored and the exporter ran until stopped
+- No ANSI color codes when output is piped or `NO_COLOR` is set. Error reports are shorter
+
+### Changed
+
+- The TUI status badge for VOD uses its own color
+- The MPD info log prints values instead of `Some(..)`
+
 ## [1.6.0] - 2026-11-01
 
 ### Added
