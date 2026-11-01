@@ -69,6 +69,11 @@ pub struct SegmentationDescriptor {
     pub web_delivery_allowed: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub no_regional_blackout: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub archive_allowed: Option<bool>,
+    /// `device_restrictions` (0 = group 0, 1 = group 1, 2 = group 2, 3 = none).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub device_restrictions: Option<u8>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -207,8 +212,8 @@ pub fn segmentation_type_name(id: u8) -> String {
         0x31 => "Provider Ad End",
         0x32 => "Distributor Ad Start",
         0x33 => "Distributor Ad End",
-        0x34 => "Placement Opportunity Start",
-        0x35 => "Placement Opportunity End",
+        0x34 => "Provider Placement Opportunity Start",
+        0x35 => "Provider Placement Opportunity End",
         0x36 => "Distributor Placement Opportunity Start",
         0x37 => "Distributor Placement Opportunity End",
         0x38 => "Provider Overlay Placement Opportunity Start",
@@ -377,10 +382,10 @@ pub fn render_text(sec: &SpliceInfoSection) -> String {
             let _ = writeln!(o, "  upid              {h}");
         }
         if let (Some(n), Some(e)) = (d.segment_num, d.segments_expected) {
-            let _ = writeln!(o, "  segment           {n} of {e}");
+            let _ = writeln!(o, "  segment_num       {n} (expected {e})");
         }
         if let (Some(n), Some(e)) = (d.sub_segment_num, d.sub_segments_expected) {
-            let _ = writeln!(o, "  sub_segment       {n} of {e}");
+            let _ = writeln!(o, "  sub_segment_num   {n} (expected {e})");
         }
         let _ = writeln!(
             o,
@@ -392,6 +397,18 @@ pub fn render_text(sec: &SpliceInfoSection) -> String {
         }
         if let Some(v) = d.no_regional_blackout {
             let _ = writeln!(o, "  no_regional_blackout    {}", yn(v));
+        }
+        if let Some(v) = d.archive_allowed {
+            let _ = writeln!(o, "  archive_allowed         {}", yn(v));
+        }
+        if let Some(v) = d.device_restrictions {
+            let label = match v {
+                0 => "Restrict Group 0",
+                1 => "Restrict Group 1",
+                2 => "Restrict Group 2",
+                _ => "None",
+            };
+            let _ = writeln!(o, "  device_restrictions     {label}");
         }
     }
     for n in &sec.parse_notes {
@@ -684,12 +701,18 @@ fn parse_segmentation_descriptor(body: &[u8]) -> Option<SegmentationDescriptor> 
     let program_seg = flags & 0x80 != 0;
     let has_duration = flags & 0x40 != 0;
     let delivery_not_restricted = flags & 0x20 != 0;
-    let web_delivery_allowed = Some(flags & 0x10 != 0);
-    let no_regional_blackout = if delivery_not_restricted {
-        None
-    } else {
-        Some(flags & 0x08 != 0)
-    };
+    // SCTE-35 10.3.3.1: these flags exist only when delivery_not_restricted_flag is 0.
+    let (web_delivery_allowed, no_regional_blackout, archive_allowed, device_restrictions) =
+        if delivery_not_restricted {
+            (None, None, None, None)
+        } else {
+            (
+                Some(flags & 0x10 != 0),
+                Some(flags & 0x08 != 0),
+                Some(flags & 0x04 != 0),
+                Some(flags & 0x03),
+            )
+        };
 
     if !program_seg {
         if off >= body.len() {
@@ -774,6 +797,8 @@ fn parse_segmentation_descriptor(body: &[u8]) -> Option<SegmentationDescriptor> 
         delivery_not_restricted,
         web_delivery_allowed,
         no_regional_blackout,
+        archive_allowed,
+        device_restrictions,
     })
 }
 
@@ -882,7 +907,10 @@ mod tests {
     #[test]
     fn segmentation_names() {
         assert_eq!(segmentation_type_name(0x30), "Provider Ad Start");
-        assert_eq!(segmentation_type_name(0x34), "Placement Opportunity Start");
+        assert_eq!(
+            segmentation_type_name(0x34),
+            "Provider Placement Opportunity Start"
+        );
     }
 
     #[test]
@@ -970,6 +998,28 @@ mod cli_tests {
                 let _ = write!(acc, "{b:02x}");
                 acc
             })
+    }
+
+    /// Field values cross-checked with threefive 2.x on the same payload.
+    #[test]
+    fn time_signal_descriptor_flags_match_reference_decoder() {
+        let sec = parse_scte35_bytes(&decode_cli_input(TS_B64).unwrap()).unwrap();
+        let d = &sec.descriptors[0];
+        assert_eq!(d.segmentation_event_id, 0x4800_008e);
+        assert_eq!(d.segmentation_type_id, 0x34);
+        assert_eq!(
+            d.segmentation_type_name,
+            "Provider Placement Opportunity Start"
+        );
+        assert_eq!(d.segmentation_duration_secs, Some(307.0));
+        assert_eq!(d.upid_type, Some(0x08));
+        assert_eq!(d.segment_num, Some(2));
+        assert_eq!(d.segments_expected, Some(0));
+        assert!(!d.delivery_not_restricted);
+        assert_eq!(d.web_delivery_allowed, Some(false));
+        assert_eq!(d.no_regional_blackout, Some(true));
+        assert_eq!(d.archive_allowed, Some(true));
+        assert_eq!(d.device_restrictions, Some(3));
     }
 
     #[test]
