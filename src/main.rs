@@ -218,12 +218,31 @@ struct Cli {
     max_cdn_skew_ms: i64,
 }
 
+/// Plain `Error: ...` reports for CLI users: no source location or env hints,
+/// and no ANSI when stderr is not a terminal or `NO_COLOR` is set.
+fn install_error_report_hook() -> Result<()> {
+    use std::io::IsTerminal;
+    let color = std::io::stderr().is_terminal()
+        && std::env::var_os("NO_COLOR").is_none_or(|v| v.is_empty());
+    let theme = if color {
+        color_eyre::config::Theme::dark()
+    } else {
+        color_eyre::config::Theme::new()
+    };
+    let verbose = std::env::var_os("RUST_BACKTRACE").is_some_and(|v| v != "0");
+    color_eyre::config::HookBuilder::default()
+        .theme(theme)
+        .display_location_section(verbose)
+        .display_env_section(verbose)
+        .install()
+}
+
 #[allow(clippy::too_many_lines)]
 #[tokio::main]
 async fn main() -> Result<ExitCode> {
     let _ = rustls::crypto::ring::default_provider().install_default();
 
-    color_eyre::install()?;
+    install_error_report_hook()?;
     install_panic_hook();
 
     let raw_args: Vec<std::ffi::OsString> = std::env::args_os().collect();

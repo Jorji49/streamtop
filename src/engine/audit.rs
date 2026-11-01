@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 
 use chrono::Utc;
 use color_eyre::eyre::{eyre, Result, WrapErr};
-use crossterm::style::{Color, ResetColor, SetForegroundColor};
+use crossterm::style::Color;
 use futures::stream::{self, StreamExt};
 use m3u8_rs::Playlist;
 use reqwest::header::RANGE;
@@ -445,28 +445,13 @@ pub fn print_matrix(report: &AuditReport) -> Result<()> {
 }
 
 fn color_line(color: Color, text: &str) -> Result<()> {
-    execute_color(color)?;
-    println!("{text}");
-    reset_color()?;
+    crate::engine::term_color::print_colored(text, color);
+    println!();
     Ok(())
 }
 
 fn color_span(color: Color, text: &str) -> Result<()> {
-    execute_color(color)?;
-    print!("{text}");
-    reset_color()?;
-    Ok(())
-}
-
-fn execute_color(color: Color) -> Result<()> {
-    let mut out = std::io::stdout();
-    crossterm::execute!(out, SetForegroundColor(color))?;
-    Ok(())
-}
-
-fn reset_color() -> Result<()> {
-    let mut out = std::io::stdout();
-    crossterm::execute!(out, ResetColor)?;
+    crate::engine::term_color::print_colored(text, color);
     Ok(())
 }
 

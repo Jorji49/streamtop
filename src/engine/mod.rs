@@ -40,6 +40,7 @@ pub mod session_poller;
 pub mod slice_util;
 pub mod subtitle_probe;
 pub mod summary;
+pub mod term_color;
 pub mod tr101290;
 pub mod transport;
 pub mod vod;
