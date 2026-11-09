@@ -15,6 +15,9 @@ streamtop "https://example.com/live.m3u8" --tr101290 --probe-sei
 
 # Headless PASS/FAIL for CI
 streamtop "https://example.com/master.m3u8" --summary --summary-format json --timeout 10
+
+# Several live streams in one grid
+streamtop --grid URL1 URL2 URL3
 ```
 
 Segment fetches are range probes by default: streamtop requests only the first bytes of each segment, which is enough for header, container, and timing checks. Pass `--full-segment` to download whole segments (up to 32 MB) instead.

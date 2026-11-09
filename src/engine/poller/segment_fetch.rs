@@ -17,11 +17,13 @@ use crate::engine::dai_validator::{
     inband_events_from_wire, validate_ad_alignment, validate_inband_vs_manifest,
 };
 use crate::engine::drm_probe::{apply_clearkey_to_wire, probe_clearkey};
+use crate::engine::evidence::ExchangeKind;
 use crate::engine::linter::{
     inspect_container, lint_abr_player, lint_subtitle_drift, parse_cdn_headers, SpecLinter,
 };
 use crate::engine::network_trace::{reqwest_headers_chunked, timing_from_ttfb, traced_get};
 use crate::engine::playlist_parser::local_path_from_url;
+use crate::engine::redact::redact_url;
 use crate::engine::subtitle_probe::{compute_subtitle_drift, probe_subtitle_payload};
 use crate::engine::tr101290::probe_container_tr101290;
 use crate::engine::transport::timing_from_reqwest_version;
@@ -495,10 +497,31 @@ impl ManifestPoller {
         Some(compute_subtitle_drift(&probe, video_pts_ms))
     }
 
+    fn note_segment(
+        &self,
+        url: &str,
+        fetch: &SegmentFetch,
+        headers: &[(String, String)],
+        body: &[u8],
+    ) {
+        self.note_exchange(
+            ExchangeKind::Segment,
+            url,
+            fetch.http_status,
+            fetch.ttfb_ms,
+            fetch.download_ms,
+            fetch.transferred_bytes,
+            headers,
+            body,
+        );
+    }
+
     pub(super) async fn download_segment(&self, url: &str) -> Result<SegmentFetch> {
         if let Some(path) = local_path_from_url(url) {
             let mut fetch = read_local_segment(&path, false).await?;
             self.apply_doh_timing(url, &mut fetch.network).await;
+            let body = fetch.probe_bytes.clone();
+            self.note_segment(url, &fetch, &[], &body);
             return Ok(fetch);
         }
         if let Ok(resp) = traced_get(
@@ -511,8 +534,19 @@ impl ManifestPoller {
         .await
         {
             let code = resp.status;
+            let headers = self.capture_headers(&resp.headers);
             if !((200..300).contains(&code)) {
-                return Err(eyre!("segment HTTP {code} - {url}"));
+                self.note_exchange(
+                    ExchangeKind::Segment,
+                    url,
+                    code,
+                    resp.timing.ttfb_ms,
+                    resp.download_ms,
+                    0,
+                    &headers,
+                    &[],
+                );
+                return Err(eyre!("segment HTTP {code} - {}", redact_url(url)));
             }
             let cdn = parse_cdn_headers_http(&resp.headers);
             let total = resp.body.len() as u64;
@@ -542,6 +576,7 @@ impl ManifestPoller {
             };
             self.apply_doh_timing(url, &mut fetch.network).await;
             self.send_event(StreamEvent::Transport(fetch.network.clone()));
+            self.note_segment(url, &fetch, &headers, &resp.body);
             Ok(fetch)
         } else {
             let mut fetch = self.download_segment_reqwest(url).await?;
@@ -556,18 +591,29 @@ impl ManifestPoller {
             Ok(r) => r,
             Err(e) => {
                 self.emit_transport_failure(&e);
-                return Err(e).wrap_err_with(|| format!("segment GET failed: {url}"));
+                return Err(e).wrap_err_with(|| format!("segment GET failed: {}", redact_url(url)));
             }
         };
         let version = response.version();
         let status = response.status();
         let code = status.as_u16();
+        let headers = self.capture_headers(response.headers());
+        let ttfb_ms = started.elapsed().as_millis() as u64;
         if !status.is_success() {
-            return Err(eyre!("segment HTTP {status} - {url}"));
+            self.note_exchange(
+                ExchangeKind::Segment,
+                url,
+                code,
+                ttfb_ms,
+                ttfb_ms,
+                0,
+                &headers,
+                &[],
+            );
+            return Err(eyre!("segment HTTP {status} - {}", redact_url(url)));
         }
         let cdn = parse_cdn_headers(response.headers());
         let chunked = reqwest_headers_chunked(response.headers());
-        let ttfb_ms = started.elapsed().as_millis() as u64;
         let content_length = response.content_length();
         let mut stream = response.bytes_stream();
         let mut total: u64 = 0;
@@ -598,6 +644,16 @@ impl ManifestPoller {
         }
         self.apply_doh_timing(url, &mut network).await;
         self.send_event(StreamEvent::Transport(network.clone()));
+        self.note_exchange(
+            ExchangeKind::Segment,
+            url,
+            code,
+            ttfb_ms,
+            download_ms.max(1),
+            total,
+            &headers,
+            &head,
+        );
         let mut wire = deep_wire_probe(&head);
         self.finalize_wire(&mut wire);
         let container = if wire.container == ContainerKind::Unknown {
@@ -626,6 +682,8 @@ impl ManifestPoller {
         if let Some(path) = local_path_from_url(url) {
             let mut fetch = read_local_segment(&path, true).await?;
             self.apply_doh_timing(url, &mut fetch.network).await;
+            let body = fetch.probe_bytes.clone();
+            self.note_segment(url, &fetch, &[], &body);
             return Ok(fetch);
         }
         let range = format!("bytes=0-{DEEP_WIRE_PROBE_BYTES}");
@@ -639,8 +697,19 @@ impl ManifestPoller {
         .await
         {
             let code = resp.status;
+            let headers = self.capture_headers(&resp.headers);
             if !(code == 200 || code == 206) {
-                return Err(eyre!("probe HTTP {code} - {url}"));
+                self.note_exchange(
+                    ExchangeKind::Segment,
+                    url,
+                    code,
+                    resp.timing.ttfb_ms,
+                    resp.download_ms,
+                    0,
+                    &headers,
+                    &[],
+                );
+                return Err(eyre!("probe HTTP {code} - {}", redact_url(url)));
             }
             let cdn = parse_cdn_headers_http(&resp.headers);
             let declared = resp
@@ -676,6 +745,7 @@ impl ManifestPoller {
             };
             self.apply_doh_timing(url, &mut fetch.network).await;
             self.send_event(StreamEvent::Transport(fetch.network.clone()));
+            self.note_segment(url, &fetch, &headers, &resp.body);
             Ok(fetch)
         } else {
             let mut fetch = self.probe_segment_reqwest(url).await?;
@@ -691,20 +761,31 @@ impl ManifestPoller {
             Ok(r) => r,
             Err(e) => {
                 self.emit_transport_failure(&e);
-                return Err(e).wrap_err_with(|| format!("range probe failed: {url}"));
+                return Err(e).wrap_err_with(|| format!("range probe failed: {}", redact_url(url)));
             }
         };
         let version = response.version();
 
         let status = response.status();
         let code = status.as_u16();
+        let headers = self.capture_headers(response.headers());
+        let ttfb_ms = started.elapsed().as_millis() as u64;
         if !(status.is_success() || code == 206) {
-            return Err(eyre!("probe HTTP {status} - {url}"));
+            self.note_exchange(
+                ExchangeKind::Segment,
+                url,
+                code,
+                ttfb_ms,
+                ttfb_ms,
+                0,
+                &headers,
+                &[],
+            );
+            return Err(eyre!("probe HTTP {status} - {}", redact_url(url)));
         }
 
         let cdn = parse_cdn_headers(response.headers());
         let chunked = reqwest_headers_chunked(response.headers());
-        let ttfb_ms = started.elapsed().as_millis() as u64;
         let declared = response
             .headers()
             .get("content-range")
@@ -742,6 +823,16 @@ impl ManifestPoller {
             crate::engine::transport::apply_quic_handshake(&mut network, ttfb_ms, false);
         }
         self.send_event(StreamEvent::Transport(network.clone()));
+        self.note_exchange(
+            ExchangeKind::Segment,
+            url,
+            code,
+            ttfb_ms,
+            download_ms.max(1),
+            transferred,
+            &headers,
+            &buf,
+        );
         let mut wire = deep_wire_probe(&buf);
         self.finalize_wire(&mut wire);
         let container = if wire.container == ContainerKind::Unknown {

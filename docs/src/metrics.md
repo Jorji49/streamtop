@@ -11,7 +11,7 @@ curl -H "Authorization: Bearer $STREAMTOP_METRICS_TOKEN" http://host:9184/metric
 
 A non-loopback `--metrics-bind` requires a non-empty `--metrics-token` or `STREAMTOP_METRICS_TOKEN`. Only the `Authorization: Bearer` header is accepted; a `?token=` query is rejected.
 
-`--prometheus` runs until Ctrl+C. It does not open the dashboard, and it cannot be combined with `--summary`, `--audit`, `--export`, `--multi-cdn`, `--compare`, or `--vod`.
+`--prometheus` runs until Ctrl+C. It does not open the dashboard, and it cannot be combined with `--summary`, `--audit`, `--export`, `--multi-cdn`, `--compare`, `--grid`, or `--vod`.
 
 `streamtop --export grafana` writes a dashboard JSON for these metrics.
 
@@ -22,6 +22,14 @@ streamtop --agent agent.example.toml
 ```
 
 The agent polls every `[[streams]]` entry in the TOML file without a TUI and serves aggregated `/metrics`. See `agent.example.toml` in the repository.
+
+```bash
+streamtop --agent agent.toml --grid
+```
+
+`--grid` uses the same file but opens the [multi-stream grid](grid.md) instead of the metrics server. Stream ids must be unique, and each `url` must be non-empty. `--agent` does not combine with `--summary`, `--audit`, `--vod`, `--compare`, `--multi-cdn`, `--export`, or `--prometheus`; put metrics, alerts, and evidence in the config.
+
+`otel_endpoint` in the agent file (and `--otel-endpoint` on the dashboard) exports OTLP traces and metrics about every two seconds.
 
 ## OpenTelemetry
 

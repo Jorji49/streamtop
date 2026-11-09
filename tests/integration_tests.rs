@@ -231,6 +231,8 @@ async fn vod_scans_mock_hls_playlist() {
         tr101290: false,
         probe_sei: false,
         doh_provider: None,
+        evidence_settings: streamtop::engine::evidence::EvidenceSettings::default(),
+        evidence: None,
     };
     let exit = run_vod(url, session, SummaryFormat::Json)
         .await

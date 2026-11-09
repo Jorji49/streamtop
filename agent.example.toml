@@ -1,5 +1,6 @@
 # streamtop multi-stream agent example (headless fleet monitoring)
 # Usage: streamtop --agent agent.example.toml
+#        streamtop --agent agent.example.toml --grid
 
 metrics_bind = "127.0.0.1"
 metrics_port = 9184
@@ -8,6 +9,14 @@ metrics_port = 9184
 # otel_endpoint = "http://127.0.0.1:4318"
 # allow_insecure_webhooks = false
 # allow_insecure_otel = false
+
+# Opt-in alarm evidence (manifests, redacted request metadata, optional segment bytes).
+# evidence_dir = "evidence"
+# evidence_segments = 0
+# evidence_max_bytes = 33554432
+# evidence_segment_bytes = 262144
+# evidence_min_interval_secs = 30
+# evidence_max_dumps = 32
 
 [[streams]]
 id = "primary-hls"

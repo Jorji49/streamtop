@@ -1,6 +1,7 @@
 use chrono::Utc;
 
 use crate::engine::channel_stats::record_channel_drop;
+use crate::engine::evidence::{header_pairs, ExchangeKind, ExchangeNote};
 use crate::engine::g2g::{compute_g2g, wall_now_unix_ms};
 use crate::engine::linter::SpecLinter;
 use crate::engine::metrics::update_metrics;
@@ -16,6 +17,9 @@ use super::ManifestPoller;
 
 impl ManifestPoller {
     pub(super) fn send_event(&self, event: StreamEvent) {
+        if let Some(rec) = &self.evidence {
+            rec.on_event(&event);
+        }
         if let Some(m) = &self.metrics {
             if let Ok(mut snap) = m.write() {
                 update_metrics(&mut snap, &event);
@@ -135,5 +139,44 @@ impl ManifestPoller {
             self.emit_log(level, finding.category, log_msg);
             self.send_event(StreamEvent::Finding(finding));
         }
+    }
+
+    pub(super) fn capture_headers(&self, headers: &http::HeaderMap) -> Vec<(String, String)> {
+        if self.evidence.is_none() {
+            return Vec::new();
+        }
+        header_pairs(headers)
+    }
+
+    pub(super) fn note_exchange(
+        &self,
+        kind: ExchangeKind,
+        url: &str,
+        status: u16,
+        ttfb_ms: u64,
+        download_ms: u64,
+        bytes: u64,
+        response_headers: &[(String, String)],
+        body: &[u8],
+    ) {
+        let Some(rec) = &self.evidence else {
+            return;
+        };
+        let saved = match kind {
+            ExchangeKind::Manifest => body,
+            ExchangeKind::Segment if rec.saves_segment_bytes() => body,
+            ExchangeKind::Segment => &[],
+        };
+        rec.record(&ExchangeNote {
+            kind,
+            url,
+            status,
+            ttfb_ms,
+            download_ms,
+            bytes,
+            request_headers: &self.extra_headers,
+            response_headers,
+            body: saved,
+        });
     }
 }

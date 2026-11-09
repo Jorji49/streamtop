@@ -10,13 +10,13 @@ Yes. Use `--summary --summary-format json --timeout N` for PASS/FAIL output, `--
 HLS (including LL-HLS parts), MPEG-DASH, IPTV channel lists (M3U, JSON, YAML), and WHEP HTTP endpoints. Wire probes cover fMP4, MPEG-TS, ADTS, and H.264/H.265 elementary streams without a decoder.
 
 **Can it check which channels in my IPTV playlist work?**
-Yes. `streamtop check playlist.m3u` prints LIVE, STALL, or ERROR for every entry, with JSON/CSV output, `--alive-out` for a cleaned playlist, and `--fail-on-dead` for scripts. See [IPTV playlist checking](iptv.md).
+Yes. `streamtop check playlist.m3u` prints LIVE, VOD, STALL, or ERROR for every entry, with JSON/CSV output, `--alive-out` for a cleaned playlist, and `--fail-on-dead` for scripts. See [IPTV playlist checking](iptv.md).
 
 **Is it safe to expose Prometheus metrics?**
 The default bind is loopback. A non-loopback bind requires `--metrics-token` or `STREAMTOP_METRICS_TOKEN`, and requests must send `Authorization: Bearer`.
 
 **Are tokens in my URLs written to disk?**
-Exports and diagnostics redact URLs, query tokens, and secrets.
+Exports, diagnostics, and evidence bundles redact URLs, query tokens, and headers such as `Authorization` and `Cookie`. The playlist written by `streamtop check --alive-out` keeps the original URLs so it can be played.
 
 **Does it need FFmpeg?**
 No. Only Quick Play (`p`) uses `mpv` or `ffplay` if they are installed.

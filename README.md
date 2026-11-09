@@ -46,6 +46,13 @@ streamtop "https://example.com/manifest.mpd" --tr101290 --probe-sei
 # IPTV list: channel picker
 streamtop ./channels.m3u
 
+# Several streams in one grid (80x24 scrolls). Enter opens one stream.
+streamtop --grid URL1 URL2 URL3
+streamtop --agent agent.toml --grid
+
+# Save a redacted evidence bundle when a stall or continuity error fires
+streamtop URL --evidence-dir ./evidence --evidence-segments 2
+
 # Check every entry: table, JSON or CSV, a playlist of working ones, exit 1 on dead
 streamtop check ./channels.m3u --alive-out working.m3u --fail-on-dead
 
@@ -67,9 +74,9 @@ streamtop <URL> --prometheus
 * TR 101 290 P1/P2 on MPEG-TS, SEI captions and HDR metadata
 * IPTV playlist checks with `streamtop check`
 * SCTE-35 in HLS tags and DASH `emsg`, with mismatch detection, and `streamtop scte35` for single cues
-* Side-by-side compare and multi-CDN live-edge skew
+* Side-by-side compare, a multi-stream grid, and multi-CDN live-edge skew
 * Exports: HTML/JSON reports, HAR, curl, SARIF, Grafana dashboard
-* Prometheus, OpenTelemetry, webhooks, and a multi-stream agent
+* Prometheus, OpenTelemetry, webhooks, a multi-stream agent, and opt-in alarm evidence bundles
 
 streamtop reads headers and the first bytes of each segment. It does not decode media, and it does not take SRT, RTMP, or UDP input. See [Limits](https://jorji49.github.io/streamtop/limits.html) and how it compares with [TSDuck, ffprobe, threefive, and iptv-checker](https://jorji49.github.io/streamtop/comparison.html).
 

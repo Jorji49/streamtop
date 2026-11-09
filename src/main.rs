@@ -13,12 +13,14 @@ use crossterm::execute;
 use crossterm::terminal::{disable_raw_mode, LeaveAlternateScreen};
 use reqwest::Client;
 
+use streamtop::engine::agent::load_agent_config;
 use streamtop::engine::audit::{
     print_matrix, probe_channels, render_json, run_audit, ProbeOptions,
 };
 use streamtop::engine::budget::{run_budget, BudgetOpts};
 use streamtop::engine::check::{alive_m3u, render_report, should_fail, CheckFormat};
 use streamtop::engine::config::session_from_profile;
+use streamtop::engine::evidence::{EvidenceHandle, EvidenceSettings};
 use streamtop::engine::export::{build_curl, capture_for_export, write_har};
 use streamtop::engine::export_cli::{parse_export_spec, ExportFormat, ExportPlan};
 use streamtop::engine::grafana::{export_grafana_dashboard, GRAFANA_DASHBOARD_FILENAME};
@@ -34,7 +36,8 @@ use streamtop::engine::summary::{run_summary, SummaryFormat};
 use streamtop::engine::vod::run_vod;
 use streamtop::models::{ChannelEntry, MAX_MANIFEST_BYTES};
 use streamtop::ui::app::{restore_terminal_global, SessionOpts};
-use streamtop::ui::{App, CompareApp, MultiCdnApp};
+use streamtop::ui::grid_view::{targets_from_agent, targets_from_urls};
+use streamtop::ui::{App, CompareApp, GridApp, MultiCdnApp};
 
 #[derive(Debug, Clone, Copy, clap::ValueEnum, Default)]
 enum SummaryFormatArg {
@@ -59,13 +62,44 @@ impl From<SummaryFormatArg> for SummaryFormat {
     name = "streamtop",
     version,
     about = "HLS/DASH/IPTV stream diagnostics TUI",
-    after_help = "Subcommands:\n  streamtop check <PLAYLIST>     Check every entry of an IPTV playlist (see streamtop check --help)\n  streamtop scte35 <PAYLOAD>     Decode a SCTE-35 splice_info_section (see streamtop scte35 --help)\n  streamtop completions <SHELL>  Print a completion script for bash, zsh, fish, elvish, or powershell\n  streamtop man                  Print the man page"
+    after_help = "Subcommands:\n  streamtop check <PLAYLIST>     Check every entry of an IPTV playlist (see streamtop check --help)\n  streamtop scte35 <PAYLOAD>     Decode a SCTE-35 splice_info_section (see streamtop scte35 --help)\n  streamtop completions <SHELL>  Print a completion script for bash, zsh, fish, elvish, or powershell\n  streamtop man                  Print the man page\n\nMore than one URL, or --grid, opens the multi-stream grid. --agent CONFIG --grid uses that file.\n--evidence-dir DIR saves a redacted bundle when a stall, continuity-counter error, or other alarm fires."
 )]
 #[allow(clippy::struct_excessive_bools)] // clap CLI flags
 struct Cli {
-    /// Stream URL, local playlist/MPD, or channel lineup (M3U / JSON / YAML)
-    #[arg(required_unless_present_any = ["compare", "export", "vod", "agent", "multi_cdn"])]
-    url: Option<String>,
+    /// Stream URL, local playlist/MPD, or channel lineup (M3U / JSON / YAML). Repeat for the grid.
+    #[arg(
+        required_unless_present_any = ["compare", "export", "vod", "agent", "multi_cdn", "grid"],
+        value_name = "URL"
+    )]
+    url: Vec<String>,
+
+    /// Multi-stream grid. Pass several URLs, or combine with --agent CONFIG.
+    #[arg(long = "grid")]
+    grid: bool,
+
+    /// Directory for alarm evidence bundles. Off unless this or `evidence_dir` in config is set.
+    #[arg(long = "evidence-dir", value_name = "DIR")]
+    evidence_dir: Option<std::path::PathBuf>,
+
+    /// Segment payloads kept in each evidence bundle (0 = request metadata only, max 8)
+    #[arg(long = "evidence-segments", value_name = "N")]
+    evidence_segments: Option<u32>,
+
+    /// Stop writing evidence after this many bytes (default 32 MiB, max 1 GiB)
+    #[arg(long = "evidence-max-bytes", value_name = "BYTES")]
+    evidence_max_bytes: Option<u64>,
+
+    /// Max bytes saved from each segment payload (default 256 KiB, max 4 MiB)
+    #[arg(long = "evidence-segment-bytes", value_name = "BYTES")]
+    evidence_segment_bytes: Option<u64>,
+
+    /// Minimum seconds between evidence bundles of the same alarm kind (default 30)
+    #[arg(long = "evidence-min-interval", value_name = "SECS")]
+    evidence_min_interval: Option<u64>,
+
+    /// Maximum evidence bundles in this process (default 32, max 500)
+    #[arg(long = "evidence-max-dumps", value_name = "N")]
+    evidence_max_dumps: Option<u32>,
 
     /// Export: `report-html[:PATH]`, `report-json`, `curl`, `har[:PATH]`, `incident[:PATH]`, `grafana`, `sarif[:PATH]`
     #[arg(long = "export", value_name = "FORMAT[:FILE]")]
@@ -258,12 +292,21 @@ async fn main() -> Result<ExitCode> {
     }
 
     let cli = Cli::parse();
+    reject_agent_combinations(&cli)?;
+    reject_grid_combinations(&cli)?;
 
     if let Some(config) = &cli.agent {
-        let path = config
-            .to_str()
-            .ok_or_else(|| eyre!("agent config path is not valid UTF-8"))?;
-        return streamtop::engine::agent::run_agent(path).await;
+        if !cli.url.is_empty() {
+            return Err(eyre!(
+                "--agent reads streams from its config; do not also pass URLs"
+            ));
+        }
+        if !cli.grid {
+            let path = config
+                .to_str()
+                .ok_or_else(|| eyre!("agent config path is not valid UTF-8"))?;
+            return streamtop::engine::agent::run_agent(path, &cli_evidence_settings(&cli)).await;
+        }
     }
 
     let mut session = session_from_profile(
@@ -284,8 +327,14 @@ async fn main() -> Result<ExitCode> {
             tr101290: false,
             probe_sei: false,
             doh_provider: None,
+            evidence_settings: EvidenceSettings::default(),
+            evidence: None,
         },
     )?;
+    session
+        .evidence_settings
+        .merge_override(&cli_evidence_settings(&cli));
+    session.evidence = EvidenceHandle::from_settings(&session.evidence_settings)?;
 
     // CLI overrides profile / defaults.
     if !cli.headers.is_empty() {
@@ -353,7 +402,12 @@ async fn main() -> Result<ExitCode> {
     {
         export_grafana_dashboard(GRAFANA_DASHBOARD_FILENAME)?;
         eprintln!("Wrote {GRAFANA_DASHBOARD_FILENAME}");
-        if cli.url.is_none() && cli.compare.is_none() && cli.vod.is_none() && cli.agent.is_none() {
+        if cli.url.is_empty()
+            && cli.compare.is_none()
+            && cli.vod.is_none()
+            && cli.agent.is_none()
+            && !cli.grid
+        {
             return Ok(ExitCode::SUCCESS);
         }
     }
@@ -410,10 +464,12 @@ async fn main() -> Result<ExitCode> {
             || cli.multi_cdn.is_some()
             || cli.compare.is_some()
             || cli.vod.is_some()
+            || cli.grid
+            || cli.url.len() > 1
         {
             return Err(eyre!(
                 "--prometheus runs a long-lived exporter until Ctrl+C; it cannot be combined with \
-                 --summary, --audit, --export, --multi-cdn, --compare, or --vod. Run them as separate commands"
+                 --summary, --audit, --export, --multi-cdn, --compare, --grid, or --vod. Run them as separate commands"
             ));
         }
     }
@@ -458,10 +514,37 @@ async fn main() -> Result<ExitCode> {
         return Ok(ExitCode::SUCCESS);
     }
 
+    if cli.grid || cli.url.len() > 1 {
+        for url in &cli.url {
+            if url.starts_with("srt://") || url.starts_with("rtmp://") {
+                return Err(eyre!(
+                    "srt:// and rtmp:// are not supported; use WHEP HTTP endpoints (https://host/.../whep)"
+                ));
+            }
+        }
+        require_terminal()?;
+        let targets = if let Some(config) = &cli.agent {
+            let path = config
+                .to_str()
+                .ok_or_else(|| eyre!("agent config path is not valid UTF-8"))?;
+            let cfg = load_agent_config(path)?;
+            let mut settings = cfg.evidence_settings();
+            settings.merge_override(&cli_evidence_settings(&cli));
+            let evidence = EvidenceHandle::from_settings(&settings)?;
+            targets_from_agent(&cfg, evidence)
+        } else {
+            targets_from_urls(&cli.url, &session)?
+        };
+        GridApp::run(targets).await?;
+        restore_terminal_global();
+        return Ok(ExitCode::SUCCESS);
+    }
+
     let input_url = cli
         .url
-        .as_deref()
-        .ok_or_else(|| eyre!("missing stream URL (or use --compare)"))?;
+        .first()
+        .map(String::as_str)
+        .ok_or_else(|| eyre!("missing stream URL (or use --compare / --grid)"))?;
 
     if input_url.starts_with("srt://") || input_url.starts_with("rtmp://") {
         restore_terminal_global();
@@ -609,7 +692,7 @@ struct CheckCli {
     /// Output format
     #[arg(short = 'f', long = "format", value_enum, default_value_t = CheckFormat::Table)]
     format: CheckFormat,
-    /// Write the report to FILE instead of stdout (json and csv formats)
+    /// Write the report to FILE. JSON or CSV replaces stdout; table format also writes JSON here.
     #[arg(short = 'o', long = "output", value_name = "FILE")]
     output: Option<std::path::PathBuf>,
     /// Write an M3U playlist with the entries that are not dead
@@ -964,6 +1047,63 @@ async fn execute_export_plan(
     Ok(exit)
 }
 
+fn cli_evidence_settings(cli: &Cli) -> EvidenceSettings {
+    EvidenceSettings {
+        dir: cli.evidence_dir.clone(),
+        segments: cli.evidence_segments,
+        max_total_bytes: cli.evidence_max_bytes,
+        max_segment_bytes: cli.evidence_segment_bytes,
+        min_interval_secs: cli.evidence_min_interval,
+        max_dumps: cli.evidence_max_dumps,
+    }
+}
+
+fn reject_agent_combinations(cli: &Cli) -> Result<()> {
+    if cli.agent.is_none() {
+        return Ok(());
+    }
+    if cli.summary
+        || cli.audit
+        || cli.vod.is_some()
+        || cli.compare.is_some()
+        || cli.multi_cdn.is_some()
+        || cli.prometheus.is_some()
+        || !cli.export.is_empty()
+    {
+        return Err(eyre!(
+            "--agent cannot be combined with --summary, --audit, --vod, --compare, --multi-cdn, \
+             --export, or --prometheus. The config file sets metrics, alerts, and evidence"
+        ));
+    }
+    Ok(())
+}
+
+fn reject_grid_combinations(cli: &Cli) -> Result<()> {
+    let grid = cli.grid || cli.url.len() > 1;
+    if !grid {
+        return Ok(());
+    }
+    let budget = cli.budget_max_rtf.is_some()
+        || cli.budget_max_ttfb.is_some()
+        || cli.budget_max_cc_errors.is_some()
+        || cli.budget_max_drift.is_some();
+    if cli.compare.is_some()
+        || cli.multi_cdn.is_some()
+        || cli.vod.is_some()
+        || cli.summary
+        || cli.audit
+        || cli.prometheus.is_some()
+        || !cli.export.is_empty()
+        || budget
+    {
+        return Err(eyre!(
+            "--grid cannot be combined with --compare, --multi-cdn, --vod, --summary, --audit, \
+             --export, --prometheus, or --budget-*. Run them as separate commands"
+        ));
+    }
+    Ok(())
+}
+
 /// The dashboard needs an interactive terminal on stdin and stdout.
 fn require_terminal() -> Result<()> {
     if std::io::stdout().is_terminal() && std::io::stdin().is_terminal() {
@@ -1009,4 +1149,61 @@ fn install_panic_hook() {
         );
         original(info);
     }));
+}
+
+#[cfg(test)]
+mod cli_tests {
+    use clap::Parser;
+
+    use streamtop::engine::evidence::{EvidenceHandle, EvidenceSettings};
+
+    use super::{reject_grid_combinations, Cli};
+
+    #[test]
+    fn several_urls_parse_as_a_grid_input() {
+        let cli = Cli::try_parse_from([
+            "streamtop",
+            "https://a.example/a.m3u8",
+            "https://b.example/b.m3u8",
+        ])
+        .unwrap();
+        assert_eq!(cli.url.len(), 2);
+        assert!(!cli.grid);
+        assert!(reject_grid_combinations(&cli).is_ok());
+    }
+
+    #[test]
+    fn grid_flag_allows_a_missing_url_until_runtime() {
+        let cli = Cli::try_parse_from(["streamtop", "--grid"]).unwrap();
+        assert!(cli.grid);
+        assert_eq!(cli.url.len(), 0);
+    }
+
+    #[test]
+    fn agent_rejects_prometheus() {
+        let cli =
+            Cli::try_parse_from(["streamtop", "--agent", "agent.toml", "--prometheus"]).unwrap();
+        assert!(super::reject_agent_combinations(&cli).is_err());
+    }
+
+    #[test]
+    fn grid_rejects_summary() {
+        let cli = Cli::try_parse_from([
+            "streamtop",
+            "--grid",
+            "--summary",
+            "https://a.example/a.m3u8",
+        ])
+        .unwrap();
+        assert!(reject_grid_combinations(&cli).is_err());
+    }
+
+    #[test]
+    fn evidence_limits_need_a_directory() {
+        let settings = EvidenceSettings {
+            segments: Some(1),
+            ..EvidenceSettings::default()
+        };
+        assert!(EvidenceHandle::from_settings(&settings).is_err());
+    }
 }

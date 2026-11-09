@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use color_eyre::eyre::{eyre, Result, WrapErr};
 use futures::StreamExt;
@@ -7,7 +7,9 @@ use reqwest::Client;
 use url::Url;
 
 use crate::engine::doh::resolve_doh;
+use crate::engine::evidence::ExchangeKind;
 use crate::engine::playlist_parser::local_path_from_url;
+use crate::engine::redact::redact_url;
 use crate::models::{
     DiagCategory, DiagSeverity, DiagnosticFinding, DiagnosticReasonCode, NetworkTiming,
     StreamEvent, MAX_MANIFEST_BYTES, MAX_PLAYLIST_DEPTH,
@@ -70,19 +72,43 @@ impl ManifestPoller {
     pub(super) async fn fetch_manifest(&self, url: &str) -> Result<(Vec<u8>, Option<String>)> {
         if let Some(path) = local_path_from_url(url) {
             let body = read_file_limited(&path, MAX_MANIFEST_BYTES).await?;
+            self.note_exchange(
+                ExchangeKind::Manifest,
+                url,
+                200,
+                0,
+                0,
+                body.len() as u64,
+                &[],
+                &body,
+            );
             return Ok((body, None));
         }
+        let started = Instant::now();
         let response = with_probe_read_timeout(async {
             self.client
                 .get(url)
                 .send()
                 .await
-                .wrap_err_with(|| format!("GET failed: {url}"))
+                .wrap_err_with(|| format!("GET failed: {}", redact_url(url)))
         })
         .await?;
+        let ttfb_ms = started.elapsed().as_millis() as u64;
         let status = response.status();
+        let headers = self.capture_headers(response.headers());
+        let code = status.as_u16();
         if !status.is_success() {
-            return Err(eyre!("HTTP {status} - {url}"));
+            self.note_exchange(
+                ExchangeKind::Manifest,
+                url,
+                code,
+                ttfb_ms,
+                ttfb_ms,
+                0,
+                &headers,
+                &[],
+            );
+            return Err(eyre!("HTTP {status} - {}", redact_url(url)));
         }
         let content_type = response
             .headers()
@@ -92,6 +118,17 @@ impl ManifestPoller {
         let body = read_response_bytes_limited(response, MAX_MANIFEST_BYTES)
             .await
             .wrap_err("failed to read body")?;
+        let download_ms = started.elapsed().as_millis() as u64;
+        self.note_exchange(
+            ExchangeKind::Manifest,
+            url,
+            code,
+            ttfb_ms,
+            download_ms,
+            body.len() as u64,
+            &headers,
+            &body,
+        );
         Ok((body, content_type))
     }
 

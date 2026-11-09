@@ -336,6 +336,25 @@ impl OtelExporter {
         Ok(())
     }
 
+    /// Flush traces and metrics until the last strong `Arc` is dropped.
+    ///
+    /// Long-running pollers (the dashboard, the grid, the agent) never called `flush_all`,
+    /// so `--otel-endpoint` buffered spans until they were discarded.
+    pub fn spawn_flush_loop(exporter: &Arc<Self>) {
+        let weak = Arc::downgrade(exporter);
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(Duration::from_secs(2));
+            tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            loop {
+                tick.tick().await;
+                let Some(exporter) = weak.upgrade() else {
+                    break;
+                };
+                let _ = exporter.flush_all().await;
+            }
+        });
+    }
+
     pub async fn flush_all(&self) -> Result<()> {
         self.flush().await?;
         self.flush_metrics().await?;

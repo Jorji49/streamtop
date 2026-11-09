@@ -16,6 +16,7 @@ use crate::engine::channel_stats::channel_dropped_total;
 use crate::engine::dash::{looks_like_dash, parse_dash_mpd};
 use crate::engine::linter::analyze_abr_ladder;
 use crate::engine::poller::{build_http_client, collect_variants};
+use crate::engine::redact::redact_url;
 use crate::engine::summary::{build_summary_json, SummaryFormat};
 use crate::models::{AbrVariant, HealthReport, LatencyState, AUDIT_CONCURRENCY, RANGE_PROBE_BYTES};
 use crate::ui::app::SessionOpts;
@@ -311,10 +312,10 @@ async fn range_probe(client: Arc<Client>, url: &str) -> Result<(u64, u16, String
         .timeout(std::time::Duration::from_secs(20))
         .send()
         .await
-        .map_err(|e| format!("probe failed {url}: {e}"))?;
+        .map_err(|e| format!("probe failed {}: {e}", redact_url(url)))?;
     let status = response.status().as_u16();
     if !(status == 200 || status == 206) {
-        return Err(format!("HTTP {status} for {url}"));
+        return Err(format!("HTTP {status} for {}", redact_url(url)));
     }
     let ttfb = started.elapsed().as_millis() as u64;
     let cdn = crate::engine::linter::parse_cdn_headers(response.headers()).badge();
@@ -331,9 +332,9 @@ async fn fetch_bytes(client: &Client, url: &str) -> Result<(Vec<u8>, Option<Stri
         .timeout(std::time::Duration::from_secs(30))
         .send()
         .await
-        .wrap_err_with(|| format!("GET failed: {url}"))?;
+        .wrap_err_with(|| format!("GET failed: {}", redact_url(url)))?;
     if !response.status().is_success() {
-        return Err(eyre!("HTTP {} for {url}", response.status()));
+        return Err(eyre!("HTTP {} for {}", response.status(), redact_url(url)));
     }
     let ct = response
         .headers()

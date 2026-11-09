@@ -11,6 +11,7 @@
 - [Exports](exports.md)
 - [Metrics, agent, and alerts](metrics.md)
 - [Compare and multi-CDN](compare.md)
+- [Grid and evidence](grid.md)
 - [Comparison with other tools](comparison.md)
 - [Limits](limits.md)
 - [FAQ](faq.md)

@@ -86,6 +86,10 @@ pub struct SessionOpts {
     pub tr101290: bool,
     pub probe_sei: bool,
     pub doh_provider: Option<String>,
+    /// Limits collected from the profile and CLI. Turned into `evidence` before polling.
+    pub evidence_settings: crate::engine::evidence::EvidenceSettings,
+    /// Set when evidence capture is enabled. Shared budget across streams.
+    pub evidence: Option<crate::engine::evidence::EvidenceHandle>,
 }
 
 pub struct App {
@@ -1072,7 +1076,7 @@ fn slugify_label(raw: &str) -> String {
     out
 }
 
-fn setup_terminal() -> Result<Terminal<CrosstermBackend<Stdout>>> {
+pub(crate) fn setup_terminal() -> Result<Terminal<CrosstermBackend<Stdout>>> {
     enable_raw_mode().wrap_err("failed to enable raw mode")?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen).wrap_err("failed to enter alternate screen")?;
@@ -1148,6 +1152,8 @@ impl App {
                 tr101290: false,
                 probe_sei: false,
                 doh_provider: None,
+                evidence_settings: crate::engine::evidence::EvidenceSettings::default(),
+                evidence: None,
             },
             render_cache: UiRenderCache::default(),
             transport: NetworkTiming::default(),

@@ -3,6 +3,8 @@
 use std::time::Instant;
 
 use color_eyre::eyre::{eyre, Result, WrapErr};
+
+use crate::engine::redact::redact_url;
 use reqwest::Client;
 use serde::Deserialize;
 
@@ -74,7 +76,7 @@ pub async fn resolve_doh(client: &Client, host: &str, provider: &DohProvider) ->
         .header(reqwest::header::ACCEPT, "application/dns-json")
         .send()
         .await
-        .wrap_err_with(|| format!("DoH GET failed: {url}"))?;
+        .wrap_err_with(|| format!("DoH GET failed: {}", redact_url(&url)))?;
     if !response.status().is_success() {
         return Err(eyre!("DoH HTTP {} for {host}", response.status()));
     }

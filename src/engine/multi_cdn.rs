@@ -10,6 +10,7 @@ use tokio::time::{timeout, Instant};
 
 use crate::engine::metrics::{update_metrics, MetricsSnapshot};
 use crate::engine::poller::ManifestPoller;
+use crate::engine::redact::redact_url;
 use crate::engine::session_poller::apply_session_doh;
 use crate::models::{
     DiagCategory, DiagSeverity, DiagnosticFinding, DiagnosticReasonCode, MultiCdnEdgeSnapshot,
@@ -180,7 +181,7 @@ pub async fn analyze_multi_cdn(
                 session.probe_drm,
                 tx,
             )
-            .wrap_err_with(|| format!("multi-cdn poller init failed: {url}"))?
+            .wrap_err_with(|| format!("multi-cdn poller init failed: {}", redact_url(&url)))?
             .with_metrics(metrics.clone());
             let poller = apply_session_doh(poller, &session)?;
             let handle = tokio::spawn(async move { poller.run().await });

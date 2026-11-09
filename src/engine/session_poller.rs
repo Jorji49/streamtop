@@ -13,11 +13,13 @@ pub fn parse_doh_provider(session: &SessionOpts) -> Result<Option<DohProvider>> 
     }
 }
 
-/// Attach session DoH provider when `--doh-provider` is set.
+/// Attach session DoH, OTLP export, and evidence capture.
 pub fn apply_session_doh(poller: ManifestPoller, session: &SessionOpts) -> Result<ManifestPoller> {
-    if let Some(provider) = parse_doh_provider(session)? {
-        Ok(poller.with_doh_provider(Some(provider)))
+    let poller = if let Some(provider) = parse_doh_provider(session)? {
+        poller.with_doh_provider(Some(provider))
     } else {
-        Ok(poller)
-    }
+        poller
+    };
+    let poller = poller.with_session_otel(session)?;
+    Ok(poller.with_session_evidence(session))
 }

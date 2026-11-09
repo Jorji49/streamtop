@@ -12,6 +12,7 @@ pub mod dai_validator;
 pub mod dash;
 pub mod doh;
 pub mod drm_probe;
+pub mod evidence;
 pub mod export;
 pub mod export_cli;
 pub mod g2g;

@@ -68,6 +68,7 @@ pub struct ManifestPoller {
     pub(super) doh_provider: Option<DohProvider>,
     pub(super) doh_cache: Arc<Mutex<Option<u64>>>,
     pub(super) doh_failed: Arc<Mutex<bool>>,
+    pub(super) evidence: Option<Arc<crate::engine::evidence::EvidenceRecorder>>,
 }
 
 impl ManifestPoller {

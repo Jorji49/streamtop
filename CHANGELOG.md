@@ -1,5 +1,21 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- Multi-stream grid. `streamtop URL1 URL2`, `streamtop --grid URL...`, or `streamtop --agent CONFIG --grid` shows each stream as a tile with status, bitrate, segment latency, and alarm counts. Arrow keys or `hjkl` move, Enter opens the existing single-stream dashboard, and `q` or Esc there returns to the grid. An 80x24 terminal shows a small page and scrolls.
+- Opt-in evidence bundles. `--evidence-dir DIR` (or `evidence_dir` in the profile or agent config) writes a timestamped directory when a stall, continuity-counter error, or other alarm fires. The bundle keeps the last few manifests and segment request metadata (status, timings, redacted headers). `--evidence-segments N` also saves the downloaded bytes, capped per segment and in total. A minimum interval, a dump count, and a byte ceiling (default 32 MiB, hard maximum 1 GiB) stop a burst of alarms from filling the disk.
+
+### Fixed
+
+- `--otel-endpoint` and the agent `otel_endpoint` now export on the dashboard, grid, agent, Prometheus, and budget pollers. Spans were buffered and never flushed on those long-running paths.
+- Agent configs with a duplicate stream id or an empty URL are rejected.
+- `--agent` no longer ignores `--summary`, `--audit`, `--vod`, `--compare`, `--multi-cdn`, `--export`, or `--prometheus`.
+- Passing URLs together with `--agent` is an error. The config file is the stream list.
+- Error text redacts query tokens and userinfo in manifest, segment, VOD, LL-HLS, DoH, and multi-CDN failures.
+- `streamtop check --output` help matches the table format, which still prints the table and writes JSON.
+
 ## [1.7.1] - 2026-11-02
 
 ### Changed

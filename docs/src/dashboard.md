@@ -41,3 +41,5 @@ FPS comes from the playlist `FRAME-RATE` or `@frameRate` when present, otherwise
 | `j` / `k` | Scroll the log or channel list |
 
 Compare mode: `Space` pause/resume, `d` detail, `l` log focus, `c` curl, `h` or `e` HAR, `Tab` switch pane.
+
+The grid (`streamtop --grid URL1 URL2`, or several URLs) uses the same dashboard after you press Enter on a tile. `q` or Esc leaves that dashboard and returns to the grid. See [Grid and evidence](grid.md).

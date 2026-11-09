@@ -10,6 +10,7 @@ use crate::engine::aes128_probe::Aes128KeyCache;
 use crate::engine::agent::AgentMetricsRegistry;
 use crate::engine::doh::DohProvider;
 use crate::engine::drm_probe::ClearKeySpec;
+use crate::engine::evidence::EvidenceRecorder;
 use crate::engine::gop_tracker::GopCadenceTracker;
 use crate::engine::metrics::MetricsSnapshot;
 use crate::engine::network_trace::parse_header_pairs;
@@ -63,6 +64,7 @@ impl ManifestPoller {
             doh_provider: None,
             doh_cache: Arc::new(Mutex::new(None)),
             doh_failed: Arc::new(Mutex::new(false)),
+            evidence: None,
         })
     }
 
@@ -110,5 +112,35 @@ impl ManifestPoller {
     pub fn with_webhook_tx(mut self, hook_tx: Sender<StreamEvent>) -> Self {
         self.hook_tx = Some(hook_tx);
         self
+    }
+
+    #[must_use]
+    pub fn with_evidence(mut self, evidence: Option<Arc<EvidenceRecorder>>) -> Self {
+        self.evidence = evidence;
+        self
+    }
+
+    /// Attach OTLP export when the session has an endpoint and this poller does not already.
+    pub fn with_session_otel(self, session: &crate::ui::app::SessionOpts) -> Result<Self> {
+        if self.otel.is_some() {
+            return Ok(self);
+        }
+        let Some(endpoint) = session.otel_endpoint.as_deref() else {
+            return Ok(self);
+        };
+        let exporter =
+            crate::engine::otel::OtelExporter::new(endpoint, session.allow_insecure_otel)?;
+        crate::engine::otel::OtelExporter::spawn_flush_loop(&exporter);
+        Ok(self.with_otel(exporter))
+    }
+
+    /// Attach the session evidence ring. No-op when evidence is off.
+    #[must_use]
+    pub fn with_session_evidence(self, session: &crate::ui::app::SessionOpts) -> Self {
+        let Some(handle) = session.evidence.clone() else {
+            return self;
+        };
+        let url = self.source_url.to_string();
+        self.with_evidence(Some(Arc::new(EvidenceRecorder::new(handle, url))))
     }
 }

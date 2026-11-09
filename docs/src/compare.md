@@ -16,3 +16,5 @@ streamtop --multi-cdn https://a.example/live.m3u8,https://b.example/live.m3u8 --
 ```
 
 Polls every edge concurrently and builds a live-edge skew matrix from media sequence numbers and PDT. When the skew passes `--max-cdn-skew-ms` (default 3000) it reports `ERR_CDN_SYNC_SKEW`. With `--summary` it prints JSON and exits non-zero when the threshold is exceeded.
+
+For more than two streams, use the [grid](grid.md). `--compare` stays a two-pane diff.

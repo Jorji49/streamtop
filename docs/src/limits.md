@@ -11,3 +11,5 @@ streamtop is a wire and container probe. It is not a decoder or a full transport
 * **DASH conformance** is not validated against the full specification. Use the DASH-IF Conformance tool for that.
 * **Linter score** (TUI) uses four flags: RFC -15, origin stall -20, CDN MISS -5, high TTFB -10. The summary JSON keeps the older SHI field names (`schema_version` 7).
 * **Quick Play** needs `mpv` or `ffplay` on the PATH and does not work in the Docker image.
+* **Grid.** Up to 64 streams. Tiles show probe results, not decoded video. A WHEP URL in the grid is not the JSON handshake from a single WHEP argument; the tile reports that the URL is not a playlist. `--agent CONFIG --grid` does not also serve `/metrics`.
+* **Evidence.** Off unless `--evidence-dir` or `evidence_dir` is set. Saved segment bytes are the bytes streamtop already downloaded: the range-probe window by default, or up to `--evidence-segment-bytes` when `--full-segment` is on. Continuity-counter evidence comes from the TR 101 290 probe window, not the whole multiplex. The process stops at 32 MiB and 32 bundles unless you raise the caps, and it refuses a total above 1 GiB.

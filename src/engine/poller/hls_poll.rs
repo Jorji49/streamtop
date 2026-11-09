@@ -15,6 +15,7 @@ use crate::engine::linter::{
     next_blocking_targets, scan_drm_keys, scan_ll_hls, scan_media_renditions, SpecLinter,
 };
 use crate::engine::playlist_parser::{is_iptv_channel_list, local_path_from_url};
+use crate::engine::redact::redact_url;
 use crate::models::{
     AbrVariant, DiagCategory, DiagSeverity, DiagnosticFinding, DiagnosticReasonCode, LatencyState,
     LlDashInfo, LogLevel, PlaylistMeta, StreamEvent, StreamStatus, VirtualBuffer,
@@ -767,11 +768,11 @@ impl ManifestPoller {
             .header(RANGE, range)
             .send()
             .await
-            .wrap_err_with(|| format!("LL-HLS hint probe failed: {url}"))?;
+            .wrap_err_with(|| format!("LL-HLS hint probe failed: {}", redact_url(url)))?;
         let status = response.status();
         let code = status.as_u16();
         if !(status.is_success() || code == 206) {
-            return Err(eyre!("LL-HLS hint HTTP {status} - {url}"));
+            return Err(eyre!("LL-HLS hint HTTP {status} - {}", redact_url(url)));
         }
         let max_read = length.map_or(65536, |l| l as usize).clamp(512, 65536);
         let mut stream = response.bytes_stream();

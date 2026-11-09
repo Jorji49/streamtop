@@ -32,6 +32,18 @@ pub struct ProfileSection {
     pub allow_insecure_otel: Option<bool>,
     pub tr101290: Option<bool>,
     pub probe_sei: Option<bool>,
+    #[serde(default)]
+    pub evidence_dir: Option<String>,
+    #[serde(default)]
+    pub evidence_segments: Option<u32>,
+    #[serde(default)]
+    pub evidence_max_bytes: Option<u64>,
+    #[serde(default)]
+    pub evidence_segment_bytes: Option<u64>,
+    #[serde(default)]
+    pub evidence_min_interval_secs: Option<u64>,
+    #[serde(default)]
+    pub evidence_max_dumps: Option<u32>,
 }
 
 /// Resolve config path: `$STREAMTOP_CONFIG` or platform config dir.
@@ -123,6 +135,31 @@ fn apply_section(session: &mut SessionOpts, section: &ProfileSection) {
     if let Some(v) = section.probe_sei {
         session.probe_sei = v;
     }
+    merge_evidence(&mut session.evidence_settings, section);
+}
+
+fn merge_evidence(
+    settings: &mut crate::engine::evidence::EvidenceSettings,
+    section: &ProfileSection,
+) {
+    if let Some(dir) = &section.evidence_dir {
+        settings.dir = Some(std::path::PathBuf::from(dir));
+    }
+    if section.evidence_segments.is_some() {
+        settings.segments = section.evidence_segments;
+    }
+    if section.evidence_max_bytes.is_some() {
+        settings.max_total_bytes = section.evidence_max_bytes;
+    }
+    if section.evidence_segment_bytes.is_some() {
+        settings.max_segment_bytes = section.evidence_segment_bytes;
+    }
+    if section.evidence_min_interval_secs.is_some() {
+        settings.min_interval_secs = section.evidence_min_interval_secs;
+    }
+    if section.evidence_max_dumps.is_some() {
+        settings.max_dumps = section.evidence_max_dumps;
+    }
 }
 
 #[cfg(test)]
@@ -147,6 +184,8 @@ mod tests {
             tr101290: false,
             probe_sei: false,
             doh_provider: None,
+            evidence_settings: crate::engine::evidence::EvidenceSettings::default(),
+            evidence: None,
         };
         apply_section(
             &mut s,
@@ -163,8 +202,20 @@ mod tests {
                 allow_insecure_otel: Some(true),
                 tr101290: Some(true),
                 probe_sei: Some(true),
+                evidence_dir: Some("evidence".into()),
+                evidence_segments: Some(2),
+                evidence_max_bytes: Some(1024),
+                evidence_segment_bytes: None,
+                evidence_min_interval_secs: Some(10),
+                evidence_max_dumps: None,
             },
         );
+        assert_eq!(
+            s.evidence_settings.dir.as_deref(),
+            Some(std::path::Path::new("evidence"))
+        );
+        assert_eq!(s.evidence_settings.segments, Some(2));
+        assert_eq!(s.evidence_settings.min_interval_secs, Some(10));
         assert_eq!(s.headers, vec!["B: 2".to_string()]);
         assert_eq!(s.user_agent.as_deref(), Some("new"));
         assert!(s.probe_headers);

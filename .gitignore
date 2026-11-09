@@ -27,6 +27,7 @@
 /check-rel/
 /ci-artifacts/
 diagnostics/
+/evidence/
 *.log
 audit_report.*
 streamtop_diagnostic*.json

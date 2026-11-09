@@ -1,8 +1,9 @@
 //! Multi-stream headless agent (`streamtop --agent config.toml`).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 use std::net::{IpAddr, SocketAddr};
+use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::{Arc, RwLock};
 
@@ -14,6 +15,7 @@ use color_eyre::eyre::{eyre, Result, WrapErr};
 use serde::Deserialize;
 use tokio::sync::mpsc;
 
+use crate::engine::evidence::{EvidenceHandle, EvidenceSettings};
 use crate::engine::metrics::{
     authorize_metrics_bearer, normalize_metrics_token, render_openmetrics_for_stream,
     require_metrics_token_for_bind, MetricsAuth, MetricsSnapshot,
@@ -69,7 +71,69 @@ pub struct AgentConfigFile {
     #[serde(default)]
     pub allow_insecure_otel: bool,
     #[serde(default)]
+    pub evidence_dir: Option<String>,
+    #[serde(default)]
+    pub evidence_segments: Option<u32>,
+    #[serde(default)]
+    pub evidence_max_bytes: Option<u64>,
+    #[serde(default)]
+    pub evidence_segment_bytes: Option<u64>,
+    #[serde(default)]
+    pub evidence_min_interval_secs: Option<u64>,
+    #[serde(default)]
+    pub evidence_max_dumps: Option<u32>,
+    #[serde(default)]
     pub streams: Vec<AgentStreamConfig>,
+}
+
+impl AgentConfigFile {
+    pub fn evidence_settings(&self) -> EvidenceSettings {
+        EvidenceSettings {
+            dir: self.evidence_dir.as_ref().map(PathBuf::from),
+            segments: self.evidence_segments,
+            max_total_bytes: self.evidence_max_bytes,
+            max_segment_bytes: self.evidence_segment_bytes,
+            min_interval_secs: self.evidence_min_interval_secs,
+            max_dumps: self.evidence_max_dumps,
+        }
+    }
+}
+
+/// Shared agent options copied onto every stream session.
+pub struct AgentGlobals {
+    pub allow_insecure_webhooks: bool,
+    pub allow_insecure_otel: bool,
+    pub otel_endpoint: Option<String>,
+    pub evidence: Option<EvidenceHandle>,
+}
+
+pub fn session_for_agent_stream(stream: &AgentStreamConfig, globals: &AgentGlobals) -> SessionOpts {
+    let mut evidence = globals.evidence.clone();
+    if let Some(handle) = evidence.as_mut() {
+        handle.label = Some(stream.id.clone());
+    }
+    SessionOpts {
+        headers: stream.headers.clone(),
+        user_agent: stream.user_agent.clone(),
+        interval_ms: stream.interval_ms,
+        probe_headers: stream.probe_headers,
+        probe_drm: stream.probe_drm,
+        clearkey: stream.clearkey.clone(),
+        export_incident: None,
+        webhook_url: stream.webhook.clone(),
+        alert_on: stream
+            .alert_on
+            .clone()
+            .unwrap_or_else(|| "stall,shi_below_70,http_5xx".into()),
+        allow_insecure_webhooks: globals.allow_insecure_webhooks,
+        allow_insecure_otel: globals.allow_insecure_otel,
+        otel_endpoint: globals.otel_endpoint.clone(),
+        tr101290: stream.tr101290,
+        probe_sei: stream.probe_sei,
+        doh_provider: None,
+        evidence_settings: EvidenceSettings::default(),
+        evidence,
+    }
 }
 
 fn default_metrics_bind() -> String {
@@ -115,9 +179,16 @@ pub fn load_agent_config(path: &str) -> Result<AgentConfigFile> {
         return Err(eyre!("agent config has no [[streams]] entries"));
     }
     validate_agent_stream_count(cfg.streams.len())?;
+    let mut seen = HashSet::new();
     for s in &cfg.streams {
         if s.id.trim().is_empty() {
             return Err(eyre!("stream id must not be empty"));
+        }
+        if s.url.trim().is_empty() {
+            return Err(eyre!("stream {} url is empty", s.id));
+        }
+        if !seen.insert(s.id.clone()) {
+            return Err(eyre!("duplicate stream id `{}`", s.id));
         }
     }
     Ok(cfg)
@@ -158,8 +229,17 @@ fn validate_agent_stream_count(n: usize) -> Result<()> {
     Ok(())
 }
 
-pub async fn run_agent(config_path: &str) -> Result<ExitCode> {
+pub async fn run_agent(config_path: &str, cli_evidence: &EvidenceSettings) -> Result<ExitCode> {
     let cfg = load_agent_config(config_path)?;
+    let mut evidence_settings = cfg.evidence_settings();
+    evidence_settings.merge_override(cli_evidence);
+    let evidence = EvidenceHandle::from_settings(&evidence_settings)?;
+    let globals = AgentGlobals {
+        allow_insecure_webhooks: cfg.allow_insecure_webhooks,
+        allow_insecure_otel: cfg.allow_insecure_otel,
+        otel_endpoint: cfg.otel_endpoint.clone(),
+        evidence,
+    };
     let bind: IpAddr = cfg
         .metrics_bind
         .parse()
@@ -174,7 +254,7 @@ pub async fn run_agent(config_path: &str) -> Result<ExitCode> {
 
     let streams = cfg.streams.clone();
     for stream in &streams {
-        spawn_agent_stream(stream, &registry, &cfg)?;
+        spawn_agent_stream(stream, &registry, &globals)?;
     }
 
     let auth = MetricsAuth {
@@ -200,7 +280,7 @@ pub async fn run_agent(config_path: &str) -> Result<ExitCode> {
 fn spawn_agent_stream(
     stream: &AgentStreamConfig,
     registry: &Arc<RwLock<AgentMetricsRegistry>>,
-    agent: &AgentConfigFile,
+    globals: &AgentGlobals,
 ) -> Result<()> {
     let stream_id = stream.id.clone();
     let url = stream.url.clone();
@@ -212,26 +292,7 @@ fn spawn_agent_stream(
     }
 
     let (tx, mut rx) = mpsc::channel(AGENT_EVENT_CHANNEL_CAPACITY);
-    let session = SessionOpts {
-        headers: stream.headers.clone(),
-        user_agent: stream.user_agent.clone(),
-        interval_ms: stream.interval_ms,
-        probe_headers: stream.probe_headers,
-        probe_drm: stream.probe_drm,
-        clearkey: stream.clearkey.clone(),
-        export_incident: None,
-        webhook_url: stream.webhook.clone(),
-        alert_on: stream
-            .alert_on
-            .clone()
-            .unwrap_or_else(|| "stall,shi_below_70,http_5xx".into()),
-        allow_insecure_webhooks: agent.allow_insecure_webhooks,
-        allow_insecure_otel: agent.allow_insecure_otel,
-        otel_endpoint: agent.otel_endpoint.clone(),
-        tr101290: stream.tr101290,
-        probe_sei: stream.probe_sei,
-        doh_provider: None,
-    };
+    let session = session_for_agent_stream(stream, globals);
 
     let mut poller = ManifestPoller::new(
         url.as_str(),
@@ -285,6 +346,7 @@ fn spawn_agent_stream(
             }
         }
     });
+    poller = crate::engine::session_poller::apply_session_doh(poller, &session)?;
     tokio::spawn(async move {
         let () = poller.run().await;
     });
@@ -355,5 +417,54 @@ url = "https://example.com/live.m3u8"
     #[test]
     fn sanitize_id_label() {
         assert_eq!(sanitize_stream_id("primary/live"), "primary_live");
+    }
+
+    #[test]
+    fn rejects_duplicate_stream_ids() {
+        let raw = r#"
+[[streams]]
+id = "live"
+url = "https://example.com/a.m3u8"
+
+[[streams]]
+id = "live"
+url = "https://example.com/b.m3u8"
+"#;
+        let path =
+            std::env::temp_dir().join(format!("streamtop-agent-dup-{}.toml", std::process::id()));
+        std::fs::write(&path, raw).unwrap();
+        let err = load_agent_config(path.to_str().unwrap()).unwrap_err();
+        let _ = std::fs::remove_file(&path);
+        assert!(err.to_string().contains("duplicate"), "{err}");
+    }
+
+    #[test]
+    fn evidence_dir_round_trips() {
+        let raw = r#"
+evidence_dir = "evidence"
+evidence_segments = 2
+
+[[streams]]
+id = "live1"
+url = "https://example.com/live.m3u8"
+"#;
+        let cfg: AgentConfigFile = toml::from_str(raw).unwrap();
+        let settings = cfg.evidence_settings();
+        assert_eq!(
+            settings.dir.as_deref(),
+            Some(std::path::Path::new("evidence"))
+        );
+        assert_eq!(settings.segments, Some(2));
+        let handle = EvidenceHandle::from_settings(&settings).unwrap().unwrap();
+        let session = session_for_agent_stream(
+            &cfg.streams[0],
+            &AgentGlobals {
+                allow_insecure_webhooks: false,
+                allow_insecure_otel: false,
+                otel_endpoint: None,
+                evidence: Some(handle),
+            },
+        );
+        assert_eq!(session.evidence.unwrap().label.as_deref(), Some("live1"));
     }
 }
