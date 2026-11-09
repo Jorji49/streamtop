@@ -154,7 +154,38 @@ pub fn redact_text(text: &str) -> String {
     if out.contains("http") {
         out = scrub_urls_in_text(&out);
     }
+    if out.contains('?') {
+        out = scrub_relative_queries(&out);
+    }
     out
+}
+
+/// Playlist lines often use a relative URI (`seg.ts?token=...`). Absolute URLs are already
+/// handled; this pass redacts query secrets on tokens that have no scheme.
+fn scrub_relative_queries(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut start = 0usize;
+    for (index, ch) in text.char_indices() {
+        if is_token_boundary(ch) {
+            push_relative_token(&mut out, &text[start..index]);
+            out.push(ch);
+            start = index + ch.len_utf8();
+        }
+    }
+    push_relative_token(&mut out, &text[start..]);
+    out
+}
+
+fn is_token_boundary(ch: char) -> bool {
+    ch.is_whitespace() || matches!(ch, '"' | '\'' | '<' | '>' | '(' | ')' | ',')
+}
+
+fn push_relative_token(out: &mut String, token: &str) {
+    if token.contains('?') && !token.contains("://") {
+        out.push_str(&redact_url(token));
+    } else {
+        out.push_str(token);
+    }
 }
 
 fn redact_inline_header(text: &str, name: &str) -> String {
@@ -269,6 +300,16 @@ mod tests {
         let r = redact_url("https://cdn.example/x#token=abc&n=1");
         assert!(r.contains("token=[REDACTED]"));
         assert!(r.contains("n=1"));
+    }
+
+    #[test]
+    fn redacts_relative_playlist_query_token() {
+        let raw = "#EXTM3U\nseg.ts?token=supersecret-smoke&bitrate=800\n#EXT-X-KEY:METHOD=AES-128,URI=\"key.bin?token=supersecret-smoke\"\n";
+        let out = redact_text(raw);
+        assert!(!out.contains("supersecret-smoke"), "{out}");
+        assert!(out.contains("seg.ts?token=[REDACTED]&bitrate=800"), "{out}");
+        assert!(out.contains("key.bin?token=[REDACTED]"), "{out}");
+        assert!(out.contains("METHOD=AES-128"), "{out}");
     }
 
     #[test]
