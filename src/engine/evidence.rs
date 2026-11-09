@@ -1132,7 +1132,7 @@ mod tests {
                 "application/vnd.apple.mpegurl".into(),
             ),
         ];
-        let playlist = "#EXTM3U\nhttps://cdn.example/a.ts?token=supersecret-evidence-token\n";
+        let playlist = "#EXTM3U\nhttps://cdn.example/a.ts?token=supersecret-evidence-token\nseg.ts?token=supersecret-evidence-token\n";
         rec.record(&ExchangeNote {
             kind: ExchangeKind::Manifest,
             url: "https://user:supersecret-evidence-token@cdn.example/live.m3u8?token=abc",

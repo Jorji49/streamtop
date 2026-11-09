@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [1.8.0] - 2026-11-09
 
 ### Added
 
@@ -14,7 +14,12 @@
 - `--agent` no longer ignores `--summary`, `--audit`, `--vod`, `--compare`, `--multi-cdn`, `--export`, or `--prometheus`.
 - Passing URLs together with `--agent` is an error. The config file is the stream list.
 - Error text redacts query tokens and userinfo in manifest, segment, VOD, LL-HLS, DoH, and multi-CDN failures.
+- Evidence bundles redact query tokens on relative playlist URIs (`seg.ts?token=...`), not only on absolute http URLs.
 - `streamtop check --output` help matches the table format, which still prints the table and writes JSON.
+
+### Changed
+
+- The winget installer manifest depends on `Microsoft.VCRedist.2015+.x64`. The Windows build imports `VCRUNTIME140.dll`, so a portable winget install gets that runtime.
 
 ## [1.7.1] - 2026-11-02
 

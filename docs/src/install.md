@@ -38,7 +38,7 @@ scoop install streamtop
 
 ## winget (Windows)
 
-Manifests are in `dist/winget/` in the repository. The package is not in the winget community index yet, so `winget install` does not work yet.
+Manifests are in `dist/winget/` in the repository. The package is not in the winget community index yet, so `winget install` does not work yet. The installer manifest depends on `Microsoft.VCRedist.2015+.x64` because the Windows build imports `VCRUNTIME140.dll`.
 
 ## Arch Linux
 
@@ -58,7 +58,7 @@ Images for linux/amd64 and linux/arm64 are on GitHub Container Registry:
 docker run -it --rm ghcr.io/jorji49/streamtop:latest <URL>
 ```
 
-Release tags are also published, for example `ghcr.io/jorji49/streamtop:v1.7.1`.
+Release tags are also published, for example `ghcr.io/jorji49/streamtop:v1.8.0`.
 
 Prometheus metrics on a non-loopback bind require a token:
 
