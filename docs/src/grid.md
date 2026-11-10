@@ -8,6 +8,10 @@ streamtop https://a.example/live.m3u8 https://b.example/manifest.mpd
 streamtop --agent agent.toml --grid
 ```
 
+![streamtop grid of three local test streams](grid-demo.gif)
+
+Recording of `streamtop --grid` on three local ffmpeg HLS test streams; the stall playlist is frozen and its segments are delayed.
+
 Two or more URLs open the grid even without `--grid`. `--grid` with one URL still opens a one-tile grid. `--agent CONFIG --grid` uses each `[[streams]]` entry (its own headers, interval, probe flags, and webhook) instead of the headless metrics server.
 
 Each tile shows:
