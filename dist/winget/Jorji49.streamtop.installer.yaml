@@ -16,6 +16,6 @@ Dependencies:
 Installers:
   - Architecture: x64
     InstallerUrl: https://github.com/Jorji49/streamtop/releases/download/v1.8.0/streamtop-windows-x86_64-1.8.0.zip
-    InstallerSha256: ECC4262973DE9982AB186EDC15D822D490A3A319DB16E02DEEA217D6C040AA51
+    InstallerSha256: C0A38C585B6B1DB73877A09A46AB0E38D7A5EBAF63F39524482E8E4FCC16402C
 ManifestType: installer
 ManifestVersion: 1.28.0
