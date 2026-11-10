@@ -141,3 +141,11 @@ jobs:
               --notes-file notes.md \
               --verify-tag
           fi
+
+  winget:
+    needs: promote
+    uses: ./.github/workflows/winget.yml
+    with:
+      version: ${{ inputs.version }}
+    secrets:
+      WINGET_TOKEN: ${{ secrets.WINGET_TOKEN }}
