@@ -49,7 +49,13 @@ streamtop ./channels.m3u
 # Several streams in one grid (80x24 scrolls). Enter opens one stream.
 streamtop --grid URL1 URL2 URL3
 streamtop --agent agent.toml --grid
+```
 
+![streamtop grid of three local test streams](docs/src/grid-demo.gif)
+
+Recording of `streamtop --grid` on three local ffmpeg HLS test streams; the stall playlist is frozen and its segments are delayed.
+
+```bash
 # Save a redacted evidence bundle when a stall or continuity error fires
 streamtop URL --evidence-dir ./evidence --evidence-segments 2
 
