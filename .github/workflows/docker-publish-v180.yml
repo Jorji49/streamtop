@@ -1,0 +1,91 @@
+name: Publish v1.8.0 image
+
+# The v1.8.0 release push ran Docker Publish with push disabled, so
+# ghcr.io/jorji49/streamtop:v1.8.0 was never pushed and :latest stayed on 1.7.1.
+# This workflow builds that existing tag and pushes :v1.8.0 and :latest.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/docker-publish-v180.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: docker-publish-v1.8.0
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: jorji49/streamtop
+
+jobs:
+  docker:
+    name: build-and-push
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout v1.8.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: v1.8.0
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Log in to GHCR
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=sha,prefix=sha-,format=short
+
+      - name: Image tags
+        id: tags
+        run: |
+          set -euo pipefail
+          short=$(git rev-parse --short=7 HEAD)
+          rev=$(git rev-parse HEAD)
+          test "$rev" = "e9ddcfb4c012094bda261d6e0a12e2b4c6ebaee7"
+          image="${REGISTRY}/${IMAGE_NAME}"
+          {
+            echo "tags<<EOF"
+            echo "${image}:v1.8.0"
+            echo "${image}:latest"
+            echo "${image}:sha-${short}"
+            echo "EOF"
+            echo "labels<<EOF"
+            echo "org.opencontainers.image.title=streamtop"
+            echo "org.opencontainers.image.source=https://github.com/Jorji49/streamtop"
+            echo "org.opencontainers.image.url=https://github.com/Jorji49/streamtop"
+            echo "org.opencontainers.image.licenses=MIT"
+            echo "org.opencontainers.image.revision=${rev}"
+            echo "org.opencontainers.image.version=v1.8.0"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Build and push (amd64 + arm64)
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: ${{ steps.tags.outputs.tags }}
+          labels: ${{ steps.tags.outputs.labels }}
+          provenance: mode=max
+          sbom: true
+          cache-from: type=gha,scope=v1.8.0
+          cache-to: type=gha,mode=max,scope=v1.8.0

@@ -15,6 +15,7 @@ on:
 permissions:
   actions: read
   contents: write
+  packages: write
 
 jobs:
   promote:
@@ -149,3 +150,12 @@ jobs:
       version: ${{ inputs.version }}
     secrets:
       WINGET_TOKEN: ${{ secrets.WINGET_TOKEN }}
+
+  docker:
+    needs: promote
+    uses: ./.github/workflows/docker-publish.yml
+    with:
+      version: v${{ inputs.version }}
+    permissions:
+      contents: read
+      packages: write
