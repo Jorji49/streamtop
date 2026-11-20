@@ -29,16 +29,11 @@ brew install streamtop
 
 Recent Homebrew versions may ask you to trust third-party taps first: `brew trust jorji49/tap`.
 
-## Scoop (Windows)
+## Windows
 
-```bash
-scoop bucket add streamtop https://github.com/Jorji49/streamtop
-scoop install streamtop
-```
+Use the Windows zip on [GitHub Releases](https://github.com/Jorji49/streamtop/releases/latest) (`streamtop-windows-x86_64-<version>.zip`). The build imports `VCRUNTIME140.dll`, so the Visual C++ Redistributable is required.
 
-## winget (Windows)
-
-Manifests are in `dist/winget/` in the repository. The package is not in the winget community index yet, so `winget install` does not work yet. The installer manifest depends on `Microsoft.VCRedist.2015+.x64` because the Windows build imports `VCRUNTIME140.dll`.
+Scoop and winget are not published. `scoop install` and `winget install` do not install streamtop. The files under `bucket/` and `dist/winget/` are packaging manifests only.
 
 ## Arch Linux
 
