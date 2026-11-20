@@ -159,3 +159,12 @@ jobs:
     permissions:
       contents: read
       packages: write
+
+  homebrew:
+    needs: promote
+    uses: ./.github/workflows/homebrew-tap.yml
+    with:
+      version: ${{ inputs.version }}
+      dry_run: false
+    secrets:
+      HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}

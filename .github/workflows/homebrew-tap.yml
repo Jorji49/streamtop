@@ -1,0 +1,70 @@
+name: Update Homebrew tap
+
+# HOMEBREW_TAP_TOKEN is a fine-grained personal access token for
+# Jorji49/homebrew-tap only, with Contents read and write. A real update
+# fails when that secret is empty. workflow_dispatch defaults to a dry run.
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: Release version without a v prefix
+        required: true
+        type: string
+      dry_run:
+        description: Compute the formula and do not push
+        required: false
+        type: boolean
+        default: false
+    secrets:
+      HOMEBREW_TAP_TOKEN:
+        required: false
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Release version without a v prefix
+        required: true
+        type: string
+      dry_run:
+        description: Compute the formula and do not push
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: homebrew-tap-${{ inputs.version }}-${{ inputs.dry_run }}
+  cancel-in-progress: false
+
+jobs:
+  tap:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Require HOMEBREW_TAP_TOKEN
+        if: ${{ !inputs.dry_run }}
+        env:
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${HOMEBREW_TAP_TOKEN}" ]; then
+            echo "::error::HOMEBREW_TAP_TOKEN is not set. Create a fine-grained personal access token limited to Jorji49/homebrew-tap with Contents read and write, then store it as the HOMEBREW_TAP_TOKEN secret on Jorji49/streamtop."
+            exit 1
+          fi
+
+      - name: Update Homebrew tap formula
+        env:
+          VERSION: ${{ inputs.version }}
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          args=(--version "$VERSION")
+          if [ "$DRY_RUN" = "true" ]; then
+            args+=(--dry-run)
+          fi
+          python3 scripts/update_homebrew_tap.py "${args[@]}"
