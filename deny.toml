@@ -5,7 +5,17 @@
 all-features = false
 
 [advisories]
-ignore = []
+ignore = [
+    # RUSTSEC-2026-0543: every chrono release is unmaintained. streamtop stores
+    # UTC instants as chrono::DateTime and formats them as RFC 3339. dash-mpd
+    # 0.20 and m3u8-rs 6 also depend on chrono, and neither has a release that
+    # drops it, so removing the direct dependency would not take chrono out of
+    # the graph. A swap to jiff or time would still have to convert the
+    # DateTime values those crates return, which can change the formatted
+    # timestamps. Remove this entry when dash-mpd and m3u8-rs no longer pull
+    # chrono.
+    { id = "RUSTSEC-2026-0543", reason = "dash-mpd 0.20 and m3u8-rs 6 require chrono, and streamtop serializes its DateTime values" },
+]
 
 [licenses]
 confidence-threshold = 0.8
